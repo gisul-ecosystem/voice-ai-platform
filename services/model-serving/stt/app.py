@@ -34,6 +34,23 @@ if sys.platform == "win32":
 app = FastAPI(title="STT Service - Nemotron 3.5 ASR")
 
 _asr_model = None
+_TARGET_LANG = "en-US"
+
+
+def _patch_nemo_prompt_language() -> None:
+    """This NeMo build reads language from the lhotse cut, not from target_lang=."""
+    from nemo.collections.asr.data import audio_to_text_lhotse_prompt_index as prompt_ds
+
+    cls = prompt_ds.LhotseSpeechToTextBpeDatasetWithPromptIndex
+    orig = cls._get_prompt_index_for_cut
+
+    def _get_prompt_index_for_cut(self, cut):
+        if cut.supervisions:
+            if not cut.supervisions[0].language:
+                cut.supervisions[0].language = _TARGET_LANG
+        return orig(self, cut)
+
+    cls._get_prompt_index_for_cut = _get_prompt_index_for_cut
 
 
 @app.on_event("startup")
@@ -44,6 +61,7 @@ def load_model() -> None:
     _asr_model = nemo_asr.models.ASRModel.from_pretrained(
         model_name="nvidia/nemotron-3.5-asr-streaming-0.6b"
     )
+    _patch_nemo_prompt_language()
 
 
 @app.get("/health")
@@ -52,12 +70,9 @@ def health() -> dict:
 
 
 def _run_transcribe(wav_path: str):
-    # Kwarg target_lang= is ignored on this NeMo build; the lhotse cut still
-    # has language=None → ValueError: Unknown prompt key: 'None'.
-    # Set it on the transcribe config (GitHub NVIDIA-NeMo/NeMo#15820).
-    # Pin en-US for interviews; "auto" is not applied to cuts here.
     cfg = _asr_model.get_transcribe_config()
-    cfg.target_lang = "en-US"
+    if hasattr(cfg, "target_lang"):
+        cfg.target_lang = _TARGET_LANG
     if hasattr(cfg, "num_workers"):
         cfg.num_workers = 0
     return _asr_model.transcribe([wav_path], override_config=cfg)
