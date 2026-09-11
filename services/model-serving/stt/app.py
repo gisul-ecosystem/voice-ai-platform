@@ -6,7 +6,7 @@ Exposes POST /transcribe accepting an audio file, returns text.
 from __future__ import annotations
 
 import logging
-import os
+import sys
 import tempfile
 import traceback
 import uuid
@@ -17,6 +17,19 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger("stt")
 logging.basicConfig(level=logging.INFO)
+
+# NeMo's transcribe() uses tempfile.TemporaryDirectory() for a manifest.
+# On Windows the dataloader still holds manifest.json when the context
+# exits (WinError 32), so cleanup raises even after a successful decode.
+if sys.platform == "win32":
+    _TemporaryDirectory = tempfile.TemporaryDirectory
+
+    class _WindowsTemporaryDirectory(_TemporaryDirectory):
+        def __init__(self, *args, **kwargs):
+            kwargs["ignore_cleanup_errors"] = True
+            super().__init__(*args, **kwargs)
+
+    tempfile.TemporaryDirectory = _WindowsTemporaryDirectory  # type: ignore[misc]
 
 app = FastAPI(title="STT Service - Nemotron 3.5 ASR")
 
@@ -38,6 +51,19 @@ def health() -> dict:
     return {"status": "ok", "model": "nemotron-3.5-asr-0.6b", "loaded": _asr_model is not None}
 
 
+def _run_transcribe(wav_path: str):
+    # target_lang is required -- without it, Nemotron 3.5 ASR raises
+    # "ValueError: Unknown prompt key: 'None'".
+    try:
+        return _asr_model.transcribe(
+            [wav_path],
+            target_lang="auto",
+            num_workers=0,
+        )
+    except TypeError:
+        return _asr_model.transcribe([wav_path], target_lang="auto")
+
+
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)) -> JSONResponse:
     if _asr_model is None:
@@ -51,9 +77,7 @@ async def transcribe(file: UploadFile = File(...)) -> JSONResponse:
         if not data:
             return JSONResponse({"error": "empty_audio"}, status_code=400)
         tmp_path.write_bytes(data)
-        # target_lang is required -- without it, Nemotron 3.5 ASR raises
-        # "ValueError: Unknown prompt key: 'None'".
-        result = _asr_model.transcribe([str(tmp_path)], target_lang="auto")
+        result = _run_transcribe(str(tmp_path))
         first = result[0]
         text = first.text if hasattr(first, "text") else str(first)
         return JSONResponse({"text": text or ""})
