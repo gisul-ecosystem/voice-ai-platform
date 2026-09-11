@@ -52,16 +52,15 @@ def health() -> dict:
 
 
 def _run_transcribe(wav_path: str):
-    # target_lang is required -- without it, Nemotron 3.5 ASR raises
-    # "ValueError: Unknown prompt key: 'None'".
-    try:
-        return _asr_model.transcribe(
-            [wav_path],
-            target_lang="auto",
-            num_workers=0,
-        )
-    except TypeError:
-        return _asr_model.transcribe([wav_path], target_lang="auto")
+    # Kwarg target_lang= is ignored on this NeMo build; the lhotse cut still
+    # has language=None → ValueError: Unknown prompt key: 'None'.
+    # Set it on the transcribe config (GitHub NVIDIA-NeMo/NeMo#15820).
+    # Pin en-US for interviews; "auto" is not applied to cuts here.
+    cfg = _asr_model.get_transcribe_config()
+    cfg.target_lang = "en-US"
+    if hasattr(cfg, "num_workers"):
+        cfg.num_workers = 0
+    return _asr_model.transcribe([wav_path], override_config=cfg)
 
 
 @app.post("/transcribe")
