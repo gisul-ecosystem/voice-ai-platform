@@ -3,7 +3,7 @@ Laptop 4 -- voice agent
 Round-trip smoke test: STT -> LLM -> TTS, no LiveKit yet.
 Confirms all three laptop nodes are reachable and working together
 before wiring into LiveKit's VoicePipelineAgent (AgentSession in 1.x).
-Run the live interview worker with: python aaptor_agent.py
+Run the live interview worker with: python aaptor_agent.py start
 """
 import asyncio
 import logging

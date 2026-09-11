@@ -28,8 +28,8 @@ HEALTH_TIMEOUT_SECONDS = float(os.getenv("HEALTH_TIMEOUT_SECONDS", "3"))
 
 def _service_urls() -> dict[str, dict[str, str]]:
     llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:11434/v1").rstrip("/")
-    stt_url = os.getenv("STT_SERVICE_URL", "http://localhost:8001").rstrip("/")
-    tts_url = os.getenv("TTS_SERVICE_URL", "http://localhost:8002").rstrip("/")
+    stt_url = os.getenv("STT_SERVICE_URL", "http://localhost:5552").rstrip("/")
+    tts_url = os.getenv("TTS_SERVICE_URL", "http://localhost:5553").rstrip("/")
     # Ollama/vLLM both expose OpenAI-compatible GET /v1/models; STT/TTS have /health.
     llm_health = os.getenv("LLM_HEALTH_URL") or f"{llm_url}/models"
     return {

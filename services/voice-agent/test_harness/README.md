@@ -65,4 +65,4 @@ Allow the mic. You should hear the agent's opening question, then speak a reply.
 - Worker still running and still `registered worker`
 - You joined the **same room name** the token was minted for
 - Mic permission granted; status line says `connected`
-- LLM / STT / TTS / backend-api reachable (`GET http://localhost:8000/health/all` on Laptop 4)
+- LLM / STT / TTS / backend-api reachable (`GET http://localhost:5554/health/all` on Laptop 4)

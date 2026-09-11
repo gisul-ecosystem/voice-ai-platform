@@ -10,12 +10,14 @@ changes — only `.env` URLs and the LLM backend (Ollama -> vLLM) change.
 | Laptop | Runs | Port |
 |---|---|---|
 | 1 | LLM - Ollama serving Qwen3-4B | 11434 |
-| 2 | STT - Nemotron 3.5 ASR (NeMo) wrapped in FastAPI | 8001 |
-| 3 | TTS - Kokoro-82M wrapped in FastAPI, + Redis | 8002 / 6379 |
-| 4 | backend-api (FastAPI) + voice-agent (LiveKit worker) + MongoDB | 8000 |
+| 2 | STT - Nemotron 3.5 ASR (NeMo) wrapped in FastAPI | 5552 |
+| 3 | TTS - Kokoro-82M wrapped in FastAPI, + Redis | 5553 / 6379 |
+| 4 | backend-api (FastAPI) + voice-agent (LiveKit worker) + MongoDB | 5554 |
 
 Run **only the service that laptop is assigned**. Use **Python 3.11**. On Windows,
-allow inbound TCP for that laptop's port (11434 / 8001 / 8002 / 8000).
+allow inbound TCP for that laptop's port (11434 / 5552 / 5553 / 5554). Redis stays
+6379; Mongo stays 27017. Ollama stays on its default **11434** — do not move it
+to 5551.
 
 ## Clone (every laptop)
 
@@ -65,7 +67,7 @@ pip uninstall torch torchvision torchaudio -y
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 copy .env.example .env
-python -m uvicorn app:app --host 0.0.0.0 --port 8001
+python -m uvicorn app:app --host 0.0.0.0 --port 5552
 ```
 
 Install `torch`, `torchvision`, and `torchaudio` from the **same** CUDA index. If NeMo pulls a mismatched `torchvision`, startup fails with `RuntimeError: operator torchvision::nms does not exist`.
@@ -73,7 +75,7 @@ Install `torch`, `torchvision`, and `torchaudio` from the **same** CUDA index. I
 Health:
 
 ```powershell
-curl http://localhost:8001/health
+curl http://localhost:5552/health
 ```
 
 `target_lang` is required on `.transcribe()` (the wrapper already passes `"auto"`).
@@ -91,17 +93,17 @@ cd services\model-serving\tts
 pip install -r requirements.txt
 copy .env.example .env
 docker run -d -p 6379:6379 redis
-python -m uvicorn app:app --host 0.0.0.0 --port 8002
+python -m uvicorn app:app --host 0.0.0.0 --port 5553
 ```
 
 Health:
 
 ```powershell
-curl http://localhost:8002/health
-curl -X POST http://localhost:8002/synthesize -H "Content-Type: application/json" -d "{\"text\":\"Hello candidate\"}" --output out.wav
+curl http://localhost:5553/health
+curl -X POST http://localhost:5553/synthesize -H "Content-Type: application/json" -d "{\"text\":\"Hello candidate\"}" --output out.wav
 ```
 
-Until this laptop answers on `:8002`, the agent can join a LiveKit room and
+Until this laptop answers on `:5553`, the agent can join a LiveKit room and
 generate text but will not speak.
 
 ---
@@ -111,11 +113,12 @@ generate text but will not speak.
 ### backend-api
 
 ```powershell
-cd C:\Gisul\voice-ai-platform\services\backend-api
+cd services\backend-api
 pip install -r requirements.txt
 copy .env.example .env
 # edit .env: STT/TTS LAN IPs, LLM URL, LiveKit keys, Mongo
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
+# skip the cd if the prompt is already ...\services\backend-api
+python -m uvicorn main:app --host 0.0.0.0 --port 5554
 ```
 
 ### voice-agent (new terminal)
@@ -135,8 +138,9 @@ Point `services/voice-agent/.env` (and backend `.env`) at the other laptops:
 
 ```
 LLM_SERVICE_URL=http://192.168.1.11:11434/v1
-STT_SERVICE_URL=http://192.168.1.12:8001
-TTS_SERVICE_URL=http://192.168.1.13:8002
+STT_SERVICE_URL=http://192.168.1.12:5552
+TTS_SERVICE_URL=http://192.168.1.13:5553
+BACKEND_API_URL=http://localhost:5554
 LLM_MODEL_NAME=qwen3:4b-instruct-2507-q8_0
 ```
 

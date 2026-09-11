@@ -36,9 +36,9 @@ LIVEKIT_TOKEN_TTL_MINUTES = _int("LIVEKIT_TOKEN_TTL_MINUTES", 2)
 LIVEKIT_ROOM_CAPACITY = _int("LIVEKIT_ROOM_CAPACITY", 5)
 
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://localhost:11434/v1").rstrip("/")
-STT_SERVICE_URL = os.getenv("STT_SERVICE_URL", "http://localhost:8001").rstrip("/")
-TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", "http://localhost:8002").rstrip("/")
-BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000").rstrip("/")
+STT_SERVICE_URL = os.getenv("STT_SERVICE_URL", "http://localhost:5552").rstrip("/")
+TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", "http://localhost:5553").rstrip("/")
+BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:5554").rstrip("/")
 
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3:4b-instruct-2507-q8_0")
 TTS_VOICE = os.getenv("TTS_VOICE", "af_heart")

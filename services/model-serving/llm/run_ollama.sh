@@ -1,5 +1,5 @@
 #!/bin/bash
-# Laptop 1 -- LLM node
+# Laptop 1 -- LLM node (Ollama default port 11434)
 # Install Ollama first: https://ollama.com/download
 
 ollama pull qwen3:4b-instruct-2507-q8_0

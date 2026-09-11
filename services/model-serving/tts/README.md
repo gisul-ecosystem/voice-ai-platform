@@ -12,6 +12,6 @@ actual Indian-accented English voice, evaluate CosyVoice 2 (voice cloning
 from a reference sample) as the real solution -- don't assume Kokoro covers
 this out of the box.
 
-Run: `uvicorn app:app --host 0.0.0.0 --port 8002`
+Run: `python -m uvicorn app:app --host 0.0.0.0 --port 5553`
 Redis: `docker run -d -p 6379:6379 redis`
-Test: `curl -X POST http://localhost:8002/synthesize -H "Content-Type: application/json" -d '{"text":"Hello candidate"}' --output out.wav`
+Test: `curl -X POST http://localhost:5553/synthesize -H "Content-Type: application/json" -d '{"text":"Hello candidate"}' --output out.wav`
