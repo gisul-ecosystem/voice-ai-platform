@@ -61,14 +61,14 @@ Needs a CUDA GPU and CUDA-enabled PyTorch.
 
 ```powershell
 cd services\model-serving\stt
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -U pip
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip uninstall torch torchvision torchaudio -y
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 copy .env.example .env
-uvicorn app:app --host 0.0.0.0 --port 8001
+python -m uvicorn app:app --host 0.0.0.0 --port 8001
 ```
+
+Install `torch`, `torchvision`, and `torchaudio` from the **same** CUDA index. If NeMo pulls a mismatched `torchvision`, startup fails with `RuntimeError: operator torchvision::nms does not exist`.
 
 Health:
 
@@ -88,13 +88,10 @@ a different language). CosyVoice 2 is unimplemented until built and tested.
 
 ```powershell
 cd services\model-serving\tts
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -U pip
 pip install -r requirements.txt
 copy .env.example .env
 docker run -d -p 6379:6379 redis
-uvicorn app:app --host 0.0.0.0 --port 8002
+python -m uvicorn app:app --host 0.0.0.0 --port 8002
 ```
 
 Health:
@@ -114,21 +111,17 @@ generate text but will not speak.
 ### backend-api
 
 ```powershell
-cd services\backend-api
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+cd C:\Gisul\voice-ai-platform\services\backend-api
 pip install -r requirements.txt
 copy .env.example .env
 # edit .env: STT/TTS LAN IPs, LLM URL, LiveKit keys, Mongo
-uvicorn main:app --host 0.0.0.0 --port 8000
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ### voice-agent (new terminal)
 
 ```powershell
 cd services\voice-agent
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
 # same IPs + LiveKit

@@ -1,3 +1,9 @@
+# Install matching CUDA wheels FIRST, then this file:
+#   pip uninstall torch torchvision torchaudio -y
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+#   pip install -r requirements.txt
+# Mismatched torchvision (e.g. CPU wheel vs CUDA torch) raises:
+#   RuntimeError: operator torchvision::nms does not exist
 fastapi
 uvicorn[standard]
 python-multipart
