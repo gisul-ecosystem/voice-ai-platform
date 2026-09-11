@@ -1,0 +1,45 @@
+---
+description: Project conventions, verified facts, and architecture rules for the Aaptor/Racko 4-laptop pilot. Always apply before assuming what is built vs planned.
+alwaysApply: true
+---
+
+# Voice AI Platform — project conventions
+
+## Project context
+
+Two products, shared models, isolated serving:
+
+- **Aaptor v2** — AI interviewer
+- **Racko-style Voice CS** — voice customer support
+
+Pilot: 4 laptops (RTX 4060 8GB each), one component per laptop over LAN. Before assuming what exists vs is still planned, read `docs/implementation_plan.md` — there is no section 0; current status is **Phase 0** under section 3 (Phased roadmap). Do not treat later phases, CosyVoice, or production pools as already built.
+
+## Verified facts — do not regress
+
+- Ollama model tag is `qwen3:4b-instruct-2507-q8_0` — **not** `qwen3:4b-instruct-q8_0`.
+- Nemotron 3.5 ASR (`nvidia/nemotron-3.5-asr-streaming-0.6b`) requires an explicit `target_lang` on `.transcribe()` (e.g. `"auto"`). Omitting it raises `ValueError: Unknown prompt key: 'None'`.
+- Kokoro-82M has **no** native Indian-accented English voice. Voices are American (`af_*`), British (`bf_*`), and separately Hindi (`hf_*` — a different language, not an accent). Never imply otherwise. CosyVoice 2 is the path to Indian-accented English and is **unimplemented** until built and tested.
+- livekit-agents 1.x deprecated `VoicePipelineAgent` / `MultimodalAgent`. Use the unified `AgentSession` orchestrator. Do not write against the old API. (`VoicePipelineAgent = AgentSession` is an alias only.)
+- vLLM structured output param is `structured_outputs`, not deprecated `guided_json`. Ollama's equivalent is `format` with a JSON schema.
+- Qwen3-family: prefer **AWQ** over GPTQ (known GPTQ compatibility issues on this family).
+
+## Architecture principles
+
+- Same model weights, **separate serving deployments** per product. Do not collapse Aaptor and CS into one shared pool once past the single-laptop / single-GPU pilot.
+- Two-stage interview generation — keep them separate:
+  - **Stage 1** (once per session, JSON-schema-constrained): structured outline only, never question text.
+  - **Stage 2** (every turn): actual question from current outline phase + running transcript.
+- Treat the LLM as an OpenAI-compatible endpoint everywhere in client code. Swapping Ollama → vLLM is an `.env` URL/model change, not a code change.
+
+## Code style
+
+- Python 3.11, FastAPI, async/await, type hints everywhere.
+- Structured JSON-line logging only — no `print` statements.
+- All inter-service calls go through the retry-wrapped clients in `services/voice-agent/clients/`. No new raw `httpx` calls that skip retry/timeout handling.
+- Secrets only via `.env`. Every new service ships an `.env.example` with no real values.
+- Do not change Pydantic schema shapes in `models/schemas.py` unless explicitly asked.
+- Do not touch frontend apps unless explicitly asked.
+
+## Process
+
+For any change touching more than 2–3 files, switch to Plan Mode and show the plan before executing.

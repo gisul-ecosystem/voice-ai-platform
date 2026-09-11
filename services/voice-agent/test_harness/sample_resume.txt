@@ -1,0 +1,1 @@
+Priya N. 5 years backend. Led a monolith-to-services migration. Python, FastAPI, PostgreSQL, Redis. Mentored two juniors. On-call for a payments API.

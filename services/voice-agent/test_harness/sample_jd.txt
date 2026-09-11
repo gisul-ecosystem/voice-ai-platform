@@ -1,0 +1,1 @@
+Backend engineer (Python). 4+ years. FastAPI, distributed systems, ownership of production services. Comfortable with async I/O and LAN/HTTP service boundaries.

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Aaptor agent test harness</title>
+</head>
+<body>
+  <p>Minimal LiveKit join — mic in, agent audio out. No candidate UI.</p>
+  <form id="join-form">
+    <label>LiveKit URL <input id="url" name="url" size="48" placeholder="wss://livekit.example" /></label><br />
+    <label>Token <input id="token" name="token" size="80" placeholder="eyJ..." /></label><br />
+    <button type="submit" id="join-btn">Join</button>
+    <button type="button" id="leave-btn" disabled>Leave</button>
+  </form>
+  <p id="status">disconnected</p>
+  <div id="audio"></div>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.8/dist/livekit-client.umd.min.js"></script>
+  <script>
+    const Room = LivekitClient.Room;
+    const RoomEvent = LivekitClient.RoomEvent;
+    const params = new URLSearchParams(location.search);
+    const urlEl = document.getElementById("url");
+    const tokenEl = document.getElementById("token");
+    const statusEl = document.getElementById("status");
+    const audioEl = document.getElementById("audio");
+    const joinBtn = document.getElementById("join-btn");
+    const leaveBtn = document.getElementById("leave-btn");
+    urlEl.value = params.get("url") || "";
+    tokenEl.value = params.get("token") || "";
+
+    let room = null;
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function isLivekitUrl(url) {
+      return url.startsWith("wss://") || url.startsWith("ws://");
+    }
+
+    function attachAudio(track) {
+      if (track.kind !== "audio") return;
+      const el = track.attach();
+      el.autoplay = true;
+      audioEl.appendChild(el);
+    }
+
+    async function join(url, token) {
+      if (!isLivekitUrl(url) || !token || token === "...") {
+        throw new Error(
+          "Paste the real LiveKit URL (wss://...) and TOKEN from generate_token.py, not a shortened example."
+        );
+      }
+      if (room) await leave();
+      room = new Room();
+      room.on(RoomEvent.TrackSubscribed, (track) => attachAudio(track));
+      room.on(RoomEvent.Disconnected, () => setStatus("disconnected"));
+      room.on(RoomEvent.ParticipantConnected, (p) => {
+        setStatus("connected; participant: " + p.identity);
+      });
+      setStatus("connecting…");
+      await room.connect(url, token);
+      await room.localParticipant.setMicrophoneEnabled(true);
+      joinBtn.disabled = true;
+      leaveBtn.disabled = false;
+      setStatus("connected; room=" + room.name + " identity=" + room.localParticipant.identity);
+    }
+
+    async function leave() {
+      if (!room) return;
+      await room.disconnect();
+      room = null;
+      audioEl.replaceChildren();
+      joinBtn.disabled = false;
+      leaveBtn.disabled = true;
+      setStatus("disconnected");
+    }
+
+    document.getElementById("join-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      try {
+        await join(urlEl.value.trim(), tokenEl.value.trim());
+      } catch (err) {
+        setStatus("join failed: " + err);
+      }
+    });
+    leaveBtn.addEventListener("click", () => leave());
+
+    if (isLivekitUrl(urlEl.value) && tokenEl.value && tokenEl.value !== "...") {
+      join(urlEl.value.trim(), tokenEl.value.trim()).catch((err) => {
+        setStatus("auto-join failed: " + err);
+      });
+    }
+  </script>
+</body>
+</html>

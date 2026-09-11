@@ -1,0 +1,5 @@
+livekit-agents>=1.0,<2
+livekit-plugins-silero
+httpx
+python-dotenv
+tenacity
