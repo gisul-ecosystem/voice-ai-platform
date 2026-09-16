@@ -39,14 +39,27 @@ LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://localhost:11434/v1").rstr
 STT_SERVICE_URL = os.getenv("STT_SERVICE_URL", "http://localhost:5552").rstrip("/")
 TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", "http://localhost:5553").rstrip("/")
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:5554").rstrip("/")
+CONTEXT_ENGINE_URL = os.getenv("CONTEXT_ENGINE_URL", "http://localhost:5555").rstrip("/")
 
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3:4b-instruct-2507-q8_0")
 TTS_VOICE = os.getenv("TTS_VOICE", "af_heart")
+
+# Optional provider names and keys. Unset = today's self-hosted URL path.
+# Not listed in .env.example so existing deployments keep the same defaults.
+LLM_PROVIDER = (os.getenv("LLM_PROVIDER") or "self_hosted").strip() or "self_hosted"
+STT_PROVIDER = (os.getenv("STT_PROVIDER") or "self_hosted").strip() or "self_hosted"
+TTS_PROVIDER = (os.getenv("TTS_PROVIDER") or "self_hosted").strip() or "self_hosted"
+LLM_API_KEY = (os.getenv("LLM_API_KEY") or "").strip()
+STT_API_KEY = (os.getenv("STT_API_KEY") or "").strip()
+TTS_API_KEY = (os.getenv("TTS_API_KEY") or "").strip()
+OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 
 LLM_TIMEOUT_SECONDS = _float("LLM_TIMEOUT_SECONDS", 30)
 STT_TIMEOUT_SECONDS = _float("STT_TIMEOUT_SECONDS", 30)
 TTS_TIMEOUT_SECONDS = _float("TTS_TIMEOUT_SECONDS", 30)
 BACKEND_TIMEOUT_SECONDS = _float("BACKEND_TIMEOUT_SECONDS", 60)
+CONTEXT_ENGINE_TIMEOUT_SECONDS = _float("CONTEXT_ENGINE_TIMEOUT_SECONDS", 10)
 HTTP_CONNECT_TIMEOUT_SECONDS = _float("HTTP_CONNECT_TIMEOUT_SECONDS", 5)
 # Total attempts including the first try. 2–3 is the intended range.
 HTTP_RETRY_ATTEMPTS = max(1, min(_int("HTTP_RETRY_ATTEMPTS", 3), 5))

@@ -1,8 +1,8 @@
 """
 Dev health aggregator for the 4-laptop setup.
 
-GET /health/all pings STT, TTS, and LLM so you can see which laptops are
-reachable over LAN. Not a production readiness probe.
+GET /health/all pings STT, TTS, LLM, and the context engine so you can see
+which laptops are reachable over LAN. Not a production readiness probe.
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ def _service_urls() -> dict[str, dict[str, str]]:
     llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:11434/v1").rstrip("/")
     stt_url = os.getenv("STT_SERVICE_URL", "http://localhost:5552").rstrip("/")
     tts_url = os.getenv("TTS_SERVICE_URL", "http://localhost:5553").rstrip("/")
+    context_url = os.getenv("CONTEXT_ENGINE_URL", "http://localhost:5555").rstrip("/")
     # Ollama/vLLM both expose OpenAI-compatible GET /v1/models; STT/TTS have /health.
     llm_health = os.getenv("LLM_HEALTH_URL") or f"{llm_url}/models"
     return {
@@ -44,6 +45,10 @@ def _service_urls() -> dict[str, dict[str, str]]:
         "tts": {
             "laptop": "Laptop 3",
             "url": f"{tts_url}/health",
+        },
+        "context_engine": {
+            "laptop": "Laptop 4",
+            "url": f"{context_url}/health",
         },
     }
 
@@ -144,6 +149,7 @@ async def health_all():
             "llm_up": services["llm"]["up"],
             "stt_up": services["stt"]["up"],
             "tts_up": services["tts"]["up"],
+            "context_engine_up": services["context_engine"]["up"],
             "mongo_connected": mongo_ok,
         },
     )

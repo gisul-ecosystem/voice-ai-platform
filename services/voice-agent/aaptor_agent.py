@@ -12,14 +12,12 @@ See docs/implementation_plan.md section 1.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
@@ -44,8 +42,12 @@ from livekit.agents import (  # noqa: E402
 from livekit.plugins import silero  # noqa: E402
 
 from clients.backend_client import fetch_interview_plan  # noqa: E402
-from clients.errors import ServiceUnavailableError  # noqa: E402
-from clients.llm_client import generate_reply  # noqa: E402
+from clients.errors import ProviderConfigError, ServiceUnavailableError  # noqa: E402
+from clients.inference import (  # noqa: E402
+    clients_from_overrides,
+    inference_overrides_from_metadata,
+    parse_room_metadata,
+)
 from livekit_adapters import LaptopLLM, LaptopSTT, LaptopTTS  # noqa: E402
 
 logger = logging.getLogger("voice-agent.aaptor")
@@ -140,15 +142,7 @@ def _last_user_text(chat_ctx: llm.ChatContext) -> str:
 
 
 def _plan_inputs_from_job(ctx: JobContext) -> tuple[str, str]:
-    meta: dict[str, Any] = {}
-    raw = getattr(ctx.room, "metadata", None) or ""
-    if raw:
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                meta = parsed
-        except json.JSONDecodeError:
-            logger.warning("room_metadata_invalid", extra={"event": "room_metadata_invalid"})
+    meta = parse_room_metadata(getattr(ctx.room, "metadata", None) or "")
     jd = (meta.get("job_description") or os.getenv("JOB_DESCRIPTION") or "").strip()
     resume = (meta.get("resume_text") or os.getenv("RESUME_TEXT") or "").strip()
     return jd, resume
@@ -157,7 +151,7 @@ def _plan_inputs_from_job(ctx: JobContext) -> tuple[str, str]:
 class AaptorAgent(Agent):
     """Interview flow: Stage 1 outline at session start, Stage 2 question each turn."""
 
-    def __init__(self, outline: dict) -> None:
+    def __init__(self, outline: dict, llm_client) -> None:
         super().__init__(
             instructions=(
                 "You are Aaptor, an AI interviewer. Ask one concise spoken question "
@@ -165,6 +159,7 @@ class AaptorAgent(Agent):
             )
         )
         self.outline = outline
+        self.llm_client = llm_client
         self.phases: list[dict] = list(outline.get("phases") or [])
         self.phase_index = 0
         self.probe_count = 0
@@ -237,7 +232,7 @@ class AaptorAgent(Agent):
             user_content = "Generate the opening question now."
 
         started = time.perf_counter()
-        raw = await generate_reply(
+        raw = await self.llm_client.generate_reply(
             [
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": user_content},
@@ -323,6 +318,19 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.log_context_fields = {"room": ctx.room.name}
     logger.info("session_start", extra={"event": "session_start", "room": ctx.room.name})
     await ctx.connect()
+
+    overrides = inference_overrides_from_metadata(
+        parse_room_metadata(getattr(ctx.room, "metadata", None) or "")
+    )
+    try:
+        llm_client, stt_client, tts_client = clients_from_overrides(overrides)
+    except ProviderConfigError:
+        logger.exception(
+            "inference_config_invalid",
+            extra={"event": "inference_config_invalid", **overrides.log_safe()},
+        )
+        raise
+
     outline = await _build_outline(ctx)
     logger.info(
         "stage1_outline",
@@ -335,9 +343,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session = VoicePipelineAgent(
         vad=silero.VAD.load(),
-        stt=LaptopSTT(),
-        llm=LaptopLLM(),
-        tts=LaptopTTS(),
+        stt=LaptopSTT(client=stt_client),
+        llm=LaptopLLM(client=llm_client),
+        tts=LaptopTTS(client=tts_client),
     )
 
     @session.on("metrics_collected")
@@ -356,7 +364,7 @@ async def entrypoint(ctx: JobContext) -> None:
             },
         )
 
-    await session.start(agent=AaptorAgent(outline), room=ctx.room)
+    await session.start(agent=AaptorAgent(outline, llm_client), room=ctx.room)
 
 
 if __name__ == "__main__":

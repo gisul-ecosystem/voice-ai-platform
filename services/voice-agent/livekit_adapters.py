@@ -20,10 +20,9 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import AudioBuffer
 
 from clients.errors import ServiceUnavailableError
-from clients.llm_client import generate_reply
-from clients.settings import LLM_MODEL_NAME
-from clients.stt_client import transcribe
-from clients.tts_client import synthesize
+from clients.llm import get_llm_client
+from clients.stt import get_stt_client
+from clients.tts import get_tts_client
 
 TTS_SAMPLE_RATE = 24000
 TTS_NUM_CHANNELS = 1
@@ -36,20 +35,21 @@ def _to_api_error(exc: Exception) -> APIConnectionError:
 
 
 class LaptopSTT(stt.STT):
-    """Non-streaming STT that POSTs a WAV buffer to Laptop 2."""
+    """Non-streaming STT that POSTs a WAV buffer to the configured STT provider."""
 
-    def __init__(self) -> None:
+    def __init__(self, client=None) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
         )
+        self._client = client or get_stt_client()
 
     @property
     def model(self) -> str:
-        return "nemotron-http"
+        return getattr(self._client, "model", None) or "nemotron-http"
 
     @property
     def provider(self) -> str:
-        return "laptop-stt"
+        return type(self._client).__name__
 
     async def _recognize_impl(
         self,
@@ -60,7 +60,7 @@ class LaptopSTT(stt.STT):
     ) -> stt.SpeechEvent:
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
         try:
-            text = await transcribe(wav_bytes)
+            text = await self._client.transcribe(wav_bytes)
         except ServiceUnavailableError as exc:
             raise _to_api_error(exc) from exc
 
@@ -72,14 +72,15 @@ class LaptopSTT(stt.STT):
 
 
 class LaptopTTS(tts.TTS):
-    """Non-streaming TTS that POSTs text to Laptop 3 (Kokoro, WAV @ 24 kHz)."""
+    """Non-streaming TTS via the configured TTS provider (Kokoro HTTP or OpenAI)."""
 
-    def __init__(self) -> None:
+    def __init__(self, client=None) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=TTS_SAMPLE_RATE,
             num_channels=TTS_NUM_CHANNELS,
         )
+        self._client = client or get_tts_client()
 
     @property
     def model(self) -> str:
@@ -98,7 +99,7 @@ class LaptopTTS(tts.TTS):
 class _LaptopChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            audio_bytes = await synthesize(self.input_text)
+            audio_bytes = await self._tts._client.synthesize(self.input_text)
         except ServiceUnavailableError as exc:
             raise _to_api_error(exc) from exc
 
@@ -113,15 +114,19 @@ class _LaptopChunkedStream(tts.ChunkedStream):
 
 
 class LaptopLLM(llm.LLM):
-    """OpenAI-compatible chat completions via Laptop 1 (Ollama / vLLM)."""
+    """OpenAI-compatible chat completions (self-hosted Ollama/vLLM or OpenAI API)."""
+
+    def __init__(self, client=None) -> None:
+        super().__init__()
+        self._client = client or get_llm_client()
 
     @property
     def model(self) -> str:
-        return LLM_MODEL_NAME
+        return getattr(self._client, "model", "") or "llm-http"
 
     @property
     def provider(self) -> str:
-        return "laptop-llm"
+        return type(self._client).__name__
 
     def chat(
         self,
@@ -145,7 +150,7 @@ class _LaptopLLMStream(llm.LLMStream):
     async def _run(self) -> None:
         messages = chat_ctx_to_messages(self._chat_ctx)
         try:
-            text = await generate_reply(messages)
+            text = await self._llm._client.generate_reply(messages)
         except ServiceUnavailableError as exc:
             raise _to_api_error(exc) from exc
 

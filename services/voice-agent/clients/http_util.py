@@ -36,9 +36,18 @@ async def request(
     url: str,
     *,
     timeout: httpx.Timeout,
+    api_key: str | None = None,
+    headers: dict | None = None,
     **kwargs,
 ) -> httpx.Response:
-    """POST/GET with exponential backoff. Raises ServiceUnavailableError, never raw httpx errors."""
+    """POST/GET with exponential backoff. Raises ServiceUnavailableError, never raw httpx errors.
+
+    api_key is sent as Authorization: Bearer … and is never written to logs.
+    Client-provided keys must never land in log files or observability tooling.
+    """
+    req_headers = dict(headers or {})
+    if api_key:
+        req_headers["Authorization"] = f"Bearer {api_key}"
 
     def _log_retry(retry_state) -> None:
         exc = retry_state.outcome.exception() if retry_state.outcome else None
@@ -53,6 +62,7 @@ async def request(
                 "attempt": retry_state.attempt_number,
                 "wait_s": wait_s,
                 "error_type": type(exc).__name__ if exc else None,
+                "has_api_key": bool(api_key),
             },
         )
 
@@ -65,7 +75,12 @@ async def request(
     )
     async def _once() -> httpx.Response:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(method, url, **kwargs)
+            resp = await client.request(
+                method,
+                url,
+                headers=req_headers or None,
+                **kwargs,
+            )
             resp.raise_for_status()
             return resp
 
