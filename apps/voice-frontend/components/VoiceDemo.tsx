@@ -67,7 +67,7 @@ export function VoiceDemo({ product }: { product: ProductConfig }) {
   }
 
   return (
-    <main className="demo-page">
+    <main className={`demo-page demo-stage-${stage}`}>
       <nav className="topbar" aria-label="Demo navigation">
         <Link href="/" className="brand">
           Voice AI Platform

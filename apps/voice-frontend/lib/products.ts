@@ -16,7 +16,7 @@ export const products: Record<ProductId, ProductConfig> = {
   interviewer: {
     id: "interviewer",
     href: "/interviewer",
-    eyebrow: "Aaptor",
+    eyebrow: "AI Interview Agent",
     title: "AI Interviewer",
     description:
       "Run a structured voice and video interview using role and candidate context.",
@@ -28,7 +28,7 @@ export const products: Record<ProductId, ProductConfig> = {
   "customer-support": {
     id: "customer-support",
     href: "/support",
-    eyebrow: "Racko",
+    eyebrow: "AI Support Agent",
     title: "Customer Support",
     description:
       "Try a voice support conversation with contextual answers and service tools.",
