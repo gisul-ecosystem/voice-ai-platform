@@ -5,6 +5,39 @@ across 4 laptops (RTX 4060 8GB each), one component per laptop, communicating
 over LAN via HTTP. Designed to swap to real GPU servers later with zero code
 changes — only `.env` URLs and the LLM backend (Ollama -> vLLM) change.
 
+## Product boundaries
+
+This is one monorepo with a shared voice platform and two independently
+deployable products:
+
+- `services/voice-agent/products/interviewer/` owns Aaptor prompts, interview
+  state, planning integration, and its LiveKit worker.
+- `services/voice-agent/products/customer_support/` owns Racko intent, tool,
+  retrieval, escalation, and its LiveKit worker.
+- `services/voice-agent/voice_platform/` owns shared chat and LiveKit session
+  runtime helpers.
+- `services/voice-agent/clients/` owns shared STT, LLM, and TTS providers.
+- `packages/voice-ui/` owns reusable LiveKit prejoin, room, media, controls,
+  session-client, and flow primitives consumed by product frontends.
+- `apps/voice-frontend/` is the neutral internal demo and reference consumer;
+  Aaptor and future product frontends keep their own branding and setup UX.
+
+The root `aaptor_agent.py` and `racko_agent.py` files are compatibility
+entrypoints; existing start commands and LiveKit agent IDs remain unchanged.
+Product logic must not be added back into those wrappers.
+
+Run product and dispatch tests without provider keys:
+
+```powershell
+cd services\voice-agent
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+
+cd ..\backend-api
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
 ## Laptop assignment
 
 | Laptop | Runs | Port |
@@ -151,19 +184,22 @@ LLM_SERVICE_URL=https://llm.gisul.ai/v1
 LLM_MODEL_NAME=qwen3:4b-instruct-2507-q4_K_M
 ```
 
-### Voice agent test frontend
+### Voice demo frontend
 
 Backend and the selected Aaptor or Racko worker must already be running:
 
 ```powershell
-cd services\voice-agent\test_harness
-python -m http.server 8765
+cd apps\voice-frontend
+copy .env.example .env.local
+npm install
+npm run dev
 ```
 
-Open **http://127.0.0.1:8765/index.html** (not `file://`), select AI Interviewer
-or Customer Support, and begin the session. The frontend calls backend-api to
-create the room, dispatch the selected worker, and mint the token automatically.
-Details: `services/voice-agent/test_harness/README.md`.
+Set `BACKEND_API_URL=http://127.0.0.1:5554` in `.env.local`, then open
+**http://localhost:3000**. Select AI Interviewer or Customer Support and begin
+the session. The browser sends only product and participant setup data to a
+same-origin Next.js API. Worker routing, LiveKit credentials, and provider
+policy remain server-side. Details: `apps/voice-frontend/README.md`.
 
 ---
 
@@ -171,8 +207,8 @@ Details: `services/voice-agent/test_harness/README.md`.
 
 **Built:** Stage 1 plan endpoint, Stage 2 live question generation via
 `AgentSession`, retry-wrapped HTTP clients, `/health` + `/health/all`, and an
-integrated two-agent test frontend for room creation, camera/mic input, and
-agent audio.
+integrated Next.js two-product demo for room creation, device preview,
+camera/mic input, and agent audio.
 
 **Proved (last week):** LiveKit join works, hosted LLM responds
 (`qwen3:4b-instruct-2507-q4_K_M`), STT transcribes correctly via
@@ -180,9 +216,9 @@ agent audio.
 Windows temp-file and `en-US` prompt-key fixes).
 
 **Not done:** TTS never tunneled (`https://voicetts.gisul.ai`) -- the agent
-cannot speak yet; this is the blocker for a real end-to-end test. No production
-candidate frontend. Mongo intermittently down (Stage 1 has a fallback).
-CosyVoice, vLLM production, frontends -- out of scope for this phase.
+cannot speak yet; this is the blocker for a real end-to-end test. The demo is
+not a production candidate portal. Mongo intermittently down (Stage 1 has a
+fallback). CosyVoice and vLLM production remain out of scope for this phase.
 
 **Tunnels:** only **gisul.ai** (and LiveKit on `livekit.gisul.co.in`). Do
 not use any other Cloudflare account for STT/TTS.
@@ -195,7 +231,7 @@ before the repo is treated as public. Rotation is **not** confirmed here.
 is `qwen3:4b-instruct-2507-q4_K_M`. Do not compare those two directly.
 
 **Next:** STT/LLM tunnels back up -> TTS on 5553 / `voicetts.gisul.ai` ->
-backend 5554 + worker on Laptop 4 -> harness join -> first real
+backend 5554 + worker on Laptop 4 -> frontend join -> first real
 end-to-end "hear question, speak, get next question" test.
 
 ---

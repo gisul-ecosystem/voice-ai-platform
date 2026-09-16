@@ -1,0 +1,204 @@
+"""Provider-neutral interview question flow."""
+from __future__ import annotations
+
+import logging
+import os
+import re
+import time
+from typing import Protocol
+
+logger = logging.getLogger("voice-agent.aaptor")
+
+MAX_PROBES_PER_PHASE = int(os.getenv("MAX_PROBES_PER_PHASE", "2"))
+FALLBACK_OPENING = (
+    "Thanks for joining. To get started, could you walk me through your "
+    "background and the work that's most relevant to this role?"
+)
+
+STAGE2_SYSTEM = """You are Aaptor, a live AI interviewer speaking with a candidate over voice.
+
+Current phase: {phase_name} ({duration_minutes} min, source={source})
+Topics still in scope for this phase: {topics}
+Probes already asked in this phase: {probe_count} (max {max_probes} before we must advance)
+Next phase if you advance: {next_phase}
+
+Recent candidate turns:
+{recent_turns}
+
+Last candidate turn:
+{last_turn}
+
+Decide whether to PROBE deeper or ADVANCE.
+- PROBE if the last answer was vague, missing STAR specifics (situation, task, action, result), or a topic in this phase is still uncovered.
+- ADVANCE if this phase is sufficiently covered, or {probe_count} probes have already been used.
+
+Rules:
+- Ask exactly one question as spoken English, 1-3 sentences.
+- No markdown, lists, or quotation marks wrapping the question.
+- Do not say the words phase, outline, probe, or advance out loud.
+- When probing, ground the question in what the candidate just said.
+- When advancing, ask a natural first question for the next phase's topics.
+- Stay sector-agnostic. Prefer STAR behavioral framing for experience claims.
+- Anti-bias: do not ask about age, family, nationality, health, or other protected attributes; do not assume identity from name or accent.
+
+Output format (strict):
+Line 1: DECISION: probe
+or
+Line 1: DECISION: advance
+Then a blank line, then the spoken question only.
+"""
+
+OPENING_SYSTEM = """You are Aaptor, a live AI interviewer. Write the opening spoken question for this interview.
+
+First phase: {phase_name} ({duration_minutes} min, source={source})
+Topics: {topics}
+
+Rules:
+- One short spoken question (1-2 sentences). Warm, professional, no markdown.
+- Do not mention phases or that you are following a plan.
+- Anti-bias: do not reference identity, accent, or personal circumstances.
+
+Output format (strict):
+Line 1: DECISION: probe
+Then a blank line, then the spoken question only.
+"""
+
+
+class LlmClient(Protocol):
+    async def generate_reply(self, messages: list[dict], **kwargs) -> str: ...
+
+
+def phase_topics(phase: dict) -> str:
+    topics = phase.get("topics") or []
+    return ", ".join(topics) if topics else "(none listed)"
+
+
+def parse_stage2(raw: str) -> tuple[str, str]:
+    text = (raw or "").strip()
+    decision = "probe"
+    match = re.search(r"DECISION:\s*(probe|advance)", text, flags=re.IGNORECASE)
+    if match:
+        decision = match.group(1).lower()
+        text = text[match.end() :].lstrip(" \t:-").lstrip("\n").strip()
+    text = re.sub(
+        r"^DECISION:\s*(probe|advance)\s*", "", text, flags=re.IGNORECASE
+    ).strip()
+    if not text:
+        text = FALLBACK_OPENING
+    return decision, text
+
+
+class InterviewFlow:
+    """State and question generation independent of LiveKit transport."""
+
+    def __init__(
+        self,
+        outline: dict,
+        llm_client: LlmClient,
+        *,
+        max_probes_per_phase: int = MAX_PROBES_PER_PHASE,
+    ) -> None:
+        self.outline = outline
+        self.llm_client = llm_client
+        self.max_probes_per_phase = max_probes_per_phase
+        self.phases: list[dict] = list(outline.get("phases") or [])
+        self.phase_index = 0
+        self.probe_count = 0
+        self.candidate_turns: list[str] = []
+
+    def current_phase(self) -> dict:
+        if not self.phases:
+            return {
+                "name": "warm-up",
+                "duration_minutes": 5,
+                "topics": ["background"],
+                "source": "generic",
+            }
+        return self.phases[min(self.phase_index, len(self.phases) - 1)]
+
+    def next_phase(self) -> dict | None:
+        next_index = self.phase_index + 1
+        if next_index < len(self.phases):
+            return self.phases[next_index]
+        return None
+
+    def apply_decision(self, decision: str) -> None:
+        at_last = self.phase_index >= max(len(self.phases) - 1, 0)
+        must_advance = (
+            self.probe_count >= self.max_probes_per_phase and not at_last
+        )
+        if (decision == "advance" or must_advance) and not at_last:
+            previous = self.current_phase().get("name")
+            self.phase_index += 1
+            self.probe_count = 0
+            logger.info(
+                "phase_advanced",
+                extra={
+                    "event": "phase_advanced",
+                    "from_phase": previous,
+                    "to_phase": self.current_phase().get("name"),
+                    "forced": must_advance and decision != "advance",
+                },
+            )
+        else:
+            self.probe_count += 1
+
+    async def generate_next_question(self, last_candidate_turn: str | None) -> str:
+        phase = self.current_phase()
+        next_phase = self.next_phase()
+        next_phase_label = (
+            f"{next_phase.get('name')} — topics: {phase_topics(next_phase)}"
+            if next_phase
+            else "none (closing)"
+        )
+        last_candidate_turn = (last_candidate_turn or "").strip() or None
+        recent = self.candidate_turns[-2:]
+
+        if last_candidate_turn:
+            prompt = STAGE2_SYSTEM.format(
+                phase_name=phase.get("name", "unnamed"),
+                duration_minutes=phase.get("duration_minutes", 0),
+                source=phase.get("source", "generic"),
+                topics=phase_topics(phase),
+                probe_count=self.probe_count,
+                max_probes=self.max_probes_per_phase,
+                next_phase=next_phase_label,
+                recent_turns="\n".join(f"- {turn}" for turn in recent)
+                or "(none yet)",
+                last_turn=last_candidate_turn,
+            )
+            user_content = last_candidate_turn
+        else:
+            prompt = OPENING_SYSTEM.format(
+                phase_name=phase.get("name", "unnamed"),
+                duration_minutes=phase.get("duration_minutes", 0),
+                source=phase.get("source", "generic"),
+                topics=phase_topics(phase),
+            )
+            user_content = "Generate the opening question now."
+
+        started = time.perf_counter()
+        raw = await self.llm_client.generate_reply(
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_content},
+            ]
+        )
+        decision, question = parse_stage2(raw)
+        if last_candidate_turn:
+            self.candidate_turns.append(last_candidate_turn)
+            self.apply_decision(decision)
+        logger.info(
+            "stage2_question",
+            extra={
+                "event": "stage2_question",
+                "stage": "llm",
+                "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+                "decision": decision,
+                "phase": self.current_phase().get("name"),
+                "phase_index": self.phase_index,
+                "probe_count": self.probe_count,
+                "is_opening": last_candidate_turn is None,
+            },
+        )
+        return question
