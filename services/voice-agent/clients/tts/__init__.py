@@ -32,7 +32,11 @@ def get_tts_client(
     api_key_override: str | None = None,
 ) -> TtsClient:
     overridden = bool((provider_override or "").strip() or (api_key_override or "").strip())
-    provider = normalize_provider(provider_override, fallback=TTS_PROVIDER)
+    provider = normalize_provider(
+        provider_override,
+        fallback=TTS_PROVIDER,
+        service="tts",
+    )
     api_key = resolve_api_key("tts", provider, api_key_override)
     require_key_if_needed("tts", provider, api_key)
 

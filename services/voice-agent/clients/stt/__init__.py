@@ -31,7 +31,11 @@ def get_stt_client(
     api_key_override: str | None = None,
 ) -> SttClient:
     overridden = bool((provider_override or "").strip() or (api_key_override or "").strip())
-    provider = normalize_provider(provider_override, fallback=STT_PROVIDER)
+    provider = normalize_provider(
+        provider_override,
+        fallback=STT_PROVIDER,
+        service="stt",
+    )
     api_key = resolve_api_key("stt", provider, api_key_override)
     require_key_if_needed("stt", provider, api_key)
 
