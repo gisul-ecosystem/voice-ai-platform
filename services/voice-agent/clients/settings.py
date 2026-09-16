@@ -54,6 +54,13 @@ STT_API_KEY = (os.getenv("STT_API_KEY") or "").strip()
 TTS_API_KEY = (os.getenv("TTS_API_KEY") or "").strip()
 OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+SARVAM_API_KEY = (os.getenv("SARVAM_API_KEY") or "").strip()
+SARVAM_STT_BASE_URL = (
+    os.getenv("SARVAM_STT_BASE_URL") or "https://api.sarvam.ai"
+).strip().rstrip("/")
+SARVAM_STT_MODEL = (os.getenv("SARVAM_STT_MODEL") or "saaras:v3").strip() or "saaras:v3"
+SARVAM_STT_MODE = (os.getenv("SARVAM_STT_MODE") or "transcribe").strip() or "transcribe"
+SARVAM_STT_LANGUAGE = (os.getenv("SARVAM_STT_LANGUAGE") or "unknown").strip() or "unknown"
 
 LLM_TIMEOUT_SECONDS = _float("LLM_TIMEOUT_SECONDS", 30)
 STT_TIMEOUT_SECONDS = _float("STT_TIMEOUT_SECONDS", 30)
