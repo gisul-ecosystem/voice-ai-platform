@@ -8,10 +8,11 @@ import {
   VideoTrack,
   useConnectionState,
   useTracks,
+  useTranscriptions,
   useVoiceAssistant,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type {
   VoiceDeviceChoices,
@@ -179,12 +180,68 @@ export function DefaultVoiceSession({
         />
       </div>
 
+      <VoiceTranscripts />
       <RoomAudioRenderer />
       <footer className="session-footer">
         <p>Your audio and video remain in this secure LiveKit room.</p>
         <VoiceSessionControls />
       </footer>
     </div>
+  );
+}
+
+export function VoiceTranscripts() {
+  const streams = useTranscriptions();
+  const { agentTranscriptions } = useVoiceAssistant();
+  const [lines, setLines] = useState<
+    { id: string; who: string; text: string }[]
+  >([]);
+
+  useEffect(() => {
+    const incoming = [
+      ...streams.map((item) => ({
+        id: item.streamInfo.id,
+        who: item.participantInfo.identity || "you",
+        text: item.text.trim(),
+      })),
+      ...agentTranscriptions.map((segment) => ({
+        id: segment.id,
+        who: "agent",
+        text: segment.text.trim(),
+      })),
+    ].filter((line) => line.text);
+    if (incoming.length === 0) return;
+    setLines((current) => {
+      const seen = new Set(current.map((line) => `${line.who}:${line.text}`));
+      const next = [...current];
+      for (const line of incoming) {
+        const key = `${line.who}:${line.text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        next.push(line);
+      }
+      return next;
+    });
+  }, [streams, agentTranscriptions]);
+
+  return (
+    <section className="transcript-panel" data-voice-ui="transcripts">
+      <p className="step-label">Transcript</p>
+      {lines.length === 0 ? (
+        <p className="transcript-empty">
+          Speak a full sentence, then pause. Short noise clips are ignored.
+        </p>
+      ) : (
+        <ol className="transcript-list">
+          {lines.map((line) => (
+            <li key={line.id}>
+              <span>{line.who}</span>
+              <p>{line.text}</p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }
 

@@ -53,12 +53,15 @@ async def create_interview_plan(req: InterviewPlanRequest):
     llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:11434/v1").rstrip("/")
     timeout_s = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
     connect_s = float(os.getenv("HTTP_CONNECT_TIMEOUT_SECONDS", "5"))
+    api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "").strip()
+    provider = (os.getenv("LLM_PROVIDER") or "self_hosted").strip().lower()
+    use_openai = provider in {"openai", "openai_api", "api"} or "api.openai.com" in llm_url
+    model = os.getenv("LLM_MODEL_NAME", "qwen3:4b-instruct-2507-q8_0")
+    if use_openai and (":" in model or model.lower().startswith("qwen")):
+        model = "gpt-4o-mini"
 
     payload = {
-        # Ollama's OpenAI-compatible endpoint -- swap this model name for
-        # the vLLM equivalent when moving to a real GPU server; the
-        # request/response shape doesn't change.
-        "model": os.getenv("LLM_MODEL_NAME", "qwen3:4b-instruct-2507-q8_0"),
+        "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -66,13 +69,28 @@ async def create_interview_plan(req: InterviewPlanRequest):
                 "content": f"JD:\n{req.job_description}\n\nResume:\n{req.resume_text}",
             },
         ],
-        "format": OUTLINE_SCHEMA,  # Ollama's structured-output param name
     }
+    if use_openai:
+        payload["response_format"] = {"type": "json_object"}
+        payload["messages"][0]["content"] += (
+            " Reply with JSON only, matching keys phases[].name, "
+            "duration_minutes, topics, source."
+        )
+    else:
+        payload["format"] = OUTLINE_SCHEMA
+
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     started = time.perf_counter()
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s, connect=connect_s)) as client:
         try:
-            resp = await client.post(f"{llm_url}/chat/completions", json=payload)
+            resp = await client.post(
+                f"{llm_url}/chat/completions",
+                json=payload,
+                headers=headers or None,
+            )
             resp.raise_for_status()
         except httpx.HTTPError as e:
             latency_ms = round((time.perf_counter() - started) * 1000, 1)
@@ -89,7 +107,16 @@ async def create_interview_plan(req: InterviewPlanRequest):
 
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
     content = resp.json()["choices"][0]["message"]["content"]
-    outline = InterviewOutline(**json.loads(content))
+    parsed = json.loads(content)
+    for phase in parsed.get("phases") or []:
+        src = str(phase.get("source") or "generic").strip().lower()
+        if "resume" in src:
+            phase["source"] = "resume"
+        elif src in {"jd", "job"} or "job description" in src:
+            phase["source"] = "jd"
+        else:
+            phase["source"] = "generic"
+    outline = InterviewOutline(**parsed)
     logger.info(
         "stage_latency",
         extra={

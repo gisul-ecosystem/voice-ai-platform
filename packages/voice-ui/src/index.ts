@@ -5,6 +5,7 @@ export {
   VoiceRoom,
   VoiceSession,
   VoiceSessionControls,
+  VoiceTranscripts,
   type VoiceRoomProps,
   type VoiceSessionProps,
 } from "./VoiceSession";
