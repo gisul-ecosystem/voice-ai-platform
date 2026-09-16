@@ -90,6 +90,7 @@ export function VoicePreJoin({
 
   useEffect(() => {
     if (videoElement.current && videoTrack) {
+      void videoTrack.unmute();
       videoTrack.attach(videoElement.current);
     }
     return () => {

@@ -38,7 +38,11 @@ def get_llm_client(
     api_key_override: str | None = None,
 ) -> OpenAICompatLlm:
     overridden = bool((provider_override or "").strip() or (api_key_override or "").strip())
-    provider = normalize_provider(provider_override, fallback=LLM_PROVIDER)
+    provider = normalize_provider(
+        provider_override,
+        fallback=LLM_PROVIDER,
+        service="llm",
+    )
     api_key = resolve_api_key("llm", provider, api_key_override)
     require_key_if_needed("llm", provider, api_key)
 
