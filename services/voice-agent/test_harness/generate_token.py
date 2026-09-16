@@ -1,7 +1,9 @@
 """Mint a LiveKit participant token and ensure the room has Stage 1 metadata.
 
 aaptor_agent.py reads ctx.room.metadata JSON keys job_description and resume_text
-(falling back to JOB_DESCRIPTION / RESUME_TEXT in .env).
+(falling back to JOB_DESCRIPTION / RESUME_TEXT in .env). Optional inference
+overrides: llm_provider, llm_api_key, stt_provider, stt_api_key, tts_provider,
+tts_api_key. Omitted means the worker uses .env defaults. API keys are never printed.
 """
 from __future__ import annotations
 
@@ -13,7 +15,6 @@ import sys
 import uuid
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import quote, urlencode
 
 from dotenv import load_dotenv
 from livekit import api
@@ -36,8 +37,48 @@ SAMPLE_JD_PATH = Path(__file__).with_name("sample_jd.txt")
 SAMPLE_RESUME_PATH = Path(__file__).with_name("sample_resume.txt")
 
 
-def _agent_name() -> str:
-    return os.getenv("LIVEKIT_AGENT_NAME", "aaptor")
+def _optional_meta(value: str | None) -> str | None:
+    text = (value or "").strip()
+    return text or None
+
+
+def build_room_metadata(
+    *,
+    job_description: str,
+    resume_text: str,
+    llm_provider: str | None = None,
+    llm_api_key: str | None = None,
+    stt_provider: str | None = None,
+    stt_api_key: str | None = None,
+    tts_provider: str | None = None,
+    tts_api_key: str | None = None,
+) -> dict:
+    """Room JSON the agent reads. Omitted inference fields mean server .env defaults."""
+    metadata = {"job_description": job_description, "resume_text": resume_text}
+    extras = {
+        "llm_provider": _optional_meta(llm_provider),
+        "llm_api_key": _optional_meta(llm_api_key),
+        "stt_provider": _optional_meta(stt_provider),
+        "stt_api_key": _optional_meta(stt_api_key),
+        "tts_provider": _optional_meta(tts_provider),
+        "tts_api_key": _optional_meta(tts_api_key),
+    }
+    for key, value in extras.items():
+        if value is not None:
+            metadata[key] = value
+    return metadata
+
+
+def _log_safe_inference(metadata: dict) -> dict:
+    # Client-provided keys must never land in log files or observability tooling.
+    return {
+        "llm_provider": metadata.get("llm_provider"),
+        "stt_provider": metadata.get("stt_provider"),
+        "tts_provider": metadata.get("tts_provider"),
+        "llm_api_key_set": bool(metadata.get("llm_api_key")),
+        "stt_api_key_set": bool(metadata.get("stt_api_key")),
+        "tts_api_key_set": bool(metadata.get("tts_api_key")),
+    }
 
 
 def _ws_url() -> str:
@@ -65,7 +106,12 @@ def _read_text(path: Path | None, fallback: str) -> str:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a LiveKit test-participant token")
-    parser.add_argument("--room", default="", help="Room name (default: aaptor-test-<id>)")
+    parser.add_argument("--room", default="", help="Room name (default: <agent>-test-<id>)")
+    parser.add_argument(
+        "--agent-name",
+        default="aaptor",
+        help="Named LiveKit worker to dispatch (aaptor or racko). Default aaptor.",
+    )
     parser.add_argument("--identity", default="test-candidate")
     parser.add_argument("--name", default="Test Candidate")
     parser.add_argument(
@@ -78,6 +124,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--resume-text", default=os.getenv("RESUME_TEXT", "").strip())
     parser.add_argument("--job-file", type=Path, default=None)
     parser.add_argument("--resume-file", type=Path, default=None)
+    parser.add_argument("--llm-provider", default=None)
+    parser.add_argument("--llm-api-key", default=None)
+    parser.add_argument("--stt-provider", default=None)
+    parser.add_argument("--stt-api-key", default=None)
+    parser.add_argument("--tts-provider", default=None)
+    parser.add_argument("--tts-api-key", default=None)
     parser.add_argument(
         "--skip-create-room",
         action="store_true",
@@ -93,6 +145,7 @@ async def _ensure_room(
     room_name: str,
     metadata: str,
     max_participants: int,
+    agent_name: str,
 ) -> None:
     lk = api.LiveKitAPI(_http_url(ws_url), api_key, api_secret)
     try:
@@ -102,7 +155,7 @@ async def _ensure_room(
                     name=room_name,
                     metadata=metadata,
                     max_participants=max_participants,
-                    agents=[api.RoomAgentDispatch(agent_name=_agent_name())],
+                    agents=[api.RoomAgentDispatch(agent_name=agent_name)],
                 )
             )
         except api.TwirpError:
@@ -121,6 +174,7 @@ def _build_token(
     identity: str,
     name: str,
     ttl_minutes: int,
+    agent_name: str,
 ) -> str:
     return (
         api.AccessToken(api_key, api_secret)
@@ -137,7 +191,7 @@ def _build_token(
             )
         )
         .with_room_config(
-            api.RoomConfiguration(agents=[api.RoomAgentDispatch(agent_name=_agent_name())])
+            api.RoomConfiguration(agents=[api.RoomAgentDispatch(agent_name=agent_name)])
         )
         .to_jwt()
     )
@@ -169,12 +223,32 @@ async def main() -> int:
             SAMPLE_RESUME_PATH if SAMPLE_RESUME_PATH.exists() else None, DEFAULT_RESUME
         )
 
-    metadata = json.dumps({"job_description": jd, "resume_text": resume})
-    room_name = args.room or f"aaptor-test-{uuid.uuid4().hex[:8]}"
+    metadata = json.dumps(
+        build_room_metadata(
+            job_description=jd,
+            resume_text=resume,
+            llm_provider=args.llm_provider,
+            llm_api_key=args.llm_api_key,
+            stt_provider=args.stt_provider,
+            stt_api_key=args.stt_api_key,
+            tts_provider=args.tts_provider,
+            tts_api_key=args.tts_api_key,
+        )
+    )
+    agent_name = (args.agent_name or "aaptor").strip() or "aaptor"
+    room_name = args.room or f"{agent_name}-test-{uuid.uuid4().hex[:8]}"
     max_participants = int(os.getenv("LIVEKIT_ROOM_CAPACITY", "5"))
 
     if not args.skip_create_room:
-        await _ensure_room(ws_url, api_key, api_secret, room_name, metadata, max_participants)
+        await _ensure_room(
+            ws_url,
+            api_key,
+            api_secret,
+            room_name,
+            metadata,
+            max_participants,
+            agent_name,
+        )
 
     token = _build_token(
         api_key=api_key,
@@ -183,31 +257,29 @@ async def main() -> int:
         identity=args.identity,
         name=args.name,
         ttl_minutes=args.ttl_minutes,
-    )
-    join_qs = urlencode({"url": ws_url, "token": token}, quote_via=quote)
-    join_url = f"http://127.0.0.1:8765/index.html?{join_qs}"
-    open_path = Path(__file__).with_name("open.html")
-    open_path.write_text(
-        '<!DOCTYPE html><meta charset="utf-8" />'
-        f'<meta http-equiv="refresh" content="0;url=index.html?{join_qs}" />'
-        "<p>Redirecting to the test room… "
-        f'<a href="index.html?{join_qs}">open index.html</a></p>\n',
-        encoding="utf-8",
+        agent_name=agent_name,
     )
 
     print(f"LIVEKIT_URL={ws_url}")
     print(f"ROOM={room_name}")
+    print(f"AGENT_NAME={agent_name}")
     print(f"TTL_MINUTES={args.ttl_minutes}")
     print(f"TOKEN={token}")
     print()
     print("Stage 1 room metadata keys: job_description, resume_text")
     print(f"  job_description chars: {len(jd)}")
     print(f"  resume_text chars: {len(resume)}")
+    inferred = _log_safe_inference(json.loads(metadata))
+    print("Inference overrides (omitted = server .env defaults):")
+    print(f"  llm_provider={inferred['llm_provider']}")
+    print(f"  stt_provider={inferred['stt_provider']}")
+    print(f"  tts_provider={inferred['tts_provider']}")
+    print(f"  llm_api_key_set={inferred['llm_api_key_set']}")
+    print(f"  stt_api_key_set={inferred['stt_api_key_set']}")
+    print(f"  tts_api_key_set={inferred['tts_api_key_set']}")
     print()
-    print("Open the harness (http.server must be running in this folder):")
-    print("  python -m http.server 8765")
-    print("  http://127.0.0.1:8765/open.html")
-    print("Or paste LIVEKIT_URL + TOKEN into http://127.0.0.1:8765/index.html")
+    print("The integrated browser harness creates its own room and token through backend-api.")
+    print("For the normal test flow, open http://127.0.0.1:8765/index.html.")
     return 0
 
 

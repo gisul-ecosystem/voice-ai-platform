@@ -1,34 +1,11 @@
-"""STT client -- calls the Nemotron wrapper service on Laptop 2."""
+"""STT client -- default path is the Nemotron wrapper on Laptop 2.
+
+Per-session provider/key overrides: clients.stt.get_stt_client(...)
+"""
 from __future__ import annotations
 
-import logging
-import time
-
-from clients.http_util import make_timeout, request
-from clients.settings import STT_SERVICE_URL, STT_TIMEOUT_SECONDS
-
-logger = logging.getLogger("voice-agent.stt")
+from clients.stt import get_stt_client
 
 
 async def transcribe(audio_bytes: bytes, filename: str = "chunk.wav") -> str:
-    started = time.perf_counter()
-    resp = await request(
-        "stt",
-        "POST",
-        f"{STT_SERVICE_URL}/transcribe",
-        timeout=make_timeout(STT_TIMEOUT_SECONDS),
-        files={"file": (filename, audio_bytes, "audio/wav")},
-    )
-    latency_ms = round((time.perf_counter() - started) * 1000, 1)
-    text = resp.json()["text"]
-    logger.info(
-        "stage_latency",
-        extra={
-            "event": "stage_latency",
-            "stage": "stt",
-            "latency_ms": latency_ms,
-            "audio_bytes": len(audio_bytes),
-            "output_chars": len(text or ""),
-        },
-    )
-    return text
+    return await get_stt_client().transcribe(audio_bytes, filename=filename)

@@ -151,22 +151,52 @@ LLM_SERVICE_URL=https://llm.gisul.ai/v1
 LLM_MODEL_NAME=qwen3:4b-instruct-2507-q4_K_M
 ```
 
-### Test harness (mic in / agent audio out)
+### Voice agent test frontend
 
-Worker must already be running. New terminals:
-
-```powershell
-cd services\voice-agent
-python test_harness\generate_token.py
-```
+Backend and the selected Aaptor or Racko worker must already be running:
 
 ```powershell
 cd services\voice-agent\test_harness
 python -m http.server 8765
 ```
 
-Open **http://127.0.0.1:8765/open.html** (not `file://`). Allow the mic.
+Open **http://127.0.0.1:8765/index.html** (not `file://`), select AI Interviewer
+or Customer Support, and begin the session. The frontend calls backend-api to
+create the room, dispatch the selected worker, and mint the token automatically.
 Details: `services/voice-agent/test_harness/README.md`.
+
+---
+
+## Phase 0 status (as of 2026-09-14)
+
+**Built:** Stage 1 plan endpoint, Stage 2 live question generation via
+`AgentSession`, retry-wrapped HTTP clients, `/health` + `/health/all`, and an
+integrated two-agent test frontend for room creation, camera/mic input, and
+agent audio.
+
+**Proved (last week):** LiveKit join works, hosted LLM responds
+(`qwen3:4b-instruct-2507-q4_K_M`), STT transcribes correctly via
+`https://voicestt.gisul.ai` (see `services/model-serving/stt/app.py` for
+Windows temp-file and `en-US` prompt-key fixes).
+
+**Not done:** TTS never tunneled (`https://voicetts.gisul.ai`) -- the agent
+cannot speak yet; this is the blocker for a real end-to-end test. No production
+candidate frontend. Mongo intermittently down (Stage 1 has a fallback).
+CosyVoice, vLLM production, frontends -- out of scope for this phase.
+
+**Tunnels:** only **gisul.ai** (and LiveKit on `livekit.gisul.co.in`). Do
+not use any other Cloudflare account for STT/TTS.
+
+**Ops:** an early git push included `.env` with LiveKit keys. Rotate
+`LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` and confirm history is scrubbed
+before the repo is treated as public. Rotation is **not** confirmed here.
+
+**Inconsistency:** laptop Ollama is `qwen3:4b-instruct-2507-q8_0`; hosted
+is `qwen3:4b-instruct-2507-q4_K_M`. Do not compare those two directly.
+
+**Next:** STT/LLM tunnels back up -> TTS on 5553 / `voicetts.gisul.ai` ->
+backend 5554 + worker on Laptop 4 -> harness join -> first real
+end-to-end "hear question, speak, get next question" test.
 
 ---
 

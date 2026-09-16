@@ -1,7 +1,3 @@
 fastapi
 uvicorn[standard]
-motor
-pydantic
 python-dotenv
-httpx
-livekit

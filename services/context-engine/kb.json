@@ -1,0 +1,38 @@
+[
+  {
+    "topic": "Refund policy",
+    "content": "Refunds go back to the original payment method within 5 to 7 business days after we approve the request. Digital subscriptions can be refunded within 14 days of purchase if less than 20 percent of the billed period has been used. Physical goods must be unused and returned within 30 days of delivery. Shipping fees are non-refundable unless the item arrived damaged."
+  },
+  {
+    "topic": "Shipping timelines",
+    "content": "Standard shipping is 5 to 8 business days inside the country. Express shipping is 2 to 3 business days. International orders typically take 10 to 18 business days plus customs. A tracking number is emailed when the carrier scans the package. Delays past the quoted window qualify for a shipping credit on request."
+  },
+  {
+    "topic": "Account login and password",
+    "content": "Use Forgot password on the sign-in page. The reset link is valid for 30 minutes. After five failed attempts the account locks for 15 minutes. Billing email changes require verification from the current email. We never ask for a full password over voice or chat."
+  },
+  {
+    "topic": "Subscription and billing cycle",
+    "content": "Plans renew on the same calendar day each month or year. Invoices are under Account, then Billing. Failed card charges retry on day 1, 3, and 7. Service pauses after the third failure. Upgrade charges are prorated. Downgrades take effect at the next renewal."
+  },
+  {
+    "topic": "Damaged or missing items",
+    "content": "Report damaged or missing items within 7 days of delivery with photos of the box and product. We ship a replacement at no cost or issue a refund if stock is unavailable. Do not discard the original packaging until the claim is closed."
+  },
+  {
+    "topic": "Escalation and human handoff",
+    "content": "Ask for a human for fraud disputes, legal requests, or issues the voice assistant cannot close after two attempts. Hours are 9:00 to 18:00 local time, Monday to Friday. After hours we log a callback ticket. A specialist replies by the next business day."
+  },
+  {
+    "topic": "Support hours and contact",
+    "content": "Voice and chat support run 9:00 to 18:00 local time, Monday to Friday. Weekend messages are queued. Emergency account lockouts can use the in-app reset flow at any time. We do not send one-time codes over the phone."
+  },
+  {
+    "topic": "Order cancellation window",
+    "content": "You can cancel an order for a full refund until the carrier scans it for shipment. After scan, use the return flow when the package arrives. Marketplace third-party sellers follow their own cancel rules, shown on the order page."
+  },
+  {
+    "topic": "Account status and suspension",
+    "content": "An active account can place orders and use paid features. A suspended account usually means a failed payment or a policy review. Update the card on file or reply to the suspension email. Access returns automatically once the balance clears."
+  }
+]

@@ -8,3 +8,12 @@ class ServiceUnavailableError(Exception):
         self.service = service
         self.url = url
         super().__init__(f"{service} unavailable: {message}")
+
+
+class ProviderConfigError(Exception):
+    """Raised at session start when a provider is selected without a usable API key."""
+
+    def __init__(self, service: str, provider: str, message: str) -> None:
+        self.service = service
+        self.provider = provider
+        super().__init__(message)

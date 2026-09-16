@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 _BUILTIN = {
     "args",
@@ -36,6 +37,38 @@ _BUILTIN = {
     "taskName",
 }
 
+# Client-provided keys must never land in log files or observability tooling.
+_SECRET_EXACT = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "authorization",
+        "openai_api_key",
+        "llm_api_key",
+        "stt_api_key",
+        "tts_api_key",
+        "api_key_override",
+    }
+)
+
+
+def _is_secret_field(name: str) -> bool:
+    n = name.lower().replace("-", "_")
+    if n in _SECRET_EXACT:
+        return True
+    return n.endswith("_api_key") or n.endswith("_apikey")
+
+
+def redact_secrets(value: Any, key: str | None = None) -> Any:
+    """Strip API keys from log payloads, including nested dicts."""
+    if key is not None and _is_secret_field(key):
+        return "***"
+    if isinstance(value, dict):
+        return {k: redact_secrets(v, str(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_secrets(item) for item in value]
+    return value
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -47,11 +80,11 @@ class JsonFormatter(logging.Formatter):
         }
         for key, value in record.__dict__.items():
             if key not in _BUILTIN and not key.startswith("_"):
-                payload[key] = value
+                payload[key] = redact_secrets(value, key)
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         payload["service"] = "voice-agent"
-        return json.dumps(payload, default=str)
+        return json.dumps(redact_secrets(payload), default=str)
 
 
 def configure_logging() -> None:
