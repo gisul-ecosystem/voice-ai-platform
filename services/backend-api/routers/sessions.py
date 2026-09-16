@@ -1,7 +1,8 @@
-"""Create a LiveKit room + participant token, including optional inference overrides.
+"""Create a LiveKit room and dispatch a registered voice product.
 
-Omitted llm_provider / *_api_key fields mean the agent uses server .env defaults.
-API keys are written only into room metadata for the worker; they are never logged.
+The browser sends a public product ID. Worker names, provider policy, and all
+credentials are resolved server-side. Legacy callers may still pass agent_name
+and provider names, but never raw provider credentials.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from livekit import api
 
 from models.schemas import CreateSessionRequest, CreateSessionResponse
+from products.registry import ProductProfile, resolve_product
 
 logger = logging.getLogger("backend-api.sessions")
 
@@ -43,8 +45,12 @@ def _optional(value: str | None) -> str | None:
     return text or None
 
 
-def _room_metadata(req: CreateSessionRequest) -> dict:
-    metadata: dict = {}
+def _room_metadata(req: CreateSessionRequest, product: ProductProfile) -> dict:
+    metadata: dict = {
+        "product_id": product.product_id,
+        "provider_policy_id": product.provider_policy_id,
+        **product.provider_selection(),
+    }
     jd = _optional(req.job_description)
     resume = _optional(req.resume_text)
     if jd:
@@ -53,11 +59,8 @@ def _room_metadata(req: CreateSessionRequest) -> dict:
         metadata["resume_text"] = resume
     extras = {
         "llm_provider": _optional(req.llm_provider),
-        "llm_api_key": _optional(req.llm_api_key),
         "stt_provider": _optional(req.stt_provider),
-        "stt_api_key": _optional(req.stt_api_key),
         "tts_provider": _optional(req.tts_provider),
-        "tts_api_key": _optional(req.tts_api_key),
     }
     for key, value in extras.items():
         if value is not None:
@@ -66,19 +69,21 @@ def _room_metadata(req: CreateSessionRequest) -> dict:
 
 
 def _log_safe_inference(metadata: dict) -> dict:
-    # Client-provided keys must never land in log files or observability tooling.
     return {
+        "provider_policy_id": metadata.get("provider_policy_id"),
         "llm_provider": metadata.get("llm_provider"),
         "stt_provider": metadata.get("stt_provider"),
         "tts_provider": metadata.get("tts_provider"),
-        "llm_api_key_set": bool(metadata.get("llm_api_key")),
-        "stt_api_key_set": bool(metadata.get("stt_api_key")),
-        "tts_api_key_set": bool(metadata.get("tts_api_key")),
     }
 
 
 @router.post("/token", response_model=CreateSessionResponse)
 async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
+    try:
+        product = resolve_product(req.product_id, req.agent_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     ws_url = _ws_url()
     api_key = os.getenv("LIVEKIT_API_KEY", "")
     api_secret = os.getenv("LIVEKIT_API_SECRET", "")
@@ -89,10 +94,10 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         )
 
     room_name = _optional(req.room) or f"session-{uuid.uuid4().hex[:8]}"
-    agent_name = req.agent_name
+    agent_name = product.agent_name
     ttl = req.ttl_minutes or max(int(os.getenv("LIVEKIT_TOKEN_TTL_MINUTES", "2")), 30)
     max_participants = int(os.getenv("LIVEKIT_ROOM_CAPACITY", "5"))
-    metadata = _room_metadata(req)
+    metadata = _room_metadata(req, product)
     metadata_json = json.dumps(metadata)
 
     lk = api.LiveKitAPI(_http_url(ws_url), api_key, api_secret)
@@ -153,6 +158,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         extra={
             "event": "session_created",
             "room": room_name,
+            "product_id": product.product_id,
             "agent_name": agent_name,
             **safe,
         },
@@ -161,10 +167,8 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         room=room_name,
         token=token,
         livekit_url=ws_url,
+        product_id=product.product_id,
         llm_provider=safe["llm_provider"],
         stt_provider=safe["stt_provider"],
         tts_provider=safe["tts_provider"],
-        llm_api_key_set=safe["llm_api_key_set"],
-        stt_api_key_set=safe["stt_api_key_set"],
-        tts_api_key_set=safe["tts_api_key_set"],
     )

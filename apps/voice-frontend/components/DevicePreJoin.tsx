@@ -1,0 +1,49 @@
+"use client";
+
+import {
+  VoicePreJoin,
+  type VoiceDeviceChoices,
+} from "@gisul/voice-ui";
+
+import type { ProductConfig } from "@/lib/products";
+
+export type DeviceChoices = VoiceDeviceChoices;
+
+type DevicePreJoinProps = {
+  product: ProductConfig;
+  participantName: string;
+  onBack: () => void;
+  onSubmit: (choices: DeviceChoices) => void;
+  onError: (error: Error) => void;
+};
+
+export function DevicePreJoin({
+  product,
+  participantName,
+  onBack,
+  onSubmit,
+  onError,
+}: DevicePreJoinProps) {
+  return (
+    <div className="prejoin-shell">
+      <div className="section-heading">
+        <p className="step-label">Device check</p>
+        <h2>Confirm microphone and camera access</h2>
+        <p>
+          Choose your devices, verify the preview, then explicitly confirm that
+          you are ready to join.
+        </p>
+      </div>
+      <VoicePreJoin
+        participantName={participantName}
+        cameraEnabledByDefault={product.cameraEnabledByDefault}
+        joinLabel={`I am ready — ${product.joinLabel}`}
+        onSubmit={onSubmit}
+        onError={onError}
+      />
+      <button className="button secondary" type="button" onClick={onBack}>
+        Back to setup
+      </button>
+    </div>
+  );
+}
