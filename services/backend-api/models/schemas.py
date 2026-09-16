@@ -1,5 +1,5 @@
 """Pydantic models shared across the backend API."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 from datetime import datetime
 import uuid
@@ -22,31 +22,29 @@ class InterviewPlanRequest(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     identity: str = "test-candidate"
     name: str = "Test Candidate"
     room: str | None = None
     job_description: str | None = None
     resume_text: str | None = None
-    agent_name: Literal["aaptor", "racko"] = "aaptor"
+    product_id: str | None = None
+    agent_name: Literal["aaptor", "racko"] | None = None
     ttl_minutes: int | None = None
     llm_provider: str | None = None
-    llm_api_key: str | None = None
     stt_provider: str | None = None
-    stt_api_key: str | None = None
     tts_provider: str | None = None
-    tts_api_key: str | None = None
 
 
 class CreateSessionResponse(BaseModel):
     room: str
     token: str
     livekit_url: str
+    product_id: str
     llm_provider: str | None = None
     stt_provider: str | None = None
     tts_provider: str | None = None
-    llm_api_key_set: bool = False
-    stt_api_key_set: bool = False
-    tts_api_key_set: bool = False
 
 
 class Turn(BaseModel):

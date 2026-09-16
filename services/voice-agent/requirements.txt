@@ -1,5 +1,5 @@
-livekit-agents>=1.0,<2
-livekit-plugins-silero
+livekit-agents>=1.8.1,<1.9
+livekit-plugins-silero>=1.8.1,<1.9
 httpx
 python-dotenv
 tenacity
