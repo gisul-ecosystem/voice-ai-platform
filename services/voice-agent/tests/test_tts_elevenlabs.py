@@ -78,6 +78,11 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.voice_id, "JBFqnCBsd6RMkjVDRZzb")
         self.assertEqual(client.model_id, "eleven_flash_v2_5")
 
+    @unittest.skipUnless(
+        os.getenv("ELEVENLABS_LIVE_TEST", "").strip().lower()
+        in {"1", "true", "yes"},
+        "Set ELEVENLABS_LIVE_TEST=1 to call the paid ElevenLabs API.",
+    )
     async def test_elevenlabs_live(self):
         """Live test against ElevenLabs API if TTS_API_KEY is configured."""
         api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("TTS_API_KEY")
