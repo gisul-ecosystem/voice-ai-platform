@@ -104,12 +104,17 @@ export function VoiceAgentStatus({
       data-voice-ui="agent-status"
       data-agent-state={state}
     >
-      <div className="agent-orb" aria-hidden="true">
-        <span />
-        <span />
-        <span />
+      <div className="agent-visual" aria-hidden="true">
+        <div className="agent-orb">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
       </div>
-      <div>
+      <div className="agent-copy">
+        <span className="agent-kicker">AI voice agent</span>
         <strong>{agent ? agentName : "Connecting agent"}</strong>
         <p>{agent ? state : waitingLabel}</p>
       </div>
@@ -125,9 +130,15 @@ export function VoiceSessionControls() {
       aria-label="Call controls"
       data-voice-ui="controls"
     >
-      <TrackToggle source={Track.Source.Microphone}>Microphone</TrackToggle>
-      <TrackToggle source={Track.Source.Camera}>Camera</TrackToggle>
-      <DisconnectButton>End session</DisconnectButton>
+      <TrackToggle source={Track.Source.Microphone}>
+        <span>Microphone</span>
+      </TrackToggle>
+      <TrackToggle source={Track.Source.Camera}>
+        <span>Camera</span>
+      </TrackToggle>
+      <DisconnectButton>
+        <span>End session</span>
+      </DisconnectButton>
     </div>
   );
 }
@@ -143,19 +154,24 @@ export function DefaultVoiceSession({
   return (
     <div className="live-session" data-voice-ui="default-session">
       <header className="session-header">
-        <div>
-          <p className="step-label">Live session</p>
+        <div className="session-title">
+          <p className="session-live-label">
+            <span className="live-dot" aria-hidden="true" />
+            Live session
+          </p>
           <h2>{labels.title}</h2>
         </div>
         <div className="status-row" aria-live="polite">
-          <span className="status-pill">{connectionState}</span>
           <span className="status-pill">
-            Agent: {agent ? agentState : "joining"}
+            Connection <strong>{connectionState}</strong>
+          </span>
+          <span className="status-pill agent-state-pill">
+            Agent <strong>{agent ? agentState : "joining"}</strong>
           </span>
         </div>
       </header>
 
-      <div className="video-grid">
+      <div className="video-grid session-stage">
         <LocalParticipantVideo label={labels.localParticipant} />
         <VoiceAgentStatus
           agentName={labels.agentName}
@@ -166,7 +182,10 @@ export function DefaultVoiceSession({
 
       <VoiceTranscripts />
       <RoomAudioRenderer />
-      <VoiceSessionControls />
+      <footer className="session-footer">
+        <p>Your audio and video remain in this secure LiveKit room.</p>
+        <VoiceSessionControls />
+      </footer>
     </div>
   );
 }

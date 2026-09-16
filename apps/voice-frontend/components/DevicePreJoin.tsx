@@ -25,7 +25,7 @@ export function DevicePreJoin({
   onError,
 }: DevicePreJoinProps) {
   return (
-    <div className="prejoin-shell">
+    <div className="prejoin-shell" data-lk-theme="default">
       <div className="section-heading">
         <p className="step-label">Device check</p>
         <h2>Confirm microphone and camera access</h2>
