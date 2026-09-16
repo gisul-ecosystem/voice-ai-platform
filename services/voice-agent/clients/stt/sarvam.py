@@ -15,6 +15,9 @@ from clients.settings import (
 
 logger = logging.getLogger("voice-agent.stt")
 
+# Auto-detect needs ~3s of audio. Short VAD clips often come back empty.
+_SHORT_CLIP_FALLBACKS = ("en-IN", "hi-IN")
+
 
 def transcript_from_payload(payload: object) -> str:
     """Sarvam returns `transcript`; keep `text` as a fallback."""
@@ -44,13 +47,9 @@ class SarvamStt:
         self.mode = mode
         self.language_code = language_code
 
-    async def transcribe(self, audio_bytes: bytes, filename: str = "chunk.wav") -> str:
-        started = time.perf_counter()
-        form = {
-            "model": self.model,
-            "mode": self.mode,
-            "language_code": self.language_code,
-        }
+    async def _post(
+        self, audio_bytes: bytes, filename: str, language_code: str
+    ) -> str:
         resp = await request(
             "stt",
             "POST",
@@ -59,10 +58,29 @@ class SarvamStt:
             api_key=self._api_key,
             headers={"api-subscription-key": self._api_key},
             files={"file": (filename, audio_bytes, "audio/wav")},
-            data=form,
+            data={
+                "model": self.model,
+                "mode": self.mode,
+                "language_code": language_code,
+            },
         )
+        return transcript_from_payload(resp.json())
+
+    async def transcribe(self, audio_bytes: bytes, filename: str = "chunk.wav") -> str:
+        started = time.perf_counter()
+        languages = [self.language_code]
+        if self.language_code in {"unknown", ""}:
+            languages.extend(
+                lang for lang in _SHORT_CLIP_FALLBACKS if lang not in languages
+            )
+        text = ""
+        used_language = self.language_code
+        for language_code in languages:
+            text = await self._post(audio_bytes, filename, language_code)
+            used_language = language_code
+            if text.strip():
+                break
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
-        text = transcript_from_payload(resp.json())
         logger.info(
             "stage_latency",
             extra={
@@ -73,6 +91,7 @@ class SarvamStt:
                 "output_chars": len(text or ""),
                 "provider": "sarvam",
                 "model": self.model,
+                "language_code": used_language,
                 "is_final": True,
             },
         )

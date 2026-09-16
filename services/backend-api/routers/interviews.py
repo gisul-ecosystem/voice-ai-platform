@@ -107,7 +107,16 @@ async def create_interview_plan(req: InterviewPlanRequest):
 
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
     content = resp.json()["choices"][0]["message"]["content"]
-    outline = InterviewOutline(**json.loads(content))
+    parsed = json.loads(content)
+    for phase in parsed.get("phases") or []:
+        src = str(phase.get("source") or "generic").strip().lower()
+        if "resume" in src:
+            phase["source"] = "resume"
+        elif src in {"jd", "job"} or "job description" in src:
+            phase["source"] = "jd"
+        else:
+            phase["source"] = "generic"
+    outline = InterviewOutline(**parsed)
     logger.info(
         "stage_latency",
         extra={

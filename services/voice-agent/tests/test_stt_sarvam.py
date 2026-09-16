@@ -52,6 +52,18 @@ class MockedTranscribeTests(unittest.IsolatedAsyncioTestCase):
             text = await SarvamStt(api_key="sk-test").transcribe(b"RIFF....")
         self.assertEqual(text, "namaste")
 
+    async def test_retries_empty_unknown_language(self) -> None:
+        empty = _json_response(200, {"transcript": "", "language_code": None})
+        filled = _json_response(200, {"transcript": "hello", "language_code": "en-IN"})
+        with patch(
+            "clients.stt.sarvam.request",
+            new_callable=AsyncMock,
+            side_effect=[empty, filled],
+        ) as mocked:
+            text = await SarvamStt(api_key="sk-test").transcribe(b"RIFF....")
+        self.assertEqual(text, "hello")
+        self.assertEqual(mocked.await_count, 2)
+
     async def test_invalid_key_is_unavailable(self) -> None:
         request = httpx.Request("POST", "https://api.sarvam.ai/speech-to-text")
         error = httpx.HTTPStatusError(
