@@ -1,0 +1,18 @@
+{
+  "name": "voice-ai-platform",
+  "private": true,
+  "workspaces": [
+    "apps/voice-frontend",
+    "packages/voice-ui"
+  ],
+  "scripts": {
+    "frontend:dev": "npm run dev --workspace voice-frontend",
+    "frontend:check": "npm run typecheck --workspace voice-frontend && npm run lint --workspace voice-frontend && npm test --workspace voice-frontend && npm run build --workspace voice-frontend"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

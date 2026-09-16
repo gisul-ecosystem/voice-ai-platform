@@ -278,8 +278,8 @@ async def main() -> int:
     print(f"  stt_api_key_set={inferred['stt_api_key_set']}")
     print(f"  tts_api_key_set={inferred['tts_api_key_set']}")
     print()
-    print("The integrated browser harness creates its own room and token through backend-api.")
-    print("For the normal test flow, open http://127.0.0.1:8765/index.html.")
+    print("This token is for low-level diagnostics only; do not commit or share it.")
+    print("For the normal browser flow, run the app in apps/voice-frontend.")
     return 0
 
 

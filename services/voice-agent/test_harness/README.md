@@ -1,13 +1,12 @@
-# Voice agent test frontend
+# Low-level LiveKit token utility
 
-Start either an Aaptor interview or a Racko customer-support session from the
-browser. The page asks backend-api to create the LiveKit room, dispatch the
-selected worker, and mint the participant token. No manual room creation or
-token copying is needed.
+The maintained browser experience is now the Next.js application at
+`apps/voice-frontend`. This folder contains only a developer CLI for manually
+creating a LiveKit room and participant token when diagnosing worker behavior.
 
 ## Prerequisites
 
-Laptop 4 must be running the worker you want to test:
+The selected worker must be running:
 
 ```bash
 cd services/voice-agent
@@ -23,35 +22,25 @@ also be reachable, or the agent will join but fail on the first turn. Stage 1
 calls `POST {BACKEND_API_URL}/interviews/plan`; if its LLM fails, the agent uses
 a generic outline.
 
-## 1. Start backend-api
+Product behavior is implemented under `products/interviewer/` and
+`products/customer_support/`. The root worker scripts are stable launch
+wrappers over the shared `voice_platform/` runtime.
+
+The utility reads LiveKit credentials from `services/voice-agent/.env`. Do not
+commit its output or share generated tokens.
+
+## Generate a token
 
 ```bash
-cd services/backend-api
-python -m uvicorn main:app --port 5554
+cd services/voice-agent
+python test_harness/generate_token.py --agent-name aaptor
 ```
 
-## 2. Serve the frontend
-
-Browsers block the microphone on `file://`.
-
-```bash
-cd services/voice-agent/test_harness
-python -m http.server 8765
-```
-
-## 3. Join
-
-Open `http://127.0.0.1:8765/index.html`, select AI Interviewer or Customer
-Support, and begin the session. Interview-only JD/resume fields are hidden for
-Customer Support. The token is kept in memory and is not added to the URL or
-browser storage.
-
-Allow the microphone and optional camera. You should hear the selected agent,
-then speak a reply.
+Use `--help` for room, participant, context-file, and provider override options.
+For normal browser testing, follow the frontend instructions in the repository
+root README.
 
 ## If the agent never speaks
 
 - Worker still running and still `registered worker`
-- Page shows the selected agent as connected
-- Mic permission granted; status line says `connected`
 - LLM / STT / TTS / backend-api reachable (`GET http://localhost:5554/health/all` on Laptop 4)

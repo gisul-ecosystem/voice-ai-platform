@@ -1,0 +1,70 @@
+"""Shared LiveKit session construction for all voice products."""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+from livekit.agents import AgentSession
+from livekit.plugins import silero
+
+from clients.errors import ProviderConfigError
+from clients.inference import (
+    clients_from_overrides,
+    inference_overrides_from_metadata,
+    parse_room_metadata,
+)
+from livekit_adapters import LaptopLLM, LaptopSTT, LaptopTTS
+
+
+@dataclass(frozen=True)
+class InferenceClients:
+    llm: Any
+    stt: Any
+    tts: Any
+
+
+def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients:
+    """Resolve room-level provider choices before the first conversation turn."""
+    overrides = inference_overrides_from_metadata(
+        parse_room_metadata(getattr(ctx.room, "metadata", None) or "")
+    )
+    try:
+        llm_client, stt_client, tts_client = clients_from_overrides(overrides)
+    except ProviderConfigError:
+        logger.exception(
+            "inference_config_invalid",
+            extra={"event": "inference_config_invalid", **overrides.log_safe()},
+        )
+        raise
+    return InferenceClients(llm=llm_client, stt=stt_client, tts=tts_client)
+
+
+def build_agent_session(clients: InferenceClients) -> AgentSession:
+    """Construct the shared STT → LLM → TTS LiveKit pipeline."""
+    return AgentSession(
+        vad=silero.VAD.load(),
+        stt=LaptopSTT(client=clients.stt),
+        llm=LaptopLLM(client=clients.llm),
+        tts=LaptopTTS(client=clients.tts),
+    )
+
+
+def attach_session_metrics(session: AgentSession, logger: logging.Logger) -> None:
+    """Keep the existing stage metric event shape shared by both products."""
+
+    @session.on("metrics_collected")
+    def _on_metrics(ev: Any) -> None:
+        metrics = getattr(ev, "metrics", ev)
+        kind = getattr(metrics, "type", type(metrics).__name__)
+        duration_ms = None
+        if hasattr(metrics, "duration"):
+            duration_ms = round(float(metrics.duration) * 1000, 1)
+        logger.info(
+            "turn_stage_metrics",
+            extra={
+                "event": "turn_stage_metrics",
+                "stage": kind,
+                "latency_ms": duration_ms,
+            },
+        )
