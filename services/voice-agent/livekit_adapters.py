@@ -6,6 +6,7 @@ takes the same kind of plugin instances: stt=, llm=, tts=.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 
 from livekit import rtc
@@ -23,6 +24,8 @@ from clients.errors import ServiceUnavailableError
 from clients.llm import get_llm_client
 from clients.stt import get_stt_client
 from clients.tts import get_tts_client
+
+logger = logging.getLogger("voice-agent.stt")
 
 TTS_SAMPLE_RATE = 24000
 TTS_NUM_CHANNELS = 1
@@ -65,6 +68,18 @@ class LaptopSTT(stt.STT):
             raise _to_api_error(exc) from exc
 
         lang = "en" if language is NOT_GIVEN or not language else str(language)
+        transcript = text or ""
+        logger.info(
+            "stt_transcript",
+            extra={
+                "event": "stt_transcript",
+                "stage": "stt",
+                "provider": self.provider,
+                "model": self.model,
+                "output_chars": len(transcript),
+                "transcript": transcript.encode("unicode_escape").decode("ascii"),
+            },
+        )
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[stt.SpeechData(text=text or "", language=str(lang or "en"))],

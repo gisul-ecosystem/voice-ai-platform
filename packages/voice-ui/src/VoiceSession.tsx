@@ -8,10 +8,11 @@ import {
   VideoTrack,
   useConnectionState,
   useTracks,
+  useTranscriptions,
   useVoiceAssistant,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type {
   VoiceDeviceChoices,
@@ -103,12 +104,17 @@ export function VoiceAgentStatus({
       data-voice-ui="agent-status"
       data-agent-state={state}
     >
-      <div className="agent-orb" aria-hidden="true">
-        <span />
-        <span />
-        <span />
+      <div className="agent-visual" aria-hidden="true">
+        <div className="agent-orb">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
       </div>
-      <div>
+      <div className="agent-copy">
+        <span className="agent-kicker">AI voice agent</span>
         <strong>{agent ? agentName : "Connecting agent"}</strong>
         <p>{agent ? state : waitingLabel}</p>
       </div>
@@ -124,9 +130,15 @@ export function VoiceSessionControls() {
       aria-label="Call controls"
       data-voice-ui="controls"
     >
-      <TrackToggle source={Track.Source.Microphone}>Microphone</TrackToggle>
-      <TrackToggle source={Track.Source.Camera}>Camera</TrackToggle>
-      <DisconnectButton>End session</DisconnectButton>
+      <TrackToggle source={Track.Source.Microphone}>
+        <span>Microphone</span>
+      </TrackToggle>
+      <TrackToggle source={Track.Source.Camera}>
+        <span>Camera</span>
+      </TrackToggle>
+      <DisconnectButton>
+        <span>End session</span>
+      </DisconnectButton>
     </div>
   );
 }
@@ -142,19 +154,24 @@ export function DefaultVoiceSession({
   return (
     <div className="live-session" data-voice-ui="default-session">
       <header className="session-header">
-        <div>
-          <p className="step-label">Live session</p>
+        <div className="session-title">
+          <p className="session-live-label">
+            <span className="live-dot" aria-hidden="true" />
+            Live session
+          </p>
           <h2>{labels.title}</h2>
         </div>
         <div className="status-row" aria-live="polite">
-          <span className="status-pill">{connectionState}</span>
           <span className="status-pill">
-            Agent: {agent ? agentState : "joining"}
+            Connection <strong>{connectionState}</strong>
+          </span>
+          <span className="status-pill agent-state-pill">
+            Agent <strong>{agent ? agentState : "joining"}</strong>
           </span>
         </div>
       </header>
 
-      <div className="video-grid">
+      <div className="video-grid session-stage">
         <LocalParticipantVideo label={labels.localParticipant} />
         <VoiceAgentStatus
           agentName={labels.agentName}
@@ -163,9 +180,68 @@ export function DefaultVoiceSession({
         />
       </div>
 
+      <VoiceTranscripts />
       <RoomAudioRenderer />
-      <VoiceSessionControls />
+      <footer className="session-footer">
+        <p>Your audio and video remain in this secure LiveKit room.</p>
+        <VoiceSessionControls />
+      </footer>
     </div>
+  );
+}
+
+export function VoiceTranscripts() {
+  const streams = useTranscriptions();
+  const { agentTranscriptions } = useVoiceAssistant();
+  const [lines, setLines] = useState<
+    { id: string; who: string; text: string }[]
+  >([]);
+
+  useEffect(() => {
+    const incoming = [
+      ...streams.map((item) => ({
+        id: item.streamInfo.id,
+        who: item.participantInfo.identity || "you",
+        text: item.text.trim(),
+      })),
+      ...agentTranscriptions.map((segment) => ({
+        id: segment.id,
+        who: "agent",
+        text: segment.text.trim(),
+      })),
+    ].filter((line) => line.text);
+    if (incoming.length === 0) return;
+    setLines((current) => {
+      const seen = new Set(current.map((line) => `${line.who}:${line.text}`));
+      const next = [...current];
+      for (const line of incoming) {
+        const key = `${line.who}:${line.text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        next.push(line);
+      }
+      return next;
+    });
+  }, [streams, agentTranscriptions]);
+
+  return (
+    <section className="transcript-panel" data-voice-ui="transcripts">
+      <p className="step-label">Transcript</p>
+      {lines.length === 0 ? (
+        <p className="transcript-empty">
+          Speak a full sentence, then pause. Short noise clips are ignored.
+        </p>
+      ) : (
+        <ol className="transcript-list">
+          {lines.map((line) => (
+            <li key={line.id}>
+              <span>{line.who}</span>
+              <p>{line.text}</p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }
 

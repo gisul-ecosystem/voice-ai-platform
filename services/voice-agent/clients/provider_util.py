@@ -10,6 +10,7 @@ from clients.settings import (
     LLM_API_KEY,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
+    SARVAM_API_KEY,
     STT_API_KEY,
     TTS_API_KEY,
 )
@@ -21,6 +22,8 @@ SELF_HOSTED_ALIASES = frozenset(
 )
 OPENAI_ALIASES = frozenset({"openai", "openai_api", "api"})
 ELEVENLABS_ALIASES = frozenset({"elevenlabs", "eleven_labs", "eleven-labs", "11labs"})
+SARVAM_ALIASES = frozenset({"sarvam", "sarvaam", "saaras", "s3", "saaras_v3", "saaras:v3"})
+KEYED_PROVIDERS = frozenset({"openai", "sarvam", "elevenlabs"})
 
 _ENV_KEY = {"llm": LLM_API_KEY, "stt": STT_API_KEY, "tts": TTS_API_KEY}
 
@@ -35,10 +38,12 @@ def normalize_provider(raw: str | None, *, fallback: str) -> str:
         return "openai"
     if name in ELEVENLABS_ALIASES:
         return "elevenlabs"
+    if name in SARVAM_ALIASES:
+        return "sarvam"
     raise ProviderConfigError(
         "inference",
         name,
-        f"Unknown provider {name!r}. Use self_hosted, openai, or elevenlabs.",
+        f"Unknown provider {name!r}. Use self_hosted, openai, elevenlabs, or sarvam.",
     )
 
 
@@ -48,6 +53,8 @@ def resolve_api_key(service: str, provider: str, api_key_override: str | None) -
     specific = (_ENV_KEY.get(service) or "").strip()
     if specific:
         return specific
+    if provider == "sarvam" and service == "stt" and SARVAM_API_KEY:
+        return SARVAM_API_KEY
     if provider == "openai":
         return OPENAI_API_KEY
     if provider == "elevenlabs":
@@ -56,8 +63,9 @@ def resolve_api_key(service: str, provider: str, api_key_override: str | None) -
 
 
 def require_key_if_needed(service: str, provider: str, api_key: str) -> None:
-    if provider == "openai" and not api_key:
-        env_names = f"{service.upper()}_API_KEY or OPENAI_API_KEY"
+    if provider in KEYED_PROVIDERS and not api_key:
+        extra = " or OPENAI_API_KEY" if provider == "openai" else " or SARVAM_API_KEY"
+        env_names = f"{service.upper()}_API_KEY{extra}"
         raise ProviderConfigError(
             service,
             provider,
