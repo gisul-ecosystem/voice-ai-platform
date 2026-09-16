@@ -9,10 +9,8 @@ export type PublicSessionRequest = {
 
 export type BackendSessionPayload = {
   product_id: ProductId;
-  identity: string;
   name: string;
-  job_description?: string;
-  resume_text?: string;
+  context_id?: string;
 };
 
 export type SessionCredentials = {
@@ -31,20 +29,15 @@ type BackendSessionResponse = {
 
 export function buildBackendSessionPayload(
   input: PublicSessionRequest,
-  identity: string,
+  contextId?: string,
 ): BackendSessionPayload {
   const payload: BackendSessionPayload = {
     product_id: input.productId,
-    identity,
     name: input.participantName.trim(),
   };
 
-  if (input.productId === "interviewer") {
-    const jobDescription = input.jobDescription?.trim();
-    const resumeText = input.resumeText?.trim();
-    if (jobDescription) payload.job_description = jobDescription;
-    if (resumeText) payload.resume_text = resumeText;
-  }
+  if (input.productId === "interviewer" && contextId)
+    payload.context_id = contextId;
 
   return payload;
 }
