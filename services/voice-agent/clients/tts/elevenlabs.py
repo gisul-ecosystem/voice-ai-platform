@@ -5,8 +5,9 @@ import io
 import logging
 import time
 import wave
+from collections.abc import AsyncIterator
 
-from clients.http_util import make_timeout, request
+from clients.http_util import make_timeout, request, stream_request
 from clients.settings import (
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_ID,
@@ -78,3 +79,23 @@ class ElevenLabsTts:
             },
         )
         return audio
+
+    async def stream_synthesize(
+        self,
+        text: str,
+        voice: str | None = None,
+    ) -> AsyncIterator[bytes]:
+        """Yield raw 24 kHz mono PCM chunks from ElevenLabs HTTP streaming."""
+        voice_id = (voice or self.voice_id).strip()
+        async with stream_request(
+            "tts",
+            "POST",
+            f"{self.base_url}/text-to-speech/{voice_id}/stream",
+            params={"output_format": "pcm_24000"},
+            timeout=make_timeout(TTS_TIMEOUT_SECONDS),
+            headers={"xi-api-key": self._api_key},
+            json={"text": text, "model_id": self.model_id},
+        ) as resp:
+            async for chunk in resp.aiter_bytes():
+                if chunk:
+                    yield chunk

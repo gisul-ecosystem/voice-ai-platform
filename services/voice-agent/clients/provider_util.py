@@ -109,7 +109,7 @@ def require_key_if_needed(service: str, provider: str, api_key: str) -> None:
             service,
             provider,
             f"{service.upper()} provider {provider!r} requires an API key. "
-            f"Pass {service}_api_key in room metadata or set {env_names}.",
+            f"Set {env_names} in the worker secret environment.",
         )
 
 

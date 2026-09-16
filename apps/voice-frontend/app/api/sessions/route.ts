@@ -59,15 +59,50 @@ export async function POST(request: Request) {
   }
 
   try {
+    const serviceToken = process.env.BACKEND_SERVICE_TOKEN?.trim();
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "x-correlation-id": crypto.randomUUID(),
+    };
+    if (serviceToken) headers.authorization = `Bearer ${serviceToken}`;
+
+    let contextId: string | undefined;
+    if (input.productId === "interviewer") {
+      const jobDescription = input.jobDescription?.trim();
+      const resumeText = input.resumeText?.trim();
+      if (!jobDescription || !resumeText) {
+        return NextResponse.json(
+          { error: "Job description and resume are required." },
+          { status: 400 },
+        );
+      }
+      const contextResponse = await fetch(`${backendUrl}/interview-contexts`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          job_description: jobDescription,
+          resume_text: resumeText,
+        }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(15_000),
+      });
+      const context = (await contextResponse.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
+      if (!contextResponse.ok || typeof context.context_id !== "string") {
+        return NextResponse.json(
+          { error: "The interview context could not be prepared." },
+          { status: contextResponse.ok ? 502 : contextResponse.status },
+        );
+      }
+      contextId = context.context_id;
+    }
+
     const upstream = await fetch(`${backendUrl}/sessions/token`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(
-        buildBackendSessionPayload(
-          input,
-          `web-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
-        ),
-      ),
+      headers,
+      body: JSON.stringify(buildBackendSessionPayload(input, contextId)),
       cache: "no-store",
       signal: AbortSignal.timeout(15_000),
     });
