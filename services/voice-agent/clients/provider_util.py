@@ -83,7 +83,7 @@ def normalize_provider(
 
 
 def resolve_api_key(service: str, provider: str, api_key_override: str | None) -> str:
-    if api_key_override and api_key_override.strip():
+    if api_key_override is not None:
         return api_key_override.strip()
     specific = (_ENV_KEY.get(service) or "").strip()
     if specific:
