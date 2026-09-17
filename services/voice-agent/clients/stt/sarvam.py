@@ -140,6 +140,10 @@ class SarvamStt:
             sample_rate=sample_rate,
         )
 
+    @property
+    def subscription_key(self) -> str:
+        return self._api_key
+
     async def _post(
         self, audio_bytes: bytes, filename: str, language_code: str
     ) -> str:
@@ -148,7 +152,6 @@ class SarvamStt:
             "POST",
             f"{self.base_url}/speech-to-text",
             timeout=make_timeout(STT_TIMEOUT_SECONDS),
-            api_key=self._api_key,
             headers={"api-subscription-key": self._api_key},
             files={"file": (filename, audio_bytes, "audio/wav")},
             data={

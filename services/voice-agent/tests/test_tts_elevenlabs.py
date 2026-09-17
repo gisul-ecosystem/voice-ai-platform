@@ -58,36 +58,21 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
         pcm = b"\x00\x00" * 240
 
         class FakeResponse:
-            def raise_for_status(self):
-                return None
-
             async def aiter_bytes(self, _size=4096):
                 yield pcm[:240]
                 yield pcm[240:]
 
+        class FakeStream:
+            def __init__(self):
+                self.response = FakeResponse()
+
             async def __aenter__(self):
-                return self
+                return self.response
 
             async def __aexit__(self, *_exc):
                 return None
 
-        class FakeClient:
-            def __init__(self, *args, **kwargs):
-                self.kwargs = kwargs
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_exc):
-                return None
-
-            def stream(self, method, url, **kwargs):
-                self.method = method
-                self.url = url
-                self.params = kwargs.get("params")
-                return FakeResponse()
-
-        with patch("clients.tts.elevenlabs.httpx.AsyncClient", FakeClient):
+        with patch("clients.tts.elevenlabs.stream_request", return_value=FakeStream()):
             chunks = [chunk async for chunk in tts.stream_synthesize("Hello live")]
 
         self.assertEqual(b"".join(chunks), pcm)

@@ -17,12 +17,10 @@ describe("session contract", () => {
       agent_name: "aaptor",
     };
 
-    expect(buildBackendSessionPayload(input, "web-123")).toEqual({
+    expect(buildBackendSessionPayload(input, "ctx-1234567890123456")).toEqual({
       product_id: "interviewer",
-      identity: "web-123",
       name: "Priya",
-      job_description: "Backend engineer",
-      resume_text: "Five years",
+      context_id: "ctx-1234567890123456",
     });
   });
 
@@ -35,11 +33,9 @@ describe("session contract", () => {
           jobDescription: "must be ignored",
           resumeText: "must be ignored",
         },
-        "web-456",
       ),
     ).toEqual({
       product_id: "customer-support",
-      identity: "web-456",
       name: "Customer",
     });
   });

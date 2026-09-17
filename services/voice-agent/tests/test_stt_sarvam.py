@@ -79,6 +79,18 @@ class MockedTranscribeTests(unittest.IsolatedAsyncioTestCase):
             text = await SarvamStt(api_key="sk-test").transcribe(b"RIFF....")
         self.assertEqual(text, "namaste")
 
+    async def test_uses_subscription_header_without_bearer_auth(self) -> None:
+        resp = _json_response(200, {"transcript": "hello"})
+        with patch(
+            "clients.stt.sarvam.request",
+            new_callable=AsyncMock,
+            return_value=resp,
+        ) as mocked:
+            await SarvamStt(api_key="sk-test").transcribe(b"RIFF....")
+        kwargs = mocked.await_args.kwargs
+        self.assertEqual(kwargs["headers"], {"api-subscription-key": "sk-test"})
+        self.assertNotIn("api_key", kwargs)
+
     async def test_retries_empty_unknown_language(self) -> None:
         empty = _json_response(200, {"transcript": "", "language_code": None})
         filled = _json_response(200, {"transcript": "hello", "language_code": "en-IN"})

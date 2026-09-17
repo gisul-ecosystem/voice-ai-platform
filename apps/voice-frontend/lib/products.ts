@@ -9,8 +9,12 @@ export type ProductConfig = {
   participantLabel: string;
   joinLabel: string;
   requiresInterviewContext: boolean;
+  cameraAllowed: boolean;
   cameraEnabledByDefault: boolean;
 };
+
+const interviewCameraEnabled =
+  process.env.NEXT_PUBLIC_INTERVIEW_CAMERA_ENABLED === "true";
 
 export const products: Record<ProductId, ProductConfig> = {
   interviewer: {
@@ -23,7 +27,8 @@ export const products: Record<ProductId, ProductConfig> = {
     participantLabel: "Candidate name",
     joinLabel: "Start interview",
     requiresInterviewContext: true,
-    cameraEnabledByDefault: true,
+    cameraAllowed: interviewCameraEnabled,
+    cameraEnabledByDefault: interviewCameraEnabled,
   },
   "customer-support": {
     id: "customer-support",
@@ -35,6 +40,7 @@ export const products: Record<ProductId, ProductConfig> = {
     participantLabel: "Your name",
     joinLabel: "Start support call",
     requiresInterviewContext: false,
+    cameraAllowed: false,
     cameraEnabledByDefault: false,
   },
 };

@@ -1,5 +1,6 @@
 export type VoiceFlowStage =
   | "setup"
+  | "preview"
   | "prejoin"
   | "connecting"
   | "live"
@@ -7,6 +8,7 @@ export type VoiceFlowStage =
 
 export type VoiceFlowEvent =
   | "setup-submitted"
+  | "preview-confirmed"
   | "devices-confirmed"
   | "connected"
   | "disconnected"
@@ -16,7 +18,8 @@ const transitions: Record<
   VoiceFlowStage,
   Partial<Record<VoiceFlowEvent, VoiceFlowStage>>
 > = {
-  setup: { "setup-submitted": "prejoin" },
+  setup: { "setup-submitted": "preview" },
+  preview: { "preview-confirmed": "prejoin", restart: "setup" },
   prejoin: { "devices-confirmed": "connecting", restart: "setup" },
   connecting: {
     connected: "live",

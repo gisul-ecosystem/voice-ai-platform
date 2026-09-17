@@ -25,7 +25,16 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
-from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import WebSocketException
+
+try:
+    from websockets.asyncio.client import connect as websocket_connect
+
+    _WEBSOCKET_HEADERS_ARG = "additional_headers"
+except ImportError:  # websockets < 13
+    from websockets import connect as websocket_connect
+
+    _WEBSOCKET_HEADERS_ARG = "extra_headers"
 
 from clients.errors import ServiceUnavailableError
 from clients.llm import get_llm_client
@@ -165,8 +174,8 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
         client: SarvamStt = self._stt._client
         url = client.realtime_ws_url(sample_rate=_STT_SAMPLE_RATE)
         headers = {
-            "api-subscription-key": client._api_key,
-            "API-SUBSCRIPTION-KEY": client._api_key,
+            "api-subscription-key": client.subscription_key,
+            "API-SUBSCRIPTION-KEY": client.subscription_key,
         }
         speaking = False
         closing = False
@@ -218,7 +227,8 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                     speaking = False
 
         try:
-            async with ws_connect(url, additional_headers=headers) as ws:
+            connect_options = {_WEBSOCKET_HEADERS_ARG: headers}
+            async with websocket_connect(url, **connect_options) as ws:
 
                 async def send_task() -> None:
                     nonlocal closing
@@ -310,7 +320,7 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                     await asyncio.gather(sender, receiver, return_exceptions=True)
         except APIConnectionError:
             raise
-        except Exception as exc:
+        except (WebSocketException, OSError, Exception) as exc:
             if closing:
                 return
             raise _to_api_error(exc) from exc
@@ -329,7 +339,11 @@ class LaptopTTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return getattr(self._client, "model_id", None) or "kokoro-http"
+        return (
+            getattr(self._client, "model_id", None)
+            or getattr(self._client, "model", None)
+            or "tts-http"
+        )
 
     @property
     def provider(self) -> str:
@@ -348,6 +362,24 @@ class LaptopTTS(tts.TTS):
 
 class _LaptopChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        stream_synthesize = getattr(self._tts._client, "stream_synthesize", None)
+        if callable(stream_synthesize):
+            output_emitter.initialize(
+                request_id=str(uuid.uuid4()),
+                sample_rate=TTS_SAMPLE_RATE,
+                num_channels=TTS_NUM_CHANNELS,
+                mime_type="audio/pcm",
+            )
+            try:
+                async for audio_chunk in stream_synthesize(self.input_text):
+                    pcm = _to_pcm(audio_chunk)
+                    if pcm:
+                        output_emitter.push(pcm)
+            except ServiceUnavailableError as exc:
+                raise _to_api_error(exc) from exc
+            output_emitter.flush()
+            return
+
         try:
             audio_bytes = await self._tts._client.synthesize(self.input_text)
         except ServiceUnavailableError as exc:
@@ -451,7 +483,9 @@ class LaptopLLM(llm.LLM):
 class _LaptopLLMStream(llm.LLMStream):
     async def _run(self) -> None:
         messages = chat_ctx_to_messages(self._chat_ctx)
-        stream = getattr(self._llm._client, "generate_reply_stream", None)
+        stream = getattr(self._llm._client, "generate_reply_stream", None) or getattr(
+            self._llm._client, "stream_reply", None
+        )
         try:
             if stream is not None:
                 chunk_id = str(uuid.uuid4())

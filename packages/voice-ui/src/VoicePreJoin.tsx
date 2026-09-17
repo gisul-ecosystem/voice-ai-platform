@@ -17,6 +17,7 @@ import type { VoiceDeviceChoices } from "./types";
 
 export type VoicePreJoinProps = {
   participantName: string;
+  cameraAllowed?: boolean;
   cameraEnabledByDefault?: boolean;
   joinLabel?: string;
   persistUserChoices?: boolean;
@@ -27,6 +28,7 @@ export type VoicePreJoinProps = {
 
 export function VoicePreJoin({
   participantName,
+  cameraAllowed = true,
   cameraEnabledByDefault = false,
   joinLabel = "Join session",
   persistUserChoices = true,
@@ -45,7 +47,7 @@ export function VoicePreJoin({
     defaults: {
       username: participantName,
       audioEnabled: true,
-      videoEnabled: cameraEnabledByDefault,
+      videoEnabled: cameraAllowed && cameraEnabledByDefault,
     },
     preventSave: !persistUserChoices,
     preventLoad: !persistUserChoices,
@@ -57,7 +59,7 @@ export function VoicePreJoin({
     initialChoices.audioEnabled,
   );
   const [videoEnabled, setVideoEnabled] = useState(
-    initialChoices.videoEnabled,
+    cameraAllowed && initialChoices.videoEnabled,
   );
   const [audioDeviceId, setAudioDeviceId] = useState(
     initialChoices.audioDeviceId,
@@ -68,7 +70,7 @@ export function VoicePreJoin({
   const tracks = usePreviewTracks(
     {
       audio: audioEnabled ? { deviceId: audioDeviceId } : false,
-      video: videoEnabled ? { deviceId: videoDeviceId } : false,
+      video: cameraAllowed && videoEnabled ? { deviceId: videoDeviceId } : false,
     },
     onError,
   );
@@ -121,7 +123,7 @@ export function VoicePreJoin({
     onSubmit({
       username: normalizedName,
       audioEnabled,
-      videoEnabled,
+      videoEnabled: cameraAllowed && videoEnabled,
       audioDeviceId,
       videoDeviceId,
     });
@@ -180,30 +182,32 @@ export function VoicePreJoin({
           </div>
         </div>
 
-        <div className="voice-device-row">
-          <div>
-            <strong>Camera</strong>
-            <span>{videoEnabled ? "Ready" : "Off"}</span>
-          </div>
-          <div className="lk-button-group">
-            <TrackToggle
-              initialState={videoEnabled}
-              source={Track.Source.Camera}
-              onChange={setVideoEnabled}
-            >
-              {videoEnabled ? "On" : "Off"}
-            </TrackToggle>
-            <div className="lk-button-group-menu">
-              <MediaDeviceMenu
-                initialSelection={videoDeviceId}
-                kind="videoinput"
-                disabled={!videoTrack}
-                tracks={{ videoinput: videoTrack }}
-                onActiveDeviceChange={(_, id) => setVideoDeviceId(id)}
-              />
+        {cameraAllowed ? (
+          <div className="voice-device-row">
+            <div>
+              <strong>Camera</strong>
+              <span>{videoEnabled ? "Ready" : "Off"}</span>
+            </div>
+            <div className="lk-button-group">
+              <TrackToggle
+                initialState={videoEnabled}
+                source={Track.Source.Camera}
+                onChange={setVideoEnabled}
+              >
+                {videoEnabled ? "On" : "Off"}
+              </TrackToggle>
+              <div className="lk-button-group-menu">
+                <MediaDeviceMenu
+                  initialSelection={videoDeviceId}
+                  kind="videoinput"
+                  disabled={!videoTrack}
+                  tracks={{ videoinput: videoTrack }}
+                  onActiveDeviceChange={(_, id) => setVideoDeviceId(id)}
+                />
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
 
         <button
           className="lk-button voice-join-button"

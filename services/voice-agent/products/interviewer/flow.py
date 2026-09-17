@@ -14,6 +14,14 @@ FALLBACK_OPENING = (
     "Thanks for joining. To get started, could you walk me through your "
     "background and the work that's most relevant to this role?"
 )
+CLOSING_MESSAGE = (
+    "Thank you for your time and for sharing your experience. "
+    "This concludes the interview."
+)
+FALLBACK_FOLLOWUP = (
+    "Thank you. Could you describe the specific actions you took and the "
+    "result you achieved?"
+)
 
 STAGE2_SYSTEM = """You are Aaptor, a live AI interviewer speaking with a candidate over voice.
 
@@ -129,14 +137,24 @@ class InterviewFlow:
         llm_client: LlmClient,
         *,
         max_probes_per_phase: int = MAX_PROBES_PER_PHASE,
+        initial_phase_index: int = 0,
+        initial_probe_count: int = 0,
+        candidate_turns: list[str] | None = None,
     ) -> None:
         self.outline = outline
         self.llm_client = llm_client
         self.max_probes_per_phase = max_probes_per_phase
         self.phases: list[dict] = list(outline.get("phases") or [])
-        self.phase_index = 0
-        self.probe_count = 0
-        self.candidate_turns: list[str] = []
+        self.phase_index = max(0, min(initial_phase_index, max(len(self.phases) - 1, 0)))
+        self.probe_count = max(0, initial_probe_count)
+        self.candidate_turns = list(candidate_turns or [])
+        self.completed = False
+        self.started_at = time.monotonic()
+        self.max_duration_seconds = max(
+            60,
+            sum(max(int(phase.get("duration_minutes", 0)), 0) for phase in self.phases)
+            * 60,
+        )
 
     def current_phase(self) -> dict:
         if not self.phases:
@@ -157,8 +175,15 @@ class InterviewFlow:
     def apply_decision(self, decision: str) -> None:
         at_last = self.phase_index >= max(len(self.phases) - 1, 0)
         must_advance = (
-            self.probe_count >= self.max_probes_per_phase and not at_last
+            self.probe_count >= self.max_probes_per_phase
         )
+        if at_last and (decision == "advance" or must_advance):
+            self.completed = True
+            logger.info(
+                "interview_completed",
+                extra={"event": "interview_completed", "phase_index": self.phase_index},
+            )
+            return
         if (decision == "advance" or must_advance) and not at_last:
             previous = self.current_phase().get("name")
             self.phase_index += 1
@@ -176,6 +201,21 @@ class InterviewFlow:
             self.probe_count += 1
 
     async def generate_next_question(self, last_candidate_turn: str | None) -> str:
+        if self.completed:
+            return CLOSING_MESSAGE
+        if time.monotonic() - self.started_at >= self.max_duration_seconds:
+            if last_candidate_turn:
+                self.candidate_turns.append(last_candidate_turn.strip())
+            self.completed = True
+            return CLOSING_MESSAGE
+        if (
+            last_candidate_turn
+            and self.next_phase() is None
+            and self.probe_count >= self.max_probes_per_phase
+        ):
+            self.candidate_turns.append(last_candidate_turn.strip())
+            self.completed = True
+            return CLOSING_MESSAGE
         phase = self.current_phase()
         next_phase = self.next_phase()
         next_phase_label = (
@@ -210,16 +250,28 @@ class InterviewFlow:
             user_content = "Generate the opening question now."
 
         started = time.perf_counter()
-        raw = await self.llm_client.generate_reply(
-            [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_content},
-            ]
-        )
+        try:
+            raw = await self.llm_client.generate_reply(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_content},
+                ]
+            )
+        except Exception:
+            logger.exception(
+                "stage2_question_failed",
+                extra={"event": "stage2_question_failed"},
+            )
+            if last_candidate_turn:
+                self.candidate_turns.append(last_candidate_turn)
+                self.apply_decision("probe")
+            return FALLBACK_FOLLOWUP if not self.completed else CLOSING_MESSAGE
         decision, question = parse_stage2(raw)
         if last_candidate_turn:
             self.candidate_turns.append(last_candidate_turn)
             self.apply_decision(decision)
+            if self.completed:
+                question = CLOSING_MESSAGE
         logger.info(
             "stage2_question",
             extra={
@@ -261,7 +313,9 @@ class InterviewFlow:
         )
 
     async def generate_next_question_stream(self, last_candidate_turn: str | None):
-        stream = getattr(self.llm_client, "generate_reply_stream", None)
+        stream = getattr(self.llm_client, "generate_reply_stream", None) or getattr(
+            self.llm_client, "stream_reply", None
+        )
         if stream is None:
             yield await self.generate_next_question(last_candidate_turn)
             return

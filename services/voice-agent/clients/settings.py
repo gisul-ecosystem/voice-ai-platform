@@ -39,6 +39,7 @@ LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://localhost:11434/v1").rstr
 STT_SERVICE_URL = os.getenv("STT_SERVICE_URL", "http://localhost:5552").rstrip("/")
 TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", "http://localhost:5553").rstrip("/")
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:5554").rstrip("/")
+VOICE_AGENT_SERVICE_TOKEN = (os.getenv("VOICE_AGENT_SERVICE_TOKEN") or "").strip()
 CONTEXT_ENGINE_URL = os.getenv("CONTEXT_ENGINE_URL", "http://localhost:5555").rstrip("/")
 
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3:4b-instruct-2507-q8_0")

@@ -10,19 +10,30 @@ describe("same-origin session proxy", () => {
 
   it("forwards only allowlisted fields and sanitizes the response", async () => {
     vi.stubEnv("BACKEND_API_URL", "http://backend.test/");
-    const upstreamFetch = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          room: "room-1",
-          token: "token-1",
-          livekit_url: "wss://livekit.test",
-          product_id: "interviewer",
-          llm_api_key: "server-secret",
-          provider_policy_id: "internal-policy",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
+    const upstreamFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            context_id: "ctx-1234567890123456",
+            expires_at: "2026-09-17T00:00:00Z",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            room: "room-1",
+            token: "token-1",
+            livekit_url: "wss://livekit.test",
+            product_id: "interviewer",
+            llm_api_key: "server-secret",
+            provider_policy_id: "internal-policy",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
     vi.stubGlobal("fetch", upstreamFetch);
 
     const response = await POST(
@@ -33,6 +44,18 @@ describe("same-origin session proxy", () => {
           participantName: "Priya",
           jobDescription: "Backend role",
           resumeText: "Python",
+          interviewSetup: {
+            title: "Backend interview",
+            role: "Backend Engineer",
+            seniority: "mid",
+            difficulty: "applied",
+            durationMinutes: 30,
+            language: "English",
+            competencies: ["Problem solving", "Python"],
+            maxProbesPerPhase: 2,
+            monitoringEnabled: true,
+            recordingEnabled: false,
+          },
           llm_api_key: "browser-secret",
           agent_name: "aaptor",
         }),
@@ -40,12 +63,29 @@ describe("same-origin session proxy", () => {
     );
 
     expect(response.status).toBe(200);
-    const forwarded = JSON.parse(upstreamFetch.mock.calls[0][1].body);
+    expect(upstreamFetch).toHaveBeenCalledTimes(2);
+    const contextPayload = JSON.parse(upstreamFetch.mock.calls[0][1].body);
+    expect(contextPayload).toEqual({
+      job_description: "Backend role",
+      resume_text: "Python",
+      interview_setup: {
+        title: "Backend interview",
+        role: "Backend Engineer",
+        seniority: "mid",
+        difficulty: "applied",
+        durationMinutes: 30,
+        language: "English",
+        competencies: ["Problem solving", "Python"],
+        maxProbesPerPhase: 2,
+        monitoringEnabled: true,
+        recordingEnabled: false,
+      },
+    });
+    const forwarded = JSON.parse(upstreamFetch.mock.calls[1][1].body);
     expect(forwarded).toMatchObject({
       product_id: "interviewer",
       name: "Priya",
-      job_description: "Backend role",
-      resume_text: "Python",
+      context_id: "ctx-1234567890123456",
     });
     expect(forwarded).not.toHaveProperty("agent_name");
     expect(forwarded).not.toHaveProperty("llm_api_key");
