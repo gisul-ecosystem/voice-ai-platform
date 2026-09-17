@@ -16,6 +16,9 @@ from clients.backend_client import (
 from clients.errors import ServiceUnavailableError
 from clients.http_util import close_http_client
 from clients.inference import parse_room_metadata
+from clients.llm import get_llm_client
+from clients.stt import get_stt_client
+from clients.tts import get_tts_client
 from products.interviewer.agent import AaptorAgent
 from products.interviewer.flow import extract_resume_projects
 from voice_platform.runtime import (
@@ -146,6 +149,30 @@ def scale_outline_to_duration(outline: dict, total_minutes: int) -> dict:
             remaining -= minutes
         scaled.append({**phase, "duration_minutes": minutes})
     return {**outline, "phases": scaled}
+
+
+def validate_startup_configuration() -> None:
+    if (os.getenv("APP_ENV") or "development").strip().lower() not in {
+        "production",
+        "staging",
+    }:
+        return
+    required = (
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "VOICE_AGENT_SERVICE_TOKEN",
+    )
+    missing = [name for name in required if not (os.getenv(name) or "").strip()]
+    if missing:
+        raise RuntimeError(
+            "Missing required voice-agent settings: " + ", ".join(sorted(missing))
+        )
+    # Provider factories perform service/provider validation and enforce API keys.
+    get_llm_client()
+    get_stt_client()
+    get_tts_client()
+
 
 VoicePipelineAgent = AgentSession
 
@@ -362,6 +389,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 def run() -> None:
+    validate_startup_configuration()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

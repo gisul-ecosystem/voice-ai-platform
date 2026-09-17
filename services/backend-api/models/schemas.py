@@ -93,7 +93,12 @@ class CreateScheduledInterviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_product_id: str = Field(min_length=2, max_length=64)
-    external_interview_id: str | None = Field(default=None, max_length=128)
+    external_interview_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^\S(?:.*\S)?$",
+    )
     candidate_name: str = Field(min_length=1, max_length=120)
     candidate_email: str = Field(
         min_length=3,
