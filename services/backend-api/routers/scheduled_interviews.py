@@ -84,6 +84,15 @@ async def create_scheduled_interview(
     }
     try:
         await interviews.create_scheduled_interview(document)
+    except interviews.ExternalInterviewConflictError as exc:
+        await interviews.rollback_schedule_artifacts(
+            context_id=context["context_id"],
+            invitation_id=invitation["jti"],
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="The external interview ID already exists for this product",
+        ) from exc
     except Exception:
         await interviews.rollback_schedule_artifacts(
             context_id=context["context_id"],

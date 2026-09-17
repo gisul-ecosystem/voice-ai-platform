@@ -116,7 +116,15 @@ async def startup():
         await ensure_indexes()
         logger.info("startup", extra={"event": "startup", "mongo_connected": True})
     except Exception:
-        logger.warning("startup", extra={"event": "startup", "mongo_connected": False})
+        logger.exception(
+            "startup_failed",
+            extra={"event": "startup_failed", "mongo_connected": False},
+        )
+        if (os.getenv("APP_ENV") or "development").strip().lower() in {
+            "production",
+            "staging",
+        }:
+            raise
 
 
 @app.on_event("shutdown")
