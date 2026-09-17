@@ -69,6 +69,15 @@ def normalize_duration_minutes(value: int | None) -> int:
     return min(ALLOWED_DURATIONS, key=lambda option: abs(option - minutes))
 
 
+def normalize_probe_count(value: object, default: int = 2) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return max(0, min(int(value), 3))
+    except (TypeError, ValueError):
+        return default
+
+
 def _is_warmup_name(name: str) -> bool:
     lowered = (name or "").lower()
     return any(token in lowered for token in ("warm", "intro", "opening"))
@@ -299,6 +308,13 @@ async def entrypoint(ctx: JobContext) -> None:
                     and turn.get("speaker") == "candidate"
                     and turn.get("text")
                 ]
+                interviewer_turns = [
+                    str(turn.get("text") or "")
+                    for turn in turns
+                    if isinstance(turn, dict)
+                    and turn.get("speaker") == "agent"
+                    and turn.get("text")
+                ]
                 probe_count = sum(
                     1
                     for turn in turns
@@ -310,6 +326,7 @@ async def entrypoint(ctx: JobContext) -> None:
                     "initial_phase_index": phase_index,
                     "initial_probe_count": probe_count,
                     "candidate_turns": candidate_turns,
+                    "interviewer_turns": interviewer_turns,
                     "initial_sequence_number": max(
                         (
                             int(turn.get("sequence_number", 0))
@@ -340,6 +357,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 logger.warning("status_report_unavailable", extra={"event": "status_report_unavailable"})
 
     target_duration_minutes = 30
+    max_probes_per_phase = 2
     job_description = ""
     resume_text = ""
     competencies: list[str] = []
@@ -353,6 +371,9 @@ async def entrypoint(ctx: JobContext) -> None:
             if isinstance(setup, dict):
                 target_duration_minutes = normalize_duration_minutes(
                     setup.get("durationMinutes")
+                )
+                max_probes_per_phase = normalize_probe_count(
+                    setup.get("maxProbesPerPhase")
                 )
                 raw_skills = setup.get("competencies") or []
                 if isinstance(raw_skills, list):
@@ -381,7 +402,7 @@ async def entrypoint(ctx: JobContext) -> None:
         agent=AaptorAgent(
             outline,
             clients.llm,
-            max_probes_per_phase=max(8, target_duration_minutes // 3),
+            max_probes_per_phase=max_probes_per_phase,
             job_description=job_description,
             resume_text=resume_text,
             competencies=competencies,

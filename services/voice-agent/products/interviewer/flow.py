@@ -488,7 +488,7 @@ class InterviewFlow:
 
     def _should_leave_phase(self) -> bool:
         if self._is_warmup_phase():
-            return self.probe_count >= 2
+            return self.probe_count >= min(2, self.max_probes_per_phase)
         if (
             self._is_project_phase()
             and self._uncovered_projects()

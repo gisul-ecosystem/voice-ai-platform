@@ -119,6 +119,7 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
         inner = getattr(client, "_primary", client)
         self.assertIsInstance(inner, ElevenLabsTts)
         self.assertEqual(inner._api_key, "override-key-456")
+        self.assertEqual(getattr(client, "_fallback")._api_key, "")
         self.assertEqual(inner.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
         self.assertTrue(inner.model_id)
 
@@ -130,6 +131,10 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
         cleaned = normalize_speech_text(raw)
         self.assertEqual(
             cleaned, "Great job... Let's discuss: Point 1 Point 2 How did that work?"
+        )
+        self.assertEqual(
+            normalize_speech_text("2024 was the migration year."),
+            "2024 was the migration year.",
         )
 
     @unittest.skipUnless(

@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function publicScheduleError(status: number): string {
+  if (status === 409) return "This interview has already been scheduled.";
+  if (status === 422) return "Review the interview details and schedule time.";
+  if (status === 429) return "Too many requests. Wait a moment and try again.";
+  return "The interview could not be scheduled.";
+}
+
 export async function POST(request: Request) {
   const backendUrl = process.env.BACKEND_API_URL?.replace(/\/+$/, "");
   if (!backendUrl) {
@@ -56,10 +63,7 @@ export async function POST(request: Request) {
     if (!upstream.ok || typeof data.invitation_token !== "string") {
       return NextResponse.json(
         {
-          error:
-            typeof data.detail === "string"
-              ? data.detail
-              : "The interview could not be scheduled.",
+          error: publicScheduleError(upstream.status),
         },
         { status: upstream.ok ? 502 : upstream.status },
       );

@@ -16,6 +16,7 @@ from products.interviewer.flow import (
 from products.interviewer.worker import (
     GENERIC_OUTLINE,
     enrich_outline_with_resume,
+    normalize_probe_count,
     scale_outline_to_duration,
 )
 
@@ -29,6 +30,13 @@ class FakeStreamingLlm:
         self.messages.append(messages)
         for chunk in self.chunks:
             yield chunk
+
+
+def test_probe_count_normalization_honors_recruiter_limits() -> None:
+    assert normalize_probe_count(0) == 0
+    assert normalize_probe_count("3") == 3
+    assert normalize_probe_count(20) == 3
+    assert normalize_probe_count(None) == 2
 
 
 def test_spoken_question_stream_skips_decision_line() -> None:

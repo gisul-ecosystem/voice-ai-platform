@@ -1,6 +1,5 @@
-import { VoiceDemo } from "@/components/VoiceDemo";
-import { getProduct } from "@/lib/products";
+import { redirect } from "next/navigation";
 
 export default function SupportPage() {
-  return <VoiceDemo product={getProduct("customer-support")} />;
+  redirect("/interviewer");
 }

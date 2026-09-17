@@ -47,16 +47,17 @@ def get_tts_client(
             log_client_selected(
                 "tts", provider, overridden=False, has_api_key=bool(api_key)
             )
-            _DEFAULT = _wrap(_build(provider, api_key), provider, api_key)
+            _DEFAULT = _wrap(_build(provider, api_key), provider)
         return _DEFAULT
     log_client_selected("tts", provider, overridden=True, has_api_key=bool(api_key))
-    return _wrap(_build(provider, api_key), provider, api_key)
+    return _wrap(_build(provider, api_key), provider)
 
 
-def _wrap(client: TtsClient, provider: str, api_key: str) -> TtsClient:
+def _wrap(client: TtsClient, provider: str) -> TtsClient:
     if provider != "elevenlabs":
         return client
     return ResilientTts(
         client,
-        SelfHostedTts(base_url=TTS_SERVICE_URL, api_key=api_key),
+        # Never forward a third-party credential to a different provider.
+        SelfHostedTts(base_url=TTS_SERVICE_URL, api_key=""),
     )

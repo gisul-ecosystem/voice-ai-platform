@@ -106,29 +106,32 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_preview_accepts_naive_mongo_datetimes(monkeypatch) -> None:
-    now = datetime.now(timezone.utc)
-    naive_start = (now - timedelta(minutes=1)).replace(tzinfo=None)
+async def test_preview_normalizes_legacy_naive_mongo_datetimes(monkeypatch) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     stored = {
-        "_id": "int_naive",
+        "_id": "int_legacy",
         "status": "scheduled",
         "candidate_name": "Priya",
+        "starts_at": now,
         "timezone": "UTC",
-        "starts_at": naive_start,
-        "join_not_before": naive_start,
-        "join_closes_at": (now + timedelta(hours=1)).replace(tzinfo=None),
+        "join_not_before": now - timedelta(minutes=1),
+        "join_closes_at": now + timedelta(minutes=30),
         "interview_setup": _setup().model_dump(mode="python"),
     }
 
     async def preview(_token):
-        return {"jti": "inv_naive", "interview_id": "int_naive"}, stored
+        return {"interview_id": "int_legacy"}, stored
 
     monkeypatch.setattr(scheduled_interviews, "_preview", preview)
+
     result = await scheduled_interviews.preview_invitation(
         InvitationPreviewRequest(invitation_token="x" * 16)
     )
+
     assert result.status == "ready"
-    assert result.starts_at.tzinfo is not None
+    assert result.starts_at.tzinfo is timezone.utc
+    assert result.join_not_before.tzinfo is timezone.utc
+    assert result.join_closes_at.tzinfo is timezone.utc
 
 
 @pytest.mark.asyncio
