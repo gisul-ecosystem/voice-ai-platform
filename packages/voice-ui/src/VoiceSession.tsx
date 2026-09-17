@@ -12,7 +12,7 @@ import {
   useVoiceAssistant,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import type {
   VoiceDeviceChoices,
@@ -190,39 +190,46 @@ export function DefaultVoiceSession({
   );
 }
 
+function isFinalTranscriptFlag(attributes?: Record<string, string>) {
+  const value = attributes?.["lk.transcription_final"];
+  return value === "true" || value === "1";
+}
+
 export function VoiceTranscripts() {
   const streams = useTranscriptions();
-  const { agentTranscriptions } = useVoiceAssistant();
-  const [lines, setLines] = useState<
-    { id: string; who: string; text: string }[]
-  >([]);
+  const { agent, agentTranscriptions } = useVoiceAssistant();
+  const agentId = agent?.identity;
+  const byId = new Map<
+    string,
+    { id: string; who: string; text: string; at: number }
+  >();
 
-  useEffect(() => {
-    const incoming = [
-      ...streams.map((item) => ({
-        id: item.streamInfo.id,
-        who: item.participantInfo.identity || "you",
-        text: item.text.trim(),
-      })),
-      ...agentTranscriptions.map((segment) => ({
-        id: segment.id,
-        who: "agent",
-        text: segment.text.trim(),
-      })),
-    ].filter((line) => line.text);
-    if (incoming.length === 0) return;
-    setLines((current) => {
-      const seen = new Set(current.map((line) => `${line.who}:${line.text}`));
-      const next = [...current];
-      for (const line of incoming) {
-        const key = `${line.who}:${line.text}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        next.push(line);
-      }
-      return next;
+  for (const item of streams) {
+    if (!isFinalTranscriptFlag(item.streamInfo.attributes)) continue;
+    const text = item.text.trim();
+    if (!text) continue;
+    const isAgent = Boolean(agentId && item.participantInfo.identity === agentId);
+    byId.set(item.streamInfo.id, {
+      id: item.streamInfo.id,
+      who: isAgent ? "agent" : item.participantInfo.identity || "you",
+      text,
+      at: item.streamInfo.timestamp,
     });
-  }, [streams, agentTranscriptions]);
+  }
+
+  for (const segment of agentTranscriptions) {
+    if (!segment.final) continue;
+    const text = segment.text.trim();
+    if (!text) continue;
+    byId.set(segment.id, {
+      id: segment.id,
+      who: "agent",
+      text,
+      at: segment.firstReceivedTime,
+    });
+  }
+
+  const lines = [...byId.values()].sort((left, right) => left.at - right.at);
 
   return (
     <section className="transcript-panel" data-voice-ui="transcripts">

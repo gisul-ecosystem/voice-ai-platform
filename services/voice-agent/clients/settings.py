@@ -65,6 +65,7 @@ SARVAM_STT_BASE_URL = (
 SARVAM_STT_MODEL = (os.getenv("SARVAM_STT_MODEL") or "saaras:v3").strip() or "saaras:v3"
 SARVAM_STT_MODE = (os.getenv("SARVAM_STT_MODE") or "transcribe").strip() or "transcribe"
 SARVAM_STT_LANGUAGE = (os.getenv("SARVAM_STT_LANGUAGE") or "unknown").strip() or "unknown"
+SARVAM_STT_STREAM_TYPE = (os.getenv("SARVAM_STT_STREAM_TYPE") or "fast").strip() or "fast"
 
 LLM_TIMEOUT_SECONDS = _float("LLM_TIMEOUT_SECONDS", 30)
 STT_TIMEOUT_SECONDS = _float("STT_TIMEOUT_SECONDS", 30)

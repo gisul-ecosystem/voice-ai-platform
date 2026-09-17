@@ -6,6 +6,11 @@ import logging
 import time
 import wave
 
+from collections.abc import AsyncIterator
+
+import httpx
+
+from clients.errors import ServiceUnavailableError
 from clients.http_util import make_timeout, request
 from clients.settings import (
     ELEVENLABS_MODEL_ID,
@@ -78,3 +83,50 @@ class ElevenLabsTts:
             },
         )
         return audio
+
+    async def stream_synthesize(
+        self, text: str, voice: str | None = None
+    ) -> AsyncIterator[bytes]:
+        """Yield raw PCM 24 kHz chunks as ElevenLabs produces them."""
+        voice_id = (voice or self.voice_id).strip()
+        url = f"{self.base_url}/text-to-speech/{voice_id}/stream"
+        started = time.perf_counter()
+        first_ms: float | None = None
+        audio_bytes = 0
+        try:
+            async with httpx.AsyncClient(timeout=make_timeout(TTS_TIMEOUT_SECONDS)) as client:
+                async with client.stream(
+                    "POST",
+                    url,
+                    params={
+                        "output_format": "pcm_24000",
+                        "optimize_streaming_latency": 3,
+                    },
+                    headers={"xi-api-key": self._api_key, "accept": "application/octet-stream"},
+                    json={"text": text, "model_id": self.model_id},
+                ) as resp:
+                    resp.raise_for_status()
+                    async for chunk in resp.aiter_bytes(4096):
+                        if not chunk:
+                            continue
+                        if first_ms is None:
+                            first_ms = round((time.perf_counter() - started) * 1000, 1)
+                        audio_bytes += len(chunk)
+                        yield chunk
+        except httpx.HTTPError as exc:
+            raise ServiceUnavailableError(
+                "tts", f"{type(exc).__name__}: {exc}", url=url
+            ) from exc
+        logger.info(
+            "stage_latency",
+            extra={
+                "event": "stage_latency",
+                "stage": "tts",
+                "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+                "ttfb_ms": first_ms,
+                "input_chars": len(text),
+                "audio_bytes": audio_bytes,
+                "provider": "elevenlabs",
+                "streaming": True,
+            },
+        )

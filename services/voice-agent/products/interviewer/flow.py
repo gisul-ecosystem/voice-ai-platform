@@ -88,6 +88,38 @@ def parse_stage2(raw: str) -> tuple[str, str]:
     return decision, text
 
 
+class SpokenQuestionStream:
+    """Strip the DECISION line from a streaming Stage-2 completion."""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.decision: str | None = None
+        self._speech_emitted = 0
+
+    def push(self, delta: str) -> str:
+        self.buffer += delta or ""
+        match = re.search(r"DECISION:\s*(probe|advance)", self.buffer, flags=re.IGNORECASE)
+        if not match:
+            return ""
+        rest = self.buffer[match.end() :]
+        newline = rest.find("\n")
+        if newline < 0:
+            return ""
+        self.decision = match.group(1).lower()
+        speech = rest[newline + 1 :].lstrip()
+        if len(speech) <= self._speech_emitted:
+            return ""
+        extra = speech[self._speech_emitted :]
+        self._speech_emitted = len(speech)
+        return extra
+
+    def finish(self) -> str:
+        if self._speech_emitted:
+            return ""
+        _, question = parse_stage2(self.buffer)
+        return question
+
+
 class InterviewFlow:
     """State and question generation independent of LiveKit transport."""
 
@@ -202,3 +234,88 @@ class InterviewFlow:
             },
         )
         return question
+
+    def _commit_turn(
+        self,
+        last_candidate_turn: str | None,
+        decision: str,
+        *,
+        started: float,
+        is_opening: bool,
+    ) -> None:
+        if last_candidate_turn:
+            self.candidate_turns.append(last_candidate_turn)
+            self.apply_decision(decision)
+        logger.info(
+            "stage2_question",
+            extra={
+                "event": "stage2_question",
+                "stage": "llm",
+                "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+                "decision": decision,
+                "phase": self.current_phase().get("name"),
+                "phase_index": self.phase_index,
+                "probe_count": self.probe_count,
+                "is_opening": is_opening,
+            },
+        )
+
+    async def generate_next_question_stream(self, last_candidate_turn: str | None):
+        stream = getattr(self.llm_client, "generate_reply_stream", None)
+        if stream is None:
+            yield await self.generate_next_question(last_candidate_turn)
+            return
+
+        phase = self.current_phase()
+        next_phase = self.next_phase()
+        next_phase_label = (
+            f"{next_phase.get('name')} — topics: {phase_topics(next_phase)}"
+            if next_phase
+            else "none (closing)"
+        )
+        last_candidate_turn = (last_candidate_turn or "").strip() or None
+        recent = self.candidate_turns[-2:]
+
+        if last_candidate_turn:
+            prompt = STAGE2_SYSTEM.format(
+                phase_name=phase.get("name", "unnamed"),
+                duration_minutes=phase.get("duration_minutes", 0),
+                source=phase.get("source", "generic"),
+                topics=phase_topics(phase),
+                probe_count=self.probe_count,
+                max_probes=self.max_probes_per_phase,
+                next_phase=next_phase_label,
+                recent_turns="\n".join(f"- {turn}" for turn in recent)
+                or "(none yet)",
+                last_turn=last_candidate_turn,
+            )
+            user_content = last_candidate_turn
+        else:
+            prompt = OPENING_SYSTEM.format(
+                phase_name=phase.get("name", "unnamed"),
+                duration_minutes=phase.get("duration_minutes", 0),
+                source=phase.get("source", "generic"),
+                topics=phase_topics(phase),
+            )
+            user_content = "Generate the opening question now."
+
+        started = time.perf_counter()
+        parser = SpokenQuestionStream()
+        async for delta in stream(
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_content},
+            ]
+        ):
+            spoken = parser.push(delta)
+            if spoken:
+                yield spoken
+        leftover = parser.finish()
+        if leftover:
+            yield leftover
+        self._commit_turn(
+            last_candidate_turn,
+            parser.decision or "probe",
+            started=started,
+            is_opening=last_candidate_turn is None,
+        )

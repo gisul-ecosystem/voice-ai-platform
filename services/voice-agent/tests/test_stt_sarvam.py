@@ -15,7 +15,13 @@ import httpx  # noqa: E402
 
 from clients.errors import ProviderConfigError, ServiceUnavailableError  # noqa: E402
 from clients.stt import get_stt_client  # noqa: E402
-from clients.stt.sarvam import SarvamStt, transcript_from_payload  # noqa: E402
+from clients.stt.sarvam import (  # noqa: E402
+    SarvamStt,
+    build_realtime_ws_url,
+    parse_realtime_message,
+    realtime_language_code,
+    transcript_from_payload,
+)  # noqa: E402
 
 
 def _json_response(status: int, payload: dict) -> httpx.Response:
@@ -32,6 +38,27 @@ class TranscriptParseTests(unittest.TestCase):
 
     def test_falls_back_to_text(self) -> None:
         self.assertEqual(transcript_from_payload({"text": "hi"}), "hi")
+
+    def test_realtime_url_and_events(self) -> None:
+        self.assertEqual(realtime_language_code("unknown"), "auto")
+        url = build_realtime_ws_url(
+            "https://api.sarvam.ai",
+            language_code="unknown",
+            model="saaras:v3",
+            mode="transcribe",
+            stream_type="fast",
+        )
+        self.assertTrue(url.startswith("wss://api.sarvam.ai/speech-to-text-realtime/ws?"))
+        self.assertIn("model=saaras%3Av3-realtime", url)
+        self.assertIn("language_code=auto", url)
+        self.assertEqual(
+            parse_realtime_message({"event": "transcript.partial", "text": "hi"}),
+            ("partial", "hi"),
+        )
+        self.assertEqual(
+            parse_realtime_message({"event": "transcript.final", "text": "hello"}),
+            ("final", "hello"),
+        )
 
 
 class FactoryTests(unittest.TestCase):

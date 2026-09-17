@@ -56,8 +56,7 @@ class AaptorAgent(Agent):
         return await self.flow.generate_next_question(last_candidate_turn)
 
     async def on_enter(self) -> None:
-        question = await self.generate_next_question(last_candidate_turn=None)
-        await self.session.say(question)
+        await self.session.generate_reply()
 
     async def llm_node(
         self,
@@ -66,5 +65,5 @@ class AaptorAgent(Agent):
         model_settings: ModelSettings,
     ):
         candidate_turn = last_text(chat_ctx)
-        question = await self.generate_next_question(candidate_turn or None)
-        yield question
+        async for chunk in self.flow.generate_next_question_stream(candidate_turn or None):
+            yield chunk
