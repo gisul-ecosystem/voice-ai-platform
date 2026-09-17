@@ -34,7 +34,9 @@ class AaptorAgent(Agent):
             if max_probes_per_phase is not None
             else {}
         )
-        flow_kwargs.update(initial_state or {})
+        restored_state = dict(initial_state or {})
+        self._sequence_number = int(restored_state.pop("initial_sequence_number", 0))
+        flow_kwargs.update(restored_state)
         self.flow = InterviewFlow(outline, llm_client, **flow_kwargs)
         self._turn_sink = turn_sink
         self._status_sink = status_sink
@@ -42,11 +44,13 @@ class AaptorAgent(Agent):
 
     async def _record(self, speaker: str, text: str) -> None:
         if self._turn_sink and text.strip():
+            self._sequence_number += 1
             await self._turn_sink(
                 turn_id=f"turn_{uuid.uuid4().hex}",
                 speaker=speaker,
                 text=text.strip(),
                 phase_index=self.phase_index,
+                sequence_number=self._sequence_number,
             )
 
     @property

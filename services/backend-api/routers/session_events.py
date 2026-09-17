@@ -58,7 +58,9 @@ async def record_session_turn(
     session_id: str,
     req: SessionTurnRequest,
 ) -> Response:
-    if await interviews.get_session(session_id) is None:
+    outcome = await interviews.append_turn(session_id, req.model_dump(mode="python"))
+    if outcome == "missing":
         raise HTTPException(status_code=404, detail="Interview session not found")
-    await interviews.append_turn(session_id, req.model_dump(mode="python"))
+    if outcome == "conflict":
+        raise HTTPException(status_code=409, detail="Turn ID already has different data")
     return Response(status_code=204)

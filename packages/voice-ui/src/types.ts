@@ -17,6 +17,7 @@ export type VoiceSessionLabels = {
   localParticipant?: string;
   agentParticipant?: string;
   waitingForAgent?: string;
+  cameraAllowed?: boolean;
 };
 
 export type VoiceSessionRequest = {
@@ -24,4 +25,18 @@ export type VoiceSessionRequest = {
   participantName: string;
   jobDescription?: string;
   resumeText?: string;
+  invitationToken?: string;
+  idempotencyKey?: string;
+  interviewSetup?: {
+    title: string;
+    role: string;
+    seniority: string;
+    difficulty: string;
+    durationMinutes: number;
+    language: string;
+    competencies: string[];
+    maxProbesPerPhase: number;
+    monitoringEnabled: boolean;
+    recordingEnabled: boolean;
+  };
 };

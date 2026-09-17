@@ -8,7 +8,8 @@ import { getProduct } from "@/lib/products";
 describe("setup to prejoin flow", () => {
   it("moves from setup to prejoin only on the expected event", () => {
     expect(transitionVoiceFlow("setup", "connected")).toBe("setup");
-    expect(transitionVoiceFlow("setup", "setup-submitted")).toBe("prejoin");
+    expect(transitionVoiceFlow("setup", "setup-submitted")).toBe("preview");
+    expect(transitionVoiceFlow("preview", "preview-confirmed")).toBe("prejoin");
   });
 
   it("collects required interviewer context", () => {
@@ -20,25 +21,50 @@ describe("setup to prejoin flow", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Candidate name"), {
-      target: { value: "Priya" },
+    fireEvent.change(screen.getByLabelText("Role"), {
+      target: { value: "Backend Engineer" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.change(screen.getByLabelText("Job description"), {
       target: { value: "Backend engineer" },
     });
-    fireEvent.change(screen.getByLabelText("Resume text"), {
+    fireEvent.change(screen.getByLabelText("Candidate resume"), {
       target: { value: "Five years in Python" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(screen.getByLabelText("Candidate name"), {
+      target: { value: "Priya" },
+    });
+    fireEvent.change(screen.getByLabelText("Candidate email"), {
+      target: { value: "priya@example.com" },
+    });
     fireEvent.click(
-      screen.getByRole("button", { name: "Continue to device check" }),
+      screen.getByRole("button", { name: "Preview candidate experience" }),
     );
 
-    expect(onContinue).toHaveBeenCalledWith({
+    expect(onContinue).toHaveBeenCalledWith(expect.objectContaining({
       productId: "interviewer",
       participantName: "Priya",
+      candidateEmail: "priya@example.com",
       jobDescription: "Backend engineer",
       resumeText: "Five years in Python",
-    });
+      interviewSetup: {
+        title: "Structured interview",
+        role: "Backend Engineer",
+        seniority: "mid",
+        difficulty: "applied",
+        durationMinutes: 30,
+        language: "English",
+        competencies: [
+          "Problem solving",
+          "Role expertise",
+          "Communication",
+        ],
+        maxProbesPerPhase: 2,
+        monitoringEnabled: true,
+        recordingEnabled: false,
+      },
+    }));
   });
 
   it("omits interview context from support setup", () => {

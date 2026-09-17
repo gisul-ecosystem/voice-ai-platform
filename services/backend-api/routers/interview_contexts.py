@@ -28,9 +28,14 @@ router = APIRouter(prefix="/interview-contexts", tags=["interview-contexts"])
 async def create_interview_context(
     req: CreateInterviewContextRequest,
 ) -> CreateInterviewContextResponse:
-    stored = await interviews.create_context(
-        req.job_description.strip(),
-        req.resume_text.strip(),
+    args = (req.job_description.strip(), req.resume_text.strip())
+    stored = (
+        await interviews.create_context(
+            *args,
+            req.interview_setup.model_dump(mode="python"),
+        )
+        if req.interview_setup
+        else await interviews.create_context(*args)
     )
     return CreateInterviewContextResponse(**stored)
 
@@ -48,6 +53,7 @@ async def read_interview_context(context_id: str) -> InterviewContextResponse:
         context_id=context_id,
         job_description=stored["job_description"],
         resume_text=stored["resume_text"],
+        interview_setup=stored.get("interview_setup"),
     )
 
 
