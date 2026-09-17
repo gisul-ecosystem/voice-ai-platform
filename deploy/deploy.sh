@@ -34,9 +34,8 @@ deploy_tag() {
 
 echo "deploying image tag ${IMAGE_TAG}"
 if deploy_tag "${IMAGE_TAG}" && curl --fail --silent --show-error \
-  --insecure \
   --retry 10 --retry-delay 3 --retry-connrefused \
-  "https://10.110.50.10/" >/dev/null; then
+  "http://127.0.0.1:3000/" >/dev/null; then
   printf '%s' "${IMAGE_TAG}" >"${STATE_FILE}"
   docker image prune --force --filter "until=168h" >/dev/null
   echo "deployment ${IMAGE_TAG} is healthy"

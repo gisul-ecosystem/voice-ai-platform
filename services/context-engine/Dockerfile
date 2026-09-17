@@ -9,7 +9,7 @@ WORKDIR /app
 RUN addgroup --system app && adduser --system --ingroup app app
 
 COPY services/context-engine/requirements.txt .
-RUN pip install --requirement requirements.txt
+RUN pip install --only-binary=:all: --requirement requirements.txt
 
 COPY services/context-engine/ .
 RUN chown -R app:app /app

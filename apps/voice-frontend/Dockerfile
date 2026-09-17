@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/voice-frontend/package.json apps/voice-frontend/package.json
 COPY packages/voice-ui/package.json packages/voice-ui/package.json
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 FROM dependencies AS builder
 
