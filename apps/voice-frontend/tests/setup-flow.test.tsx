@@ -24,6 +24,9 @@ describe("setup to prejoin flow", () => {
     fireEvent.change(screen.getByLabelText("Role"), {
       target: { value: "Backend Engineer" },
     });
+    fireEvent.change(screen.getByLabelText("Interview length"), {
+      target: { value: "15" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.change(screen.getByLabelText("Job description"), {
       target: { value: "Backend engineer" },
@@ -53,7 +56,7 @@ describe("setup to prejoin flow", () => {
         role: "Backend Engineer",
         seniority: "mid",
         difficulty: "applied",
-        durationMinutes: 30,
+        durationMinutes: 15,
         language: "English",
         competencies: [
           "Problem solving",

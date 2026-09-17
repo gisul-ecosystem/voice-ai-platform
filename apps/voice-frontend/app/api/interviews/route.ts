@@ -32,9 +32,10 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         source_product_id: "reference-demo",
         external_interview_id:
-          typeof body.externalInterviewId === "string"
-            ? body.externalInterviewId
-            : undefined,
+          typeof body.externalInterviewId === "string" &&
+          body.externalInterviewId.trim()
+            ? body.externalInterviewId.trim()
+            : `demo_${crypto.randomUUID()}`,
         candidate_name: body.candidateName,
         candidate_email: body.candidateEmail,
         starts_at: body.startsAt,

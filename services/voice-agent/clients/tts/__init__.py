@@ -12,9 +12,10 @@ from clients.provider_util import (
 from clients.settings import TTS_PROVIDER, TTS_SERVICE_URL
 from clients.tts.elevenlabs import ElevenLabsTts
 from clients.tts.openai import OpenAITts
+from clients.tts.resilient import ResilientTts
 from clients.tts.self_hosted import SelfHostedTts
 
-TtsClient = SelfHostedTts | OpenAITts | ElevenLabsTts
+TtsClient = SelfHostedTts | OpenAITts | ElevenLabsTts | ResilientTts
 
 _DEFAULT: TtsClient | None = None
 
@@ -46,7 +47,16 @@ def get_tts_client(
             log_client_selected(
                 "tts", provider, overridden=False, has_api_key=bool(api_key)
             )
-            _DEFAULT = _build(provider, api_key)
+            _DEFAULT = _wrap(_build(provider, api_key), provider, api_key)
         return _DEFAULT
     log_client_selected("tts", provider, overridden=True, has_api_key=bool(api_key))
-    return _build(provider, api_key)
+    return _wrap(_build(provider, api_key), provider, api_key)
+
+
+def _wrap(client: TtsClient, provider: str, api_key: str) -> TtsClient:
+    if provider != "elevenlabs":
+        return client
+    return ResilientTts(
+        client,
+        SelfHostedTts(base_url=TTS_SERVICE_URL, api_key=api_key),
+    )

@@ -49,10 +49,18 @@ def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients
 def build_agent_session(clients: InferenceClients) -> AgentSession:
     """Construct the shared STT → LLM → TTS LiveKit pipeline."""
     return AgentSession(
-        vad=silero.VAD.load(min_speech_duration=0.4),
+        vad=silero.VAD.load(min_speech_duration=0.5, min_silence_duration=0.5),
         stt=LaptopSTT(client=clients.stt),
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
+        use_tts_aligned_transcript=False,
+        allow_interruptions=True,
+        min_interruption_duration=2.0,
+        min_interruption_words=4,
+        min_endpointing_delay=0.5,
+        max_endpointing_delay=2.5,
+        resume_false_interruption=True,
+        false_interruption_timeout=1.5,
     )
 
 

@@ -86,6 +86,7 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
     )
     assert created.status == "scheduled"
     assert captured["candidate_email"] == "priya@example.com"
+    assert captured["external_interview_id"].startswith("ext_")
     assert captured["join_not_before"] <= now
 
     async def find_schedule(_invitation_id):
@@ -102,6 +103,32 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
     assert preview.status == "ready"
     assert preview.role == "Backend Engineer"
     assert preview.monitoring_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_preview_accepts_naive_mongo_datetimes(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    naive_start = (now - timedelta(minutes=1)).replace(tzinfo=None)
+    stored = {
+        "_id": "int_naive",
+        "status": "scheduled",
+        "candidate_name": "Priya",
+        "timezone": "UTC",
+        "starts_at": naive_start,
+        "join_not_before": naive_start,
+        "join_closes_at": (now + timedelta(hours=1)).replace(tzinfo=None),
+        "interview_setup": _setup().model_dump(mode="python"),
+    }
+
+    async def preview(_token):
+        return {"jti": "inv_naive", "interview_id": "int_naive"}, stored
+
+    monkeypatch.setattr(scheduled_interviews, "_preview", preview)
+    result = await scheduled_interviews.preview_invitation(
+        InvitationPreviewRequest(invitation_token="x" * 16)
+    )
+    assert result.status == "ready"
+    assert result.starts_at.tzinfo is not None
 
 
 @pytest.mark.asyncio

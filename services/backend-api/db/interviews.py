@@ -27,6 +27,12 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _scheduled_external_index_matches(index: dict[str, Any]) -> bool:
     key = index.get("key") or {}
     return (

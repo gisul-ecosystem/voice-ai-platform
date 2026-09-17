@@ -49,8 +49,7 @@ function parseRequest(value: unknown): PublicSessionRequest {
     }
     if (
       typeof setup.durationMinutes !== "number" ||
-      setup.durationMinutes < 10 ||
-      setup.durationMinutes > 120 ||
+      ![15, 30, 45].includes(setup.durationMinutes) ||
       typeof setup.maxProbesPerPhase !== "number" ||
       setup.maxProbesPerPhase < 0 ||
       setup.maxProbesPerPhase > 3 ||

@@ -6,8 +6,12 @@ from collections.abc import Awaitable, Callable
 
 from livekit.agents import Agent, ModelSettings, llm
 
-from products.interviewer.flow import InterviewFlow
-from voice_platform.chat import last_text
+from products.interviewer.flow import FALLBACK_FOLLOWUP, FALLBACK_OPENING, InterviewFlow
+from voice_platform.chat import is_usable_candidate_turn, last_text
+
+CLARIFY_TURN = (
+    "Sorry, I did not catch that. Please say a bit more, in a full sentence."
+)
 
 
 class AaptorAgent(Agent):
@@ -19,21 +23,35 @@ class AaptorAgent(Agent):
         llm_client,
         *,
         max_probes_per_phase: int | None = None,
+        job_description: str = "",
+        resume_text: str = "",
+        competencies: list[str] | None = None,
+        min_turns_before_close: int | None = None,
+        target_duration_minutes: int | None = None,
         initial_state: dict | None = None,
         turn_sink: Callable[..., Awaitable[None]] | None = None,
         status_sink: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(
             instructions=(
-                "You are Aaptor, an AI interviewer. Ask one concise spoken question "
-                "at a time. Do not use markdown."
+                "You are Aaptor, a live technical interviewer. Speak slowly and "
+                "clearly. Deep-dive from the last answer. Use technical terms "
+                "in the candidate's context. Do not use canned stems or markdown."
             )
         )
-        flow_kwargs: dict = (
-            {"max_probes_per_phase": max_probes_per_phase}
-            if max_probes_per_phase is not None
-            else {}
-        )
+        flow_kwargs: dict = {}
+        if max_probes_per_phase is not None:
+            flow_kwargs["max_probes_per_phase"] = max_probes_per_phase
+        if job_description:
+            flow_kwargs["job_description"] = job_description
+        if resume_text:
+            flow_kwargs["resume_text"] = resume_text
+        if competencies:
+            flow_kwargs["competencies"] = competencies
+        if min_turns_before_close is not None:
+            flow_kwargs["min_turns_before_close"] = min_turns_before_close
+        if target_duration_minutes is not None:
+            flow_kwargs["target_duration_minutes"] = target_duration_minutes
         restored_state = dict(initial_state or {})
         self._sequence_number = int(restored_state.pop("initial_sequence_number", 0))
         flow_kwargs.update(restored_state)
@@ -41,6 +59,8 @@ class AaptorAgent(Agent):
         self._turn_sink = turn_sink
         self._status_sink = status_sink
         self._completion_reported = False
+        self._opened = bool(self.flow.candidate_turns)
+        self._last_agent_text = ""
 
     async def _record(self, speaker: str, text: str) -> None:
         if self._turn_sink and text.strip():
@@ -90,9 +110,10 @@ class AaptorAgent(Agent):
         return await self.flow.generate_next_question(last_candidate_turn)
 
     async def on_enter(self) -> None:
-        question = await self.generate_next_question(last_candidate_turn=None)
-        await self._record("agent", question)
-        await self.session.say(question)
+        await self.session.say(FALLBACK_OPENING, allow_interruptions=False)
+        self._opened = True
+        self._last_agent_text = FALLBACK_OPENING
+        await self._record("agent", FALLBACK_OPENING)
 
     async def llm_node(
         self,
@@ -101,11 +122,31 @@ class AaptorAgent(Agent):
         model_settings: ModelSettings,
     ):
         candidate_turn = last_text(chat_ctx)
-        if candidate_turn:
+        opening = not self._opened
+        if opening:
+            self._opened = True
+            candidate_turn = None
+        elif not is_usable_candidate_turn(
+            candidate_turn,
+            self._last_agent_text,
+            min_words=1 if not self.flow.candidate_turns else 3,
+        ):
+            yield CLARIFY_TURN
+            self._last_agent_text = CLARIFY_TURN
+            return
+        elif candidate_turn:
             await self._record("candidate", candidate_turn)
-        question = await self.generate_next_question(candidate_turn or None)
-        await self._record("agent", question)
-        yield question
+        parts: list[str] = []
+        async for chunk in self.flow.generate_next_question_stream(candidate_turn):
+            parts.append(chunk)
+            yield chunk
+        question = "".join(parts).strip()
+        if not question:
+            question = FALLBACK_FOLLOWUP
+            yield question
+        if question:
+            self._last_agent_text = question
+            await self._record("agent", question)
         if (
             self.flow.completed
             and self._status_sink
