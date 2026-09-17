@@ -3,7 +3,11 @@
 import { useState, type FormEvent } from "react";
 
 import type { ProductConfig } from "@/lib/products";
-import type { PublicSessionRequest } from "@/lib/session-contract";
+import {
+  INTERVIEW_DURATION_OPTIONS,
+  normalizeInterviewDuration,
+  type PublicSessionRequest,
+} from "@/lib/session-contract";
 
 type SetupFormProps = {
   product: ProductConfig;
@@ -41,7 +45,7 @@ export function SetupForm({
     initialSetup?.difficulty ?? "applied",
   );
   const [durationMinutes, setDurationMinutes] = useState(
-    initialSetup?.durationMinutes ?? 30,
+    normalizeInterviewDuration(initialSetup?.durationMinutes),
   );
   const [language, setLanguage] = useState(initialSetup?.language ?? "English");
   const [competencies, setCompetencies] = useState(
@@ -174,10 +178,20 @@ export function SetupForm({
             </select>
           </div>
           <div className="field">
-            <label htmlFor="duration">Duration (minutes)</label>
-            <input id="duration" type="number" min={10} max={120} required
+            <label htmlFor="duration">Interview length</label>
+            <select
+              id="duration"
               value={durationMinutes}
-              onChange={(event) => setDurationMinutes(event.target.valueAsNumber)} />
+              onChange={(event) =>
+                setDurationMinutes(normalizeInterviewDuration(Number(event.target.value)))
+              }
+            >
+              {INTERVIEW_DURATION_OPTIONS.map((minutes) => (
+                <option key={minutes} value={minutes}>
+                  {minutes} minutes
+                </option>
+              ))}
+            </select>
           </div>
           <div className="field">
             <label htmlFor="language">Interview language</label>

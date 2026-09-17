@@ -16,7 +16,11 @@ from clients.backend_client import (
 from clients.errors import ServiceUnavailableError
 from clients.http_util import close_http_client
 from clients.inference import parse_room_metadata
+from clients.llm import get_llm_client
+from clients.stt import get_stt_client
+from clients.tts import get_tts_client
 from products.interviewer.agent import AaptorAgent
+from products.interviewer.flow import extract_resume_projects
 from voice_platform.runtime import (
     attach_session_metrics,
     build_agent_session,
@@ -29,18 +33,146 @@ GENERIC_OUTLINE = {
     "phases": [
         {
             "name": "warm-up",
-            "duration_minutes": 5,
-            "topics": ["background", "motivation"],
+            "duration_minutes": 2,
+            "topics": ["background", "introduction"],
             "source": "generic",
         },
         {
-            "name": "core skills",
+            "name": "project deep-dive",
             "duration_minutes": 10,
-            "topics": ["recent work", "problem solving"],
-            "source": "generic",
+            "topics": ["resume projects", "architecture", "implementation"],
+            "source": "resume",
+        },
+        {
+            "name": "skills",
+            "duration_minutes": 8,
+            "topics": ["role skills", "problem solving"],
+            "source": "jd",
+        },
+        {
+            "name": "role fit",
+            "duration_minutes": 7,
+            "topics": ["why this role", "motivation"],
+            "source": "jd",
         },
     ]
 }
+
+
+ALLOWED_DURATIONS = (15, 30, 45)
+
+
+def normalize_duration_minutes(value: int | None) -> int:
+    minutes = int(value or 30)
+    if minutes in ALLOWED_DURATIONS:
+        return minutes
+    return min(ALLOWED_DURATIONS, key=lambda option: abs(option - minutes))
+
+
+def _is_warmup_name(name: str) -> bool:
+    lowered = (name or "").lower()
+    return any(token in lowered for token in ("warm", "intro", "opening"))
+
+
+def enrich_outline_with_resume(outline: dict, resume_text: str) -> dict:
+    projects = extract_resume_projects(resume_text)
+    if not projects:
+        return outline
+    phases = [dict(phase) for phase in (outline or {}).get("phases") or []]
+    if not phases:
+        return {
+            **outline,
+            "phases": [
+                {
+                    "name": "resume projects",
+                    "duration_minutes": 10,
+                    "topics": projects,
+                    "source": "resume",
+                }
+            ],
+        }
+    mentioned = " ".join(
+        f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}"
+        for phase in phases
+    ).lower()
+    missing = [name for name in projects if name.lower() not in mentioned]
+    if not missing:
+        return {**outline, "phases": phases}
+    target = None
+    for phase in phases:
+        name = str(phase.get("name") or "").lower()
+        source = str(phase.get("source") or "").lower()
+        if "project" in name or source == "resume":
+            target = phase
+            break
+    if target is None:
+        insert_at = 1 if _is_warmup_name(str(phases[0].get("name") or "")) else 0
+        phases.insert(
+            insert_at,
+            {
+                "name": "resume projects",
+                "duration_minutes": 10,
+                "topics": projects,
+                "source": "resume",
+            },
+        )
+        return {**outline, "phases": phases}
+    topics = list(target.get("topics") or [])
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in missing + topics:
+        key = str(item).strip()
+        if not key or key.lower() in seen:
+            continue
+        seen.add(key.lower())
+        merged.append(key)
+    target["topics"] = merged
+    return {**outline, "phases": phases}
+
+
+def scale_outline_to_duration(outline: dict, total_minutes: int) -> dict:
+    phases = list((outline or {}).get("phases") or [])
+    if not phases:
+        return outline
+    target = normalize_duration_minutes(total_minutes)
+    weights = [max(int(phase.get("duration_minutes") or 0), 1) for phase in phases]
+    current = sum(weights)
+    remaining = target
+    scaled = []
+    for index, phase in enumerate(phases):
+        warmup = _is_warmup_name(str(phase.get("name") or ""))
+        floor = 1 if warmup else 3
+        if index == len(phases) - 1:
+            minutes = max(floor, remaining)
+        else:
+            minutes = max(floor, round(weights[index] * target / current))
+            remaining -= minutes
+        scaled.append({**phase, "duration_minutes": minutes})
+    return {**outline, "phases": scaled}
+
+
+def validate_startup_configuration() -> None:
+    if (os.getenv("APP_ENV") or "development").strip().lower() not in {
+        "production",
+        "staging",
+    }:
+        return
+    required = (
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "VOICE_AGENT_SERVICE_TOKEN",
+    )
+    missing = [name for name in required if not (os.getenv(name) or "").strip()]
+    if missing:
+        raise RuntimeError(
+            "Missing required voice-agent settings: " + ", ".join(sorted(missing))
+        )
+    # Provider factories perform service/provider validation and enforce API keys.
+    get_llm_client()
+    get_stt_client()
+    get_tts_client()
+
 
 VoicePipelineAgent = AgentSession
 
@@ -201,24 +333,53 @@ async def entrypoint(ctx: JobContext) -> None:
         if session_id:
             await report_session_status(session_id, status, reason=reason)
 
-    max_probes: int | None = None
+    target_duration_minutes = 30
+    job_description = ""
+    resume_text = ""
+    competencies: list[str] = []
     context_id = context_id_from_job(ctx)
     if context_id:
         try:
-            setup = (await fetch_interview_context(context_id)).get("interview_setup")
+            context = await fetch_interview_context(context_id)
+            job_description = str(context.get("job_description") or "").strip()
+            resume_text = str(context.get("resume_text") or "").strip()
+            setup = context.get("interview_setup")
             if isinstance(setup, dict):
-                max_probes = int(setup.get("maxProbesPerPhase", 2))
+                target_duration_minutes = normalize_duration_minutes(
+                    setup.get("durationMinutes")
+                )
+                raw_skills = setup.get("competencies") or []
+                if isinstance(raw_skills, list):
+                    competencies = [
+                        str(item).strip()
+                        for item in raw_skills
+                        if str(item).strip()
+                    ]
         except (ServiceUnavailableError, TypeError, ValueError):
             logger.warning(
                 "interview_setup_unavailable",
                 extra={"event": "interview_setup_unavailable"},
             )
+    else:
+        try:
+            job_description, resume_text = await plan_inputs_from_job(ctx)
+        except ServiceUnavailableError:
+            logger.warning(
+                "interview_setup_unavailable",
+                extra={"event": "interview_setup_unavailable"},
+            )
 
+    outline = enrich_outline_with_resume(outline, resume_text)
+    outline = scale_outline_to_duration(outline, target_duration_minutes)
     await session.start(
         agent=AaptorAgent(
             outline,
             clients.llm,
-            max_probes_per_phase=max_probes,
+            max_probes_per_phase=max(8, target_duration_minutes // 3),
+            job_description=job_description,
+            resume_text=resume_text,
+            competencies=competencies,
+            target_duration_minutes=target_duration_minutes,
             initial_state=initial_state,
             turn_sink=turn_sink,
             status_sink=status_sink,
@@ -228,6 +389,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 def run() -> None:
+    validate_startup_configuration()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

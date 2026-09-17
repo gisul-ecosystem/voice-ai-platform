@@ -6,7 +6,6 @@ import uuid
 from datetime import timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-
 from db import interviews
 from models.schemas import (
     CreateScheduledInterviewRequest,
@@ -50,6 +49,9 @@ async def create_scheduled_interview(
             days=max(1, int(os.getenv("INTERVIEW_CONTEXT_RETENTION_DAYS", "30")))
         ),
     )
+    external_interview_id = (req.external_interview_id or "").strip() or (
+        f"ext_{uuid.uuid4().hex}"
+    )
     token = issue_invitation(
         interview_id=interview_id,
         context_id=context["context_id"],
@@ -66,7 +68,7 @@ async def create_scheduled_interview(
     document = {
         "_id": interview_id,
         "source_product_id": req.source_product_id,
-        "external_interview_id": req.external_interview_id,
+        "external_interview_id": external_interview_id,
         "candidate_id": candidate_id,
         "candidate_name": req.candidate_name.strip(),
         "candidate_email": req.candidate_email.strip().lower(),
@@ -84,6 +86,15 @@ async def create_scheduled_interview(
     }
     try:
         await interviews.create_scheduled_interview(document)
+    except interviews.ExternalInterviewConflictError as exc:
+        await interviews.rollback_schedule_artifacts(
+            context_id=context["context_id"],
+            invitation_id=invitation["jti"],
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="The external interview ID already exists for this product",
+        ) from exc
     except Exception:
         await interviews.rollback_schedule_artifacts(
             context_id=context["context_id"],
@@ -119,10 +130,13 @@ async def preview_invitation(
     _, stored = await _preview(req.invitation_token)
     now = interviews.utc_now()
     status = stored["status"]
+    join_not_before = interviews.as_utc(stored["join_not_before"])
+    join_closes_at = interviews.as_utc(stored["join_closes_at"])
+    starts_at = interviews.as_utc(stored["starts_at"])
     if status == "scheduled":
-        if now < stored["join_not_before"]:
+        if now < join_not_before:
             status = "upcoming"
-        elif now <= stored["join_closes_at"]:
+        elif now <= join_closes_at:
             status = "ready"
         else:
             status = "expired"
@@ -132,11 +146,11 @@ async def preview_invitation(
         candidate_name=stored["candidate_name"],
         title=setup["title"],
         role=setup["role"],
-        starts_at=stored["starts_at"],
+        starts_at=starts_at,
         timezone=stored["timezone"],
         duration_minutes=setup["durationMinutes"],
-        join_not_before=stored["join_not_before"],
-        join_closes_at=stored["join_closes_at"],
+        join_not_before=join_not_before,
+        join_closes_at=join_closes_at,
         monitoring_enabled=setup["monitoringEnabled"],
         recording_enabled=setup["recordingEnabled"],
         status=status,

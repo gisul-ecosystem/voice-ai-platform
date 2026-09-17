@@ -43,7 +43,7 @@ class InterviewSetupConfig(BaseModel):
     role: str = Field(min_length=2, max_length=160)
     seniority: Literal["intern", "junior", "mid", "senior", "lead"]
     difficulty: Literal["foundational", "applied", "diagnostic", "strategic"]
-    durationMinutes: int = Field(ge=10, le=120)
+    durationMinutes: Literal[15, 30, 45] = 30
     language: str = Field(min_length=2, max_length=32)
     competencies: list[str] = Field(min_length=1, max_length=12)
     maxProbesPerPhase: int = Field(ge=0, le=3)
@@ -93,7 +93,12 @@ class CreateScheduledInterviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_product_id: str = Field(min_length=2, max_length=64)
-    external_interview_id: str | None = Field(default=None, max_length=128)
+    external_interview_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^\S(?:.*\S)?$",
+    )
     candidate_name: str = Field(min_length=1, max_length=120)
     candidate_email: str = Field(
         min_length=3,

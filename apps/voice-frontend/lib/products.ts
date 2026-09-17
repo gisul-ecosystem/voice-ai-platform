@@ -28,7 +28,7 @@ export const products: Record<ProductId, ProductConfig> = {
     joinLabel: "Start interview",
     requiresInterviewContext: true,
     cameraAllowed: interviewCameraEnabled,
-    cameraEnabledByDefault: interviewCameraEnabled,
+    cameraEnabledByDefault: false,
   },
   "customer-support": {
     id: "customer-support",

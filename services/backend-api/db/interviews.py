@@ -6,11 +6,74 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from pymongo.errors import DuplicateKeyError, OperationFailure
+
 from db.mongo import get_db
+
+SCHEDULE_EXTERNAL_INDEX = "uniq_scheduled_source_external_v2"
+LEGACY_SCHEDULE_EXTERNAL_INDEX = "source_product_id_1_external_interview_id_1"
+SCHEDULE_EXTERNAL_KEYS = [
+    ("source_product_id", 1),
+    ("external_interview_id", 1),
+]
+SCHEDULE_EXTERNAL_FILTER = {"external_interview_id": {"$type": "string"}}
+
+
+class ExternalInterviewConflictError(Exception):
+    """A product reused an external interview identifier."""
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _scheduled_external_index_matches(index: dict[str, Any]) -> bool:
+    key = index.get("key") or {}
+    return (
+        list(key.items()) == SCHEDULE_EXTERNAL_KEYS
+        and index.get("unique") is True
+        and index.get("partialFilterExpression") == SCHEDULE_EXTERNAL_FILTER
+    )
+
+
+async def _drop_index_if_present(collection: Any, name: str) -> None:
+    try:
+        await collection.drop_index(name)
+    except OperationFailure as exc:
+        if exc.code not in {26, 27}:  # NamespaceNotFound, IndexNotFound
+            raise
+
+
+async def ensure_scheduled_external_index(collection: Any) -> None:
+    try:
+        indexes = {item["name"]: item async for item in collection.list_indexes()}
+    except OperationFailure as exc:
+        # MongoDB reports NamespaceNotFound before a collection's first index.
+        if exc.code != 26:
+            raise
+        indexes = {}
+
+    if LEGACY_SCHEDULE_EXTERNAL_INDEX in indexes:
+        await _drop_index_if_present(collection, LEGACY_SCHEDULE_EXTERNAL_INDEX)
+
+    current = indexes.get(SCHEDULE_EXTERNAL_INDEX)
+    if current is not None and not _scheduled_external_index_matches(current):
+        await _drop_index_if_present(collection, SCHEDULE_EXTERNAL_INDEX)
+        current = None
+
+    if current is None:
+        await collection.create_index(
+            SCHEDULE_EXTERNAL_KEYS,
+            name=SCHEDULE_EXTERNAL_INDEX,
+            unique=True,
+            partialFilterExpression=SCHEDULE_EXTERNAL_FILTER,
+        )
 
 
 async def ensure_indexes() -> None:
@@ -39,11 +102,7 @@ async def ensure_indexes() -> None:
     await db.interview_turns.create_index(
         [("session_id", 1), ("sequence_number", 1)], unique=True
     )
-    await db.scheduled_interviews.create_index(
-        [("source_product_id", 1), ("external_interview_id", 1)],
-        unique=True,
-        sparse=True,
-    )
+    await ensure_scheduled_external_index(db.scheduled_interviews)
     await db.scheduled_interviews.create_index("invitation_id", unique=True)
     await db.scheduled_interviews.create_index(
         [("starts_at", 1), ("status", 1)]
@@ -165,7 +224,13 @@ async def release_invitation(invitation_id: str, reservation_id: str) -> None:
 
 
 async def create_scheduled_interview(document: dict[str, Any]) -> None:
-    await get_db().scheduled_interviews.insert_one(document)
+    try:
+        await get_db().scheduled_interviews.insert_one(document)
+    except DuplicateKeyError as exc:
+        key_pattern = (exc.details or {}).get("keyPattern") or {}
+        if set(key_pattern) == {"source_product_id", "external_interview_id"}:
+            raise ExternalInterviewConflictError from exc
+        raise
 
 
 async def rollback_schedule_artifacts(

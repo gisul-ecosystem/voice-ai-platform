@@ -9,6 +9,7 @@ import httpx
 
 from clients.errors import ServiceUnavailableError
 from clients.provider_util import normalize_provider
+from clients.settings import ELEVENLABS_VOICE_ID
 from clients.tts import ElevenLabsTts, get_tts_client
 
 
@@ -40,6 +41,13 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
                 {
                     "text": "Hello from ElevenLabs",
                     "model_id": "eleven_flash_v2_5",
+                    "voice_settings": {
+                        "stability": 0.72,
+                        "similarity_boost": 0.7,
+                        "style": 0.0,
+                        "speed": 0.82,
+                        "use_speaker_boost": True,
+                    },
                 },
             )
             self.assertEqual(kwargs["params"], {"output_format": "pcm_24000"})
@@ -47,6 +55,35 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
             # Verify output is a valid WAV container (starts with RIFF header)
             self.assertTrue(audio.startswith(b"RIFF"))
             self.assertGreater(len(audio), len(mock_pcm))
+
+    async def test_elevenlabs_stream_synthesize_mocked(self):
+        tts = ElevenLabsTts(
+            base_url="https://api.elevenlabs.io/v1",
+            api_key="mock-key-123",
+            voice_id="JBFqnCBsd6RMkjVDRZzb",
+            model_id="eleven_flash_v2_5",
+        )
+        pcm = b"\x00\x00" * 240
+
+        class FakeResponse:
+            async def aiter_bytes(self, _size=4096):
+                yield pcm[:240]
+                yield pcm[240:]
+
+        class FakeStream:
+            def __init__(self):
+                self.response = FakeResponse()
+
+            async def __aenter__(self):
+                return self.response
+
+            async def __aexit__(self, *_exc):
+                return None
+
+        with patch("clients.tts.elevenlabs.stream_request", return_value=FakeStream()):
+            chunks = [chunk async for chunk in tts.stream_synthesize("Hello live")]
+
+        self.assertEqual(b"".join(chunks), pcm)
 
     async def test_elevenlabs_invalid_key_error(self):
         """Invalid key test: verifies graceful failure raising ServiceUnavailableError."""
@@ -73,10 +110,11 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
             provider_override="elevenlabs",
             api_key_override="override-key-456",
         )
-        self.assertIsInstance(client, ElevenLabsTts)
-        self.assertEqual(client._api_key, "override-key-456")
-        self.assertEqual(client.voice_id, "JBFqnCBsd6RMkjVDRZzb")
-        self.assertEqual(client.model_id, "eleven_flash_v2_5")
+        inner = getattr(client, "_primary", client)
+        self.assertIsInstance(inner, ElevenLabsTts)
+        self.assertEqual(inner._api_key, "override-key-456")
+        self.assertEqual(inner.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
+        self.assertEqual(inner.model_id, "eleven_flash_v2_5")
 
     @unittest.skipUnless(
         os.getenv("ELEVENLABS_LIVE_TEST", "").strip().lower()
