@@ -35,14 +35,25 @@ export async function POST(request: Request) {
     );
   }
   const consent = body.consent;
-  const isConsent = consent && typeof consent === "object";
+  const isConsent =
+    consent !== null && typeof consent === "object" && !Array.isArray(consent);
   const path = isConsent
     ? "/v1/candidate/invitations/consent"
     : "/v1/candidate/invitations/preview";
-  const payload = isConsent
+  const consentValues = isConsent
+    ? (consent as Record<string, unknown>)
+    : undefined;
+  const payload = consentValues
     ? {
+        ai_interview: consentValues.ai_interview === true,
+        transcription: consentValues.transcription === true,
+        monitoring: consentValues.monitoring === true,
+        recording: consentValues.recording === true,
+        policy_version:
+          typeof consentValues.policy_version === "string"
+            ? consentValues.policy_version
+            : undefined,
         invitation_token: body.invitationToken,
-        ...(consent as Record<string, unknown>),
       }
     : { invitation_token: body.invitationToken };
   try {

@@ -193,9 +193,11 @@ export function VoiceAgentStatus({
 export function VoiceSessionControls({
   cameraAllowed = true,
   confirmEnd = true,
+  onEndRequested,
 }: {
   cameraAllowed?: boolean;
   confirmEnd?: boolean;
+  onEndRequested?: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const continueButton = useRef<HTMLButtonElement>(null);
@@ -233,7 +235,7 @@ export function VoiceSessionControls({
             End interview
           </button>
         ) : (
-          <DisconnectButton>
+          <DisconnectButton onClick={onEndRequested}>
             <span>End interview</span>
           </DisconnectButton>
         )}
@@ -252,7 +254,7 @@ export function VoiceSessionControls({
                 onClick={() => setConfirming(false)}>
                 Continue interview
               </button>
-              <DisconnectButton>
+              <DisconnectButton onClick={onEndRequested}>
                 <span>End interview</span>
               </DisconnectButton>
             </div>

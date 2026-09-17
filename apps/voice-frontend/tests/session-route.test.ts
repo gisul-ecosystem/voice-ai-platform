@@ -114,4 +114,29 @@ describe("same-origin session proxy", () => {
     expect(response.status).toBe(400);
     expect(upstreamFetch).not.toHaveBeenCalled();
   });
+
+  it("reports browser fetch timeouts accurately", async () => {
+    vi.stubEnv("BACKEND_API_URL", "http://backend.test");
+    vi.stubEnv("BACKEND_SERVICE_TOKEN", "service-token");
+    const timeout = new Error("timed out");
+    timeout.name = "TimeoutError";
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(timeout));
+
+    const response = await POST(
+      new Request("http://frontend.test/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          productId: "interviewer",
+          participantName: "Priya",
+          invitationToken: "signed-token",
+          idempotencyKey: "retry-key",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "The voice service timed out. Try again.",
+    });
+  });
 });

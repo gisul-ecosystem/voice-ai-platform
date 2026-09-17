@@ -174,7 +174,8 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message =
-      error instanceof Error && error.name === "AbortError"
+      error instanceof Error &&
+      (error.name === "AbortError" || error.name === "TimeoutError")
         ? "The voice service timed out. Try again."
         : "The voice service could not be reached.";
     return NextResponse.json({ error: message }, { status: 502 });

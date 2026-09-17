@@ -55,7 +55,9 @@ export function VoicePreJoin({
     preventLoad: !persistUserChoices,
   });
   const [username, setUsername] = useState(
-    initialChoices.username || participantName,
+    allowNameEditing
+      ? initialChoices.username || participantName
+      : participantName,
   );
   const [audioEnabled, setAudioEnabled] = useState(
     initialChoices.audioEnabled,
@@ -103,8 +105,8 @@ export function VoicePreJoin({
   }, [videoTrack]);
 
   useEffect(() => {
-    saveUsername(username);
-  }, [saveUsername, username]);
+    if (allowNameEditing) saveUsername(username);
+  }, [allowNameEditing, saveUsername, username]);
   useEffect(() => {
     saveAudioInputEnabled(audioEnabled);
   }, [audioEnabled, saveAudioInputEnabled]);

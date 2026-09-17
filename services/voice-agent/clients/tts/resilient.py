@@ -30,49 +30,40 @@ class ResilientTts:
     def __init__(self, primary, fallback) -> None:
         self._primary = primary
         self._fallback = fallback
-        self._use_fallback = False
 
     def __getattr__(self, name: str):
-        return getattr(self._active, name)
-
-    @property
-    def _active(self):
-        return self._fallback if self._use_fallback else self._primary
+        return getattr(self._primary, name)
 
     async def synthesize(self, text: str, **kwargs) -> bytes:
-        if not self._use_fallback:
-            try:
-                return await self._primary.synthesize(text, **kwargs)
-            except ServiceUnavailableError as exc:
-                if not _should_failover(exc):
-                    raise
-                logger.warning(
-                    "tts_provider_failover",
-                    extra={"event": "tts_provider_failover", "error_type": type(exc).__name__},
-                )
-                self._use_fallback = True
+        try:
+            return await self._primary.synthesize(text, **kwargs)
+        except ServiceUnavailableError as exc:
+            if not _should_failover(exc):
+                raise
+            logger.warning(
+                "tts_provider_failover",
+                extra={"event": "tts_provider_failover", "error_type": type(exc).__name__},
+            )
         return await self._fallback.synthesize(text, **kwargs)
 
     async def stream_synthesize(self, text: str, **kwargs) -> AsyncIterator[bytes]:
-        if not self._use_fallback:
-            stream = getattr(self._primary, "stream_synthesize", None)
-            try:
-                if stream is not None:
-                    async for chunk in stream(text, **kwargs):
-                        yield chunk
-                    return
-                audio = await self._primary.synthesize(text, **kwargs)
-                if audio:
-                    yield audio
+        stream = getattr(self._primary, "stream_synthesize", None)
+        try:
+            if stream is not None:
+                async for chunk in stream(text, **kwargs):
+                    yield chunk
                 return
-            except ServiceUnavailableError as exc:
-                if not _should_failover(exc):
-                    raise
-                logger.warning(
-                    "tts_provider_failover",
-                    extra={"event": "tts_provider_failover", "error_type": type(exc).__name__},
-                )
-                self._use_fallback = True
+            audio = await self._primary.synthesize(text, **kwargs)
+            if audio:
+                yield audio
+            return
+        except ServiceUnavailableError as exc:
+            if not _should_failover(exc):
+                raise
+            logger.warning(
+                "tts_provider_failover",
+                extra={"event": "tts_provider_failover", "error_type": type(exc).__name__},
+            )
         fallback_stream = getattr(self._fallback, "stream_synthesize", None)
         if fallback_stream is not None:
             async for chunk in fallback_stream(text, **kwargs):

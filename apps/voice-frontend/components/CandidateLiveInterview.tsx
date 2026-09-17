@@ -16,10 +16,12 @@ export function CandidateLiveInterview({
   title,
   candidateName,
   cameraAllowed,
+  onEndRequested,
 }: {
   title: string;
   candidateName: string;
   cameraAllowed: boolean;
+  onEndRequested: () => void;
 }) {
   const connectionState = useConnectionState();
   const { quality } = useConnectionQualityIndicator();
@@ -92,7 +94,10 @@ export function CandidateLiveInterview({
       <RoomAudioRenderer />
       <footer className="interview-control-dock">
         <p>Your microphone audio is sent through the secure interview room.</p>
-        <VoiceSessionControls cameraAllowed={cameraAllowed} />
+        <VoiceSessionControls
+          cameraAllowed={cameraAllowed}
+          onEndRequested={onEndRequested}
+        />
       </footer>
     </div>
   );

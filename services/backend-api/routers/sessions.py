@@ -45,11 +45,6 @@ def _http_url(ws_url: str) -> str:
     return ws_url
 
 
-def _optional(value: str | None) -> str | None:
-    text = (value or "").strip()
-    return text or None
-
-
 def _room_metadata(
     *,
     product: ProductProfile,
@@ -159,21 +154,28 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     max_participants = max(2, min(int(os.getenv("LIVEKIT_ROOM_CAPACITY", "2")), 3))
     expires_at = interviews.utc_now() + timedelta(minutes=ttl)
     correlation_id = get_correlation_id()
-    session_id = (
-        str(existing_session["_id"])
-        if existing_session
-        else await interviews.create_live_session(
-            product_id=product.product_id,
-            context_id=context_id,
-            candidate_id=candidate_id,
-            room=room_name,
-            correlation_id=correlation_id,
-            expires_at=expires_at,
-            session_id=reservation_id,
-            invitation_id=invitation_id,
-            idempotency_key=req.idempotency_key,
-        )
-    )
+    if existing_session:
+        session_id = str(existing_session["_id"])
+    else:
+        try:
+            session_id = await interviews.create_live_session(
+                product_id=product.product_id,
+                context_id=context_id,
+                candidate_id=candidate_id,
+                room=room_name,
+                correlation_id=correlation_id,
+                expires_at=expires_at,
+                session_id=reservation_id,
+                invitation_id=invitation_id,
+                idempotency_key=req.idempotency_key,
+            )
+        except Exception as exc:
+            if invitation_id and reservation_id:
+                await interviews.release_invitation(invitation_id, reservation_id)
+            raise HTTPException(
+                status_code=503,
+                detail="Interview session persistence is temporarily unavailable",
+            ) from exc
     metadata = _room_metadata(
         product=product,
         session_id=session_id,
@@ -200,7 +202,52 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
                         metadata=metadata_json,
                     )
                 )
+                if (
+                    invitation_id
+                    and reservation_id
+                    and not await interviews.commit_invitation(
+                        invitation_id, reservation_id
+                    )
+                ):
+                    try:
+                        await lk.room.delete_room(
+                            api.DeleteRoomRequest(room=room_name)
+                        )
+                    except Exception:
+                        logger.exception(
+                            "livekit_room_cleanup_failed",
+                            extra={
+                                "event": "livekit_room_cleanup_failed",
+                                "room": room_name,
+                                "session_id": session_id,
+                            },
+                        )
+                    await interviews.release_invitation(
+                        invitation_id, reservation_id
+                    )
+                    await interviews.transition_session(
+                        session_id,
+                        expected=("joining",),
+                        status="failed",
+                        reason="invitation_commit_failed",
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Interview invitation could not be committed",
+                    )
         except api.TwirpError as exc:
+            if existing_session is None:
+                try:
+                    await lk.room.delete_room(api.DeleteRoomRequest(room=room_name))
+                except Exception:
+                    logger.warning(
+                        "livekit_room_cleanup_skipped",
+                        extra={
+                            "event": "livekit_room_cleanup_skipped",
+                            "room": room_name,
+                            "session_id": session_id,
+                        },
+                    )
             if invitation_id and reservation_id:
                 await interviews.release_invitation(invitation_id, reservation_id)
             await interviews.transition_session(
@@ -223,7 +270,21 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
                 status_code=502,
                 detail=f"LiveKit could not create the interview room ({exc.code})",
             ) from exc
+        except HTTPException:
+            raise
         except Exception as exc:
+            if existing_session is None:
+                try:
+                    await lk.room.delete_room(api.DeleteRoomRequest(room=room_name))
+                except Exception:
+                    logger.exception(
+                        "livekit_room_cleanup_failed",
+                        extra={
+                            "event": "livekit_room_cleanup_failed",
+                            "room": room_name,
+                            "session_id": session_id,
+                        },
+                    )
             if invitation_id and reservation_id:
                 await interviews.release_invitation(invitation_id, reservation_id)
             await interviews.transition_session(
@@ -238,16 +299,6 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
             ) from exc
     finally:
         await lk.aclose()
-
-    if (
-        invitation_id
-        and reservation_id
-        and not await interviews.commit_invitation(invitation_id, reservation_id)
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Interview invitation could not be committed",
-        )
 
     token = (
         api.AccessToken(api_key, api_secret)

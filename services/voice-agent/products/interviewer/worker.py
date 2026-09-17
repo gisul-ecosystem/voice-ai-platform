@@ -14,7 +14,6 @@ from clients.backend_client import (
     report_session_status,
 )
 from clients.errors import ServiceUnavailableError
-from clients.http_util import close_http_client
 from clients.inference import parse_room_metadata
 from clients.llm import get_llm_client
 from clients.stt import get_stt_client
@@ -277,20 +276,9 @@ async def entrypoint(ctx: JobContext) -> None:
                 "session_shutdown_status_unavailable",
                 extra={"event": "session_shutdown_status_unavailable"},
             )
-        finally:
-            await close_http_client()
 
     if hasattr(ctx, "add_shutdown_callback"):
         ctx.add_shutdown_callback(shutdown_session)
-
-    if session_id:
-        try:
-            await report_session_status(session_id, "live")
-        except ServiceUnavailableError:
-            logger.exception(
-                "session_live_status_failed",
-                extra={"event": "session_live_status_failed"},
-            )
 
     clients = load_inference_clients(ctx, logger)
     outline = await build_outline(ctx)
@@ -431,6 +419,14 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
         room=ctx.room,
     )
+    if session_id:
+        try:
+            await report_session_status(session_id, "live")
+        except ServiceUnavailableError:
+            logger.exception(
+                "session_live_status_failed",
+                extra={"event": "session_live_status_failed"},
+            )
 
 
 def run() -> None:

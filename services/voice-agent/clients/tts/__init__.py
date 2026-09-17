@@ -17,8 +17,6 @@ from clients.tts.self_hosted import SelfHostedTts
 
 TtsClient = SelfHostedTts | OpenAITts | ElevenLabsTts | ResilientTts
 
-_DEFAULT: TtsClient | None = None
-
 
 def _build(provider: str, api_key: str) -> TtsClient:
     if provider == "openai":
@@ -41,15 +39,9 @@ def get_tts_client(
     api_key = resolve_api_key("tts", provider, api_key_override)
     require_key_if_needed("tts", provider, api_key)
 
-    if not overridden:
-        global _DEFAULT
-        if _DEFAULT is None:
-            log_client_selected(
-                "tts", provider, overridden=False, has_api_key=bool(api_key)
-            )
-            _DEFAULT = _wrap(_build(provider, api_key), provider)
-        return _DEFAULT
-    log_client_selected("tts", provider, overridden=True, has_api_key=bool(api_key))
+    log_client_selected(
+        "tts", provider, overridden=overridden, has_api_key=bool(api_key)
+    )
     return _wrap(_build(provider, api_key), provider)
 
 

@@ -59,12 +59,6 @@ async def create_scheduled_interview(
         expires_at=int(expires_at.timestamp()),
     )
     invitation = verify_invitation(token)
-    await interviews.store_invitation(
-        invitation_id=invitation["jti"],
-        context_id=context["context_id"],
-        candidate_id=candidate_id,
-        expires_at=expires_at,
-    )
     document = {
         "_id": interview_id,
         "source_product_id": req.source_product_id,
@@ -85,6 +79,12 @@ async def create_scheduled_interview(
         "updated_at": now,
     }
     try:
+        await interviews.store_invitation(
+            invitation_id=invitation["jti"],
+            context_id=context["context_id"],
+            candidate_id=candidate_id,
+            expires_at=expires_at,
+        )
         await interviews.create_scheduled_interview(document)
     except interviews.ExternalInterviewConflictError as exc:
         await interviews.rollback_schedule_artifacts(

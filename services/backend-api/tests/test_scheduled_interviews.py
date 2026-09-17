@@ -106,6 +106,51 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_schedule_rolls_back_context_when_invitation_write_fails(
+    monkeypatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    rolled_back: dict = {}
+
+    async def create_context(*_args, **_kwargs):
+        return {"context_id": "ctx_1234567890123456", "expires_at": now}
+
+    async def store_invitation(**_kwargs):
+        raise RuntimeError("database unavailable")
+
+    async def rollback(**kwargs):
+        rolled_back.update(kwargs)
+
+    monkeypatch.setenv("INTERVIEW_INVITATION_SECRET", "test-secret")
+    monkeypatch.setattr(
+        scheduled_interviews.interviews, "create_context", create_context
+    )
+    monkeypatch.setattr(
+        scheduled_interviews.interviews, "store_invitation", store_invitation
+    )
+    monkeypatch.setattr(
+        scheduled_interviews.interviews, "rollback_schedule_artifacts", rollback
+    )
+
+    with pytest.raises(RuntimeError):
+        await scheduled_interviews.create_scheduled_interview(
+            CreateScheduledInterviewRequest(
+                source_product_id="reference-demo",
+                candidate_name="Priya",
+                candidate_email="priya@example.com",
+                starts_at=now + timedelta(minutes=10),
+                timezone="Asia/Kolkata",
+                job_description="Build backend services",
+                resume_text="Five years of Python",
+                interview_setup=_setup(),
+            )
+        )
+
+    assert rolled_back["context_id"] == "ctx_1234567890123456"
+    assert rolled_back["invitation_id"]
+
+
+@pytest.mark.asyncio
 async def test_preview_normalizes_legacy_naive_mongo_datetimes(monkeypatch) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     stored = {
