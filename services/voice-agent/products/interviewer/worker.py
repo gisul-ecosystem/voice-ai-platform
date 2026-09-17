@@ -195,11 +195,17 @@ async def entrypoint(ctx: JobContext) -> None:
 
     async def turn_sink(**turn) -> None:
         if session_id:
-            await record_session_turn(session_id, **turn)
+            try:
+                await record_session_turn(session_id, **turn)
+            except ServiceUnavailableError:
+                logger.warning("turn_record_unavailable", extra={"event": "turn_record_unavailable"})
 
     async def status_sink(status: str, *, reason: str | None = None) -> None:
         if session_id:
-            await report_session_status(session_id, status, reason=reason)
+            try:
+                await report_session_status(session_id, status, reason=reason)
+            except ServiceUnavailableError:
+                logger.warning("status_report_unavailable", extra={"event": "status_report_unavailable"})
 
     max_probes: int | None = None
     context_id = context_id_from_job(ctx)
@@ -235,3 +241,7 @@ def run() -> None:
             port=int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
         )
     )
+
+
+if __name__ == "__main__":
+    run()

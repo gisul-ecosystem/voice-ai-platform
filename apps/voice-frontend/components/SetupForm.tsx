@@ -176,8 +176,11 @@ export function SetupForm({
           <div className="field">
             <label htmlFor="duration">Duration (minutes)</label>
             <input id="duration" type="number" min={10} max={120} required
-              value={durationMinutes}
-              onChange={(event) => setDurationMinutes(event.target.valueAsNumber)} />
+              value={Number.isNaN(durationMinutes) ? "" : durationMinutes}
+              onChange={(event) => {
+                const val = event.target.valueAsNumber;
+                setDurationMinutes(Number.isNaN(val) ? 0 : val);
+              }} />
           </div>
           <div className="field">
             <label htmlFor="language">Interview language</label>
