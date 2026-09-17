@@ -38,17 +38,13 @@ Required relationships:
 
 ## HTTPS for browser audio
 
-The private IP cannot receive a public ACME certificate. Caddy therefore issues
-an internal certificate for `https://10.110.50.10`. Test devices must trust the
-Caddy root certificate before microphone APIs will work:
+Use `https://interviewer-dev.gisul.ai` while connected to WireGuard. The
+Cloudflare record is DNS-only and resolves to private IP `10.110.50.10`.
+Caddy reads the Let's Encrypt certificate from
+`/etc/letsencrypt/live/interviewer-dev.gisul.ai/`.
 
-```bash
-docker compose -f "$HOME/voice-ai-platform/compose.staging.yml" \
-  cp gateway:/data/caddy/pki/authorities/local/root.crt /tmp/voice-ai-staging-root.crt
-```
-
-Install that certificate only on managed staging devices. Replace the IP and
-internal CA with an approved DNS name and certificate before public access.
+Do not use HTTPS through the raw private IP; browser TLS validation requires
+the hostname.
 
 ## Operations
 

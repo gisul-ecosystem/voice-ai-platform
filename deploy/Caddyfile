@@ -1,5 +1,5 @@
-https://10.110.50.10 {
-	tls internal
+interviewer-dev.gisul.ai {
+	tls /etc/letsencrypt/live/interviewer-dev.gisul.ai/fullchain.pem /etc/letsencrypt/live/interviewer-dev.gisul.ai/privkey.pem
 	encode zstd gzip
 
 	header {
