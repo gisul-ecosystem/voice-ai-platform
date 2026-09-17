@@ -4,4 +4,4 @@ motor
 pydantic
 python-dotenv
 httpx
-livekit
+livekit-api

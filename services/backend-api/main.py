@@ -32,6 +32,35 @@ from db.mongo import close_client, get_db  # noqa: E402
 
 logger = logging.getLogger("backend-api")
 
+
+def validate_startup_configuration() -> None:
+    if (os.getenv("APP_ENV") or "development").strip().lower() not in {
+        "production",
+        "staging",
+    }:
+        return
+    required = {
+        "MONGO_URL",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "BACKEND_SERVICE_TOKEN",
+        "VOICE_AGENT_SERVICE_TOKEN",
+        "INTERVIEW_INVITATION_SECRET",
+    }
+    if (os.getenv("LLM_PROVIDER") or "self_hosted").strip().lower() in {
+        "openai",
+        "openai_api",
+        "api",
+    }:
+        required.add("OPENAI_API_KEY")
+    missing = sorted(name for name in required if not (os.getenv(name) or "").strip())
+    if missing:
+        raise RuntimeError(
+            "Missing required backend-api settings: " + ", ".join(missing)
+        )
+
+
 app = FastAPI(title="Voice AI Platform - Backend API")
 test_frontend_origins = [
     origin.strip()
@@ -80,6 +109,7 @@ async def log_requests(request: Request, call_next):
 @app.on_event("startup")
 async def startup():
     configure_logging()
+    validate_startup_configuration()
     db = get_db()
     try:
         await db.command("ping")

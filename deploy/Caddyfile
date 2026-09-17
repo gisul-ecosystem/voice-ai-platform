@@ -1,0 +1,13 @@
+https://10.110.50.10 {
+	tls internal
+	encode zstd gzip
+
+	header {
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	reverse_proxy frontend:3000
+}
