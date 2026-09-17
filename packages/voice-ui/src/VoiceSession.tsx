@@ -123,7 +123,11 @@ export function VoiceAgentStatus({
   );
 }
 
-export function VoiceSessionControls() {
+export function VoiceSessionControls({
+  cameraAllowed = true,
+}: {
+  cameraAllowed?: boolean;
+}) {
   return (
     <div
       className="session-controls"
@@ -133,9 +137,11 @@ export function VoiceSessionControls() {
       <TrackToggle source={Track.Source.Microphone}>
         <span>Microphone</span>
       </TrackToggle>
-      <TrackToggle source={Track.Source.Camera}>
-        <span>Camera</span>
-      </TrackToggle>
+      {cameraAllowed ? (
+        <TrackToggle source={Track.Source.Camera}>
+          <span>Camera</span>
+        </TrackToggle>
+      ) : null}
       <DisconnectButton>
         <span>End session</span>
       </DisconnectButton>
@@ -184,7 +190,7 @@ export function DefaultVoiceSession({
       <RoomAudioRenderer />
       <footer className="session-footer">
         <p>Your audio and video remain in this secure LiveKit room.</p>
-        <VoiceSessionControls />
+        <VoiceSessionControls cameraAllowed={labels.cameraAllowed} />
       </footer>
     </div>
   );
@@ -212,21 +218,23 @@ export function VoiceTranscripts() {
     ].filter((line) => line.text);
     if (incoming.length === 0) return;
     setLines((current) => {
-      const seen = new Set(current.map((line) => `${line.who}:${line.text}`));
       const next = [...current];
       for (const line of incoming) {
-        const key = `${line.who}:${line.text}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        next.push(line);
+        const key = `${line.who}:${line.id}`;
+        const index = next.findIndex(
+          (existing) => `${existing.who}:${existing.id}` === key,
+        );
+        if (index >= 0) next[index] = line;
+        else next.push(line);
       }
-      return next;
+      return next.slice(-8);
     });
   }, [streams, agentTranscriptions]);
 
   return (
-    <section className="transcript-panel" data-voice-ui="transcripts">
-      <p className="step-label">Transcript</p>
+    <section className="transcript-panel" data-voice-ui="transcripts"
+      aria-live="polite">
+      <p className="step-label">Live captions</p>
       {lines.length === 0 ? (
         <p className="transcript-empty">
           Speak a full sentence, then pause. Short noise clips are ignored.

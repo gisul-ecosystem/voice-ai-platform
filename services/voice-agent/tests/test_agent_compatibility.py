@@ -63,6 +63,36 @@ async def test_aaptor_forces_advance_after_probe_limit() -> None:
     assert agent.candidate_turns == ["Answer one", "Answer two", "Answer three"]
 
 
+@pytest.mark.asyncio
+async def test_aaptor_closes_after_last_phase_probe_limit() -> None:
+    llm = FakeLlm(
+        "DECISION: probe\n\nFirst probe?",
+        "DECISION: probe\n\nSecond probe?",
+    )
+    agent = aaptor_agent.AaptorAgent(
+        {
+            "phases": [
+                {
+                    "name": "technical",
+                    "duration_minutes": 10,
+                    "topics": ["Python"],
+                    "source": "jd",
+                }
+            ]
+        },
+        llm,
+        max_probes_per_phase=2,
+    )
+
+    await agent.generate_next_question("Answer one")
+    await agent.generate_next_question("Answer two")
+    closing = await agent.generate_next_question("Answer three")
+
+    assert closing == aaptor_agent.CLOSING_MESSAGE
+    assert agent.flow.completed is True
+    assert len(llm.messages) == 2
+
+
 def test_racko_parsers_and_id_extraction() -> None:
     assert racko_agent._parse_intent("INTENT: billing") == "billing"
     assert racko_agent._parse_intent("please get me a real person") == "escalation"

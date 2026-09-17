@@ -26,8 +26,14 @@ class InferenceClients:
 
 def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients:
     """Resolve room-level provider choices before the first conversation turn."""
+    job = getattr(ctx, "job", None)
+    raw_metadata = (
+        getattr(job, "metadata", None)
+        or getattr(ctx.room, "metadata", None)
+        or ""
+    )
     overrides = inference_overrides_from_metadata(
-        parse_room_metadata(getattr(ctx.room, "metadata", None) or "")
+        parse_room_metadata(raw_metadata)
     )
     try:
         llm_client, stt_client, tts_client = clients_from_overrides(overrides)
