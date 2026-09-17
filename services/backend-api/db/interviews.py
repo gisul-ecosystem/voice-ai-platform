@@ -13,6 +13,12 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 async def ensure_indexes() -> None:
     db = get_db()
     await db.interview_contexts.create_index("expires_at", expireAfterSeconds=0)
@@ -39,10 +45,16 @@ async def ensure_indexes() -> None:
     await db.interview_turns.create_index(
         [("session_id", 1), ("sequence_number", 1)], unique=True
     )
+    try:
+        await db.scheduled_interviews.drop_index(
+            "source_product_id_1_external_interview_id_1"
+        )
+    except Exception:
+        pass
     await db.scheduled_interviews.create_index(
         [("source_product_id", 1), ("external_interview_id", 1)],
         unique=True,
-        sparse=True,
+        partialFilterExpression={"external_interview_id": {"$type": "string"}},
     )
     await db.scheduled_interviews.create_index("invitation_id", unique=True)
     await db.scheduled_interviews.create_index(

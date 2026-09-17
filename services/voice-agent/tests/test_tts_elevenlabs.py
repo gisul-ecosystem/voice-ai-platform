@@ -9,6 +9,7 @@ import httpx
 
 from clients.errors import ServiceUnavailableError
 from clients.provider_util import normalize_provider
+from clients.settings import ELEVENLABS_VOICE_ID
 from clients.tts import ElevenLabsTts, get_tts_client
 
 
@@ -40,6 +41,13 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
                 {
                     "text": "Hello from ElevenLabs",
                     "model_id": "eleven_flash_v2_5",
+                    "voice_settings": {
+                        "stability": 0.72,
+                        "similarity_boost": 0.7,
+                        "style": 0.0,
+                        "speed": 0.82,
+                        "use_speaker_boost": True,
+                    },
                 },
             )
             self.assertEqual(kwargs["params"], {"output_format": "pcm_24000"})
@@ -102,10 +110,11 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
             provider_override="elevenlabs",
             api_key_override="override-key-456",
         )
-        self.assertIsInstance(client, ElevenLabsTts)
-        self.assertEqual(client._api_key, "override-key-456")
-        self.assertEqual(client.voice_id, "JBFqnCBsd6RMkjVDRZzb")
-        self.assertEqual(client.model_id, "eleven_flash_v2_5")
+        inner = getattr(client, "_primary", client)
+        self.assertIsInstance(inner, ElevenLabsTts)
+        self.assertEqual(inner._api_key, "override-key-456")
+        self.assertEqual(inner.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
+        self.assertEqual(inner.model_id, "eleven_flash_v2_5")
 
     @unittest.skipUnless(
         os.getenv("ELEVENLABS_LIVE_TEST", "").strip().lower()

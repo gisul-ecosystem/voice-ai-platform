@@ -331,7 +331,7 @@ class LaptopTTS(tts.TTS):
 
     def __init__(self, client=None) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=TTS_SAMPLE_RATE,
             num_channels=TTS_NUM_CHANNELS,
         )
@@ -362,24 +362,6 @@ class LaptopTTS(tts.TTS):
 
 class _LaptopChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        stream_synthesize = getattr(self._tts._client, "stream_synthesize", None)
-        if callable(stream_synthesize):
-            output_emitter.initialize(
-                request_id=str(uuid.uuid4()),
-                sample_rate=TTS_SAMPLE_RATE,
-                num_channels=TTS_NUM_CHANNELS,
-                mime_type="audio/pcm",
-            )
-            try:
-                async for audio_chunk in stream_synthesize(self.input_text):
-                    pcm = _to_pcm(audio_chunk)
-                    if pcm:
-                        output_emitter.push(pcm)
-            except ServiceUnavailableError as exc:
-                raise _to_api_error(exc) from exc
-            output_emitter.flush()
-            return
-
         try:
             audio_bytes = await self._tts._client.synthesize(self.input_text)
         except ServiceUnavailableError as exc:
@@ -391,7 +373,9 @@ class _LaptopChunkedStream(tts.ChunkedStream):
             num_channels=TTS_NUM_CHANNELS,
             mime_type="audio/pcm",
         )
-        output_emitter.push(_to_pcm(audio_bytes))
+        pcm = _to_pcm(audio_bytes)
+        if pcm:
+            output_emitter.push(pcm)
         output_emitter.flush()
 
 

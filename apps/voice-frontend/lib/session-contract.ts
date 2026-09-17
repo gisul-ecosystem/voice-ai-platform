@@ -1,5 +1,18 @@
 import type { ProductId } from "@/lib/products";
 
+export const INTERVIEW_DURATION_OPTIONS = [15, 30, 45] as const;
+export type InterviewDurationMinutes =
+  (typeof INTERVIEW_DURATION_OPTIONS)[number];
+
+export function normalizeInterviewDuration(
+  value: unknown,
+): InterviewDurationMinutes {
+  if (value === 15 || value === 30 || value === 45) {
+    return value;
+  }
+  return 30;
+}
+
 export type PublicSessionRequest = {
   productId: ProductId;
   participantName: string;
@@ -15,7 +28,7 @@ export type PublicSessionRequest = {
     role: string;
     seniority: string;
     difficulty: string;
-    durationMinutes: number;
+    durationMinutes: InterviewDurationMinutes;
     language: string;
     competencies: string[];
     maxProbesPerPhase: number;

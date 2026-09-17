@@ -59,7 +59,7 @@ export function VoicePreJoin({
     initialChoices.audioEnabled,
   );
   const [videoEnabled, setVideoEnabled] = useState(
-    cameraAllowed && initialChoices.videoEnabled,
+    cameraAllowed && cameraEnabledByDefault && initialChoices.videoEnabled,
   );
   const [audioDeviceId, setAudioDeviceId] = useState(
     initialChoices.audioDeviceId,

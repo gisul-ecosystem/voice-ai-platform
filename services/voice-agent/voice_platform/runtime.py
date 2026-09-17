@@ -49,20 +49,18 @@ def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients
 def build_agent_session(clients: InferenceClients) -> AgentSession:
     """Construct the shared STT → LLM → TTS LiveKit pipeline."""
     return AgentSession(
-        vad=silero.VAD.load(min_speech_duration=0.35, min_silence_duration=0.4),
+        vad=silero.VAD.load(min_speech_duration=0.5, min_silence_duration=0.5),
         stt=LaptopSTT(client=clients.stt),
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
-        # Audio can start as soon as ElevenLabs returns. Transcript UI only
-        # renders LiveKit segments marked final.
         use_tts_aligned_transcript=False,
-        # Streaming STT supplies interim words, so barge-in waits for real
-        # speech (~2 words) instead of coughs cancelling the question.
         allow_interruptions=True,
-        min_interruption_duration=0.7,
-        min_interruption_words=2,
-        min_endpointing_delay=0.4,
-        max_endpointing_delay=2.0,
+        min_interruption_duration=2.0,
+        min_interruption_words=4,
+        min_endpointing_delay=0.5,
+        max_endpointing_delay=2.5,
+        resume_false_interruption=True,
+        false_interruption_timeout=1.5,
     )
 
 
