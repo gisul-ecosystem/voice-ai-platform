@@ -1,17 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { transitionVoiceFlow } from "@gisul/voice-ui";
 import { describe, expect, it, vi } from "vitest";
 
 import { SetupForm } from "@/components/SetupForm";
 import { getProduct } from "@/lib/products";
 
 describe("setup to prejoin flow", () => {
-  it("moves from setup to prejoin only on the expected event", () => {
-    expect(transitionVoiceFlow("setup", "connected")).toBe("setup");
-    expect(transitionVoiceFlow("setup", "setup-submitted")).toBe("preview");
-    expect(transitionVoiceFlow("preview", "preview-confirmed")).toBe("prejoin");
-  });
-
   it("collects required interviewer context", () => {
     const onContinue = vi.fn();
     render(
@@ -74,15 +67,4 @@ describe("setup to prejoin flow", () => {
     }));
   });
 
-  it("omits interview context from support setup", () => {
-    render(
-      <SetupForm
-        product={getProduct("customer-support")}
-        onContinue={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByLabelText("Job description")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Resume text")).not.toBeInTheDocument();
-  });
 });

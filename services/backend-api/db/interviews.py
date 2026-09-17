@@ -94,7 +94,6 @@ async def ensure_indexes() -> None:
             "idempotency_key": {"$type": "string"},
         },
     )
-    await db.scorecard_jobs.create_index("session_id", unique=True)
     await db.interview_invitations.create_index("expires_at", expireAfterSeconds=0)
     await db.interview_turns.create_index(
         [("session_id", 1), ("turn_id", 1)], unique=True
@@ -382,19 +381,4 @@ async def get_session_for_join(
             "idempotency_key": idempotency_key,
             "status": {"$in": ["joining", "live"]},
         }
-    )
-
-
-async def enqueue_scorecard(session_id: str) -> None:
-    now = utc_now()
-    await get_db().scorecard_jobs.update_one(
-        {"session_id": session_id},
-        {
-            "$setOnInsert": {
-                "session_id": session_id,
-                "status": "pending",
-                "created_at": now,
-            }
-        },
-        upsert=True,
     )

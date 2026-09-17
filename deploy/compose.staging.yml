@@ -26,24 +26,6 @@ services:
       start_period: 20s
     logging: *default-logging
 
-  context-engine:
-    image: ${IMAGE_REGISTRY}/context-engine:${IMAGE_TAG}
-    restart: unless-stopped
-    environment:
-      SERVICE_PORT: "5555"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5555/health', timeout=3)",
-        ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-    logging: *default-logging
-
   backend-api:
     image: ${IMAGE_REGISTRY}/backend-api:${IMAGE_TAG}
     restart: unless-stopped
@@ -51,11 +33,8 @@ services:
       - /etc/voice-ai-platform/backend-api.env
     environment:
       APP_ENV: production
-      CONTEXT_ENGINE_URL: http://context-engine:5555
     depends_on:
       mongo:
-        condition: service_healthy
-      context-engine:
         condition: service_healthy
     ports:
       - "127.0.0.1:5554:5554"
@@ -81,7 +60,6 @@ services:
     environment:
       APP_ENV: production
       BACKEND_API_URL: http://backend-api:5554
-      CONTEXT_ENGINE_URL: http://context-engine:5555
       AAPTOR_WORKER_PORT: "8081"
     depends_on:
       backend-api:
@@ -120,7 +98,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))",
+          "fetch('http://127.0.0.1:3000/api/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))",
         ]
       interval: 15s
       timeout: 5s

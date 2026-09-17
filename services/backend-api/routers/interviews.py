@@ -146,7 +146,7 @@ async def create_interview_plan(req: InterviewPlanRequest):
                 headers=headers or None,
             )
             resp.raise_for_status()
-        except httpx.HTTPError as e:
+        except httpx.HTTPError as exc:
             latency_ms = round((time.perf_counter() - started) * 1000, 1)
             logger.error(
                 "interview_plan_llm_failed",
@@ -154,10 +154,13 @@ async def create_interview_plan(req: InterviewPlanRequest):
                     "event": "interview_plan_llm_failed",
                     "stage": "llm",
                     "latency_ms": latency_ms,
-                    "error_type": type(e).__name__,
+                    "error_type": type(exc).__name__,
                 },
             )
-            raise HTTPException(status_code=502, detail=f"LLM service unreachable: {e}")
+            raise HTTPException(
+                status_code=502,
+                detail="The interview planning provider is unavailable",
+            ) from exc
 
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
     try:

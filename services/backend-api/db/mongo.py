@@ -1,6 +1,7 @@
 """MongoDB connection using Motor (async driver) with robust in-memory fallback."""
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 import os
 import uuid
@@ -58,6 +59,29 @@ def _get_path(doc: dict, dotted_key: str) -> Any:
     return value
 
 
+def _set_path(doc: dict, dotted_key: str, value: Any) -> None:
+    target = doc
+    parts = dotted_key.split(".")
+    for part in parts[:-1]:
+        child = target.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            target[part] = child
+        target = child
+    target[parts[-1]] = value
+
+
+def _unset_path(doc: dict, dotted_key: str) -> None:
+    target = doc
+    parts = dotted_key.split(".")
+    for part in parts[:-1]:
+        child = target.get(part)
+        if not isinstance(child, dict):
+            return
+        target = child
+    target.pop(parts[-1], None)
+
+
 def _matches(doc: dict, query: dict) -> bool:
     for k, v in query.items():
         if k == "$or":
@@ -108,6 +132,8 @@ class MemoryCollection:
 
     async def insert_one(self, document: dict) -> None:
         doc_id = document.get("_id") or uuid.uuid4().hex
+        if doc_id in self._docs:
+            raise ValueError(f"duplicate in-memory _id for {self.name}")
         stored = dict(document)
         stored["_id"] = doc_id
         self._docs[doc_id] = stored
@@ -120,19 +146,36 @@ class MemoryCollection:
         for doc_id, doc in list(self._docs.items()):
             if _matches(doc, query):
                 matched += 1
+                before = deepcopy(doc)
                 if "$set" in update:
                     for sk, sv in update["$set"].items():
-                        doc[sk] = sv
-                    modified += 1
+                        _set_path(doc, sk, sv)
                 if "$unset" in update:
                     for uk in update["$unset"]:
-                        doc.pop(uk, None)
-                    modified += 1
+                        _unset_path(doc, uk)
+                if "$push" in update:
+                    for pk, pv in update["$push"].items():
+                        values = _get_path(doc, pk)
+                        if not isinstance(values, list):
+                            values = []
+                            _set_path(doc, pk, values)
+                        values.append(pv)
+                modified = int(doc != before)
                 break
         if matched == 0 and upsert:
-            new_doc = {**query}
+            new_doc = {
+                key: value
+                for key, value in query.items()
+                if not key.startswith("$") and not isinstance(value, dict)
+            }
+            for sk, sv in update.get("$setOnInsert", {}).items():
+                _set_path(new_doc, sk, sv)
             if "$set" in update:
-                new_doc.update(update["$set"])
+                for sk, sv in update["$set"].items():
+                    _set_path(new_doc, sk, sv)
+            if "$push" in update:
+                for pk, pv in update["$push"].items():
+                    _set_path(new_doc, pk, [pv])
             doc_id = new_doc.get("_id") or uuid.uuid4().hex
             new_doc["_id"] = doc_id
             self._docs[doc_id] = new_doc

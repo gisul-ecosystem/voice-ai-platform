@@ -123,7 +123,7 @@ export function SetupForm({
   }, [initialValue]);
 
   useEffect(() => {
-    if (!hydrated || !product.requiresInterviewContext) return;
+    if (!hydrated) return;
     sessionStorage.setItem(
       DRAFT_KEY,
       JSON.stringify({
@@ -163,7 +163,6 @@ export function SetupForm({
     monitoringEnabled,
     participantName,
     product.id,
-    product.requiresInterviewContext,
     recordingEnabled,
     resumeText,
     role,
@@ -182,62 +181,35 @@ export function SetupForm({
       candidateEmail: candidateEmail.trim() || undefined,
       startsAt: startsAt ? new Date(startsAt).toISOString() : undefined,
       timezone,
-      interviewSetup: product.requiresInterviewContext
-        ? {
-            title: title.trim(),
-            role: role.trim(),
-            seniority,
-            difficulty,
-            durationMinutes,
-            language: language.trim(),
-            competencies: competencies
-              .split(",")
-              .map((value) => value.trim())
-              .filter(Boolean),
-            maxProbesPerPhase,
-            monitoringEnabled,
-            recordingEnabled,
-          }
-        : undefined,
+      interviewSetup: {
+        title: title.trim(),
+        role: role.trim(),
+        seniority,
+        difficulty,
+        durationMinutes,
+        language: language.trim(),
+        competencies: competencies
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+        maxProbesPerPhase,
+        monitoringEnabled,
+        recordingEnabled,
+      },
     };
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (product.requiresInterviewContext && step < 2) {
+    if (step < 2) {
       setStep((current) => current + 1);
       return;
     }
-    if (product.requiresInterviewContext && !reviewing) {
+    if (!reviewing) {
       setReviewing(true);
       return;
     }
     onContinue(buildValue());
-  }
-
-  if (!product.requiresInterviewContext) {
-    return (
-      <form className="setup-form" onSubmit={submit}>
-        <div className="field">
-          <label htmlFor="participant-name">{product.participantLabel}</label>
-          <input
-            id="participant-name"
-            autoComplete="name"
-            maxLength={120}
-            required
-            value={participantName}
-            onChange={(event) => setParticipantName(event.target.value)}
-            placeholder="Enter a display name"
-          />
-        </div>
-        <p className="form-note">
-          No account credentials are needed for this internal support demo.
-        </p>
-        <button className="button primary" type="submit">
-          Continue to device check
-        </button>
-      </form>
-    );
   }
 
   return (

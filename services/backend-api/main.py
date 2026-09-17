@@ -7,6 +7,7 @@ models loaded locally.
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,7 +62,43 @@ def validate_startup_configuration() -> None:
         )
 
 
-app = FastAPI(title="Voice AI Platform - Backend API")
+async def startup():
+    configure_logging()
+    validate_startup_configuration()
+    db = get_db()
+    try:
+        await db.command("ping")
+        await ensure_indexes()
+        logger.info("startup", extra={"event": "startup", "mongo_connected": True})
+    except Exception:
+        logger.exception(
+            "startup_failed",
+            extra={"event": "startup_failed", "mongo_connected": False},
+        )
+        if (os.getenv("APP_ENV") or "development").strip().lower() in {
+            "production",
+            "staging",
+        }:
+            raise
+        # No reachable MongoDB (e.g. local dev without a DB running) -- fall
+        # back to the in-memory store so the app stays usable, just non-durable.
+        set_fallback_mode(True)
+
+
+async def shutdown():
+    close_client()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await startup()
+    try:
+        yield
+    finally:
+        await shutdown()
+
+
+app = FastAPI(title="Voice AI Platform - Backend API", lifespan=lifespan)
 test_frontend_origins = [
     origin.strip()
     for origin in os.getenv(
@@ -104,35 +141,6 @@ async def log_requests(request: Request, call_next):
         },
     )
     return response
-
-
-@app.on_event("startup")
-async def startup():
-    configure_logging()
-    validate_startup_configuration()
-    db = get_db()
-    try:
-        await db.command("ping")
-        await ensure_indexes()
-        logger.info("startup", extra={"event": "startup", "mongo_connected": True})
-    except Exception:
-        logger.exception(
-            "startup_failed",
-            extra={"event": "startup_failed", "mongo_connected": False},
-        )
-        if (os.getenv("APP_ENV") or "development").strip().lower() in {
-            "production",
-            "staging",
-        }:
-            raise
-        # No reachable MongoDB (e.g. local dev without a DB running) -- fall
-        # back to the in-memory store so the app stays usable, just non-durable.
-        set_fallback_mode(True)
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    close_client()
 
 
 if __name__ == "__main__":

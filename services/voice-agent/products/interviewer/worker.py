@@ -259,12 +259,30 @@ async def entrypoint(ctx: JobContext) -> None:
     if hasattr(ctx, "log_context_fields"):
         ctx.log_context_fields = {"room": ctx.room.name}
     logger.info("session_start", extra={"event": "session_start", "room": ctx.room.name})
-    if hasattr(ctx, "add_shutdown_callback"):
-        ctx.add_shutdown_callback(close_http_client)
     await ctx.connect()
 
     metadata = job_metadata(ctx)
     session_id = str(metadata.get("session_id") or "").strip()
+
+    async def shutdown_session() -> None:
+        try:
+            if session_id:
+                await report_session_status(
+                    session_id,
+                    "abandoned",
+                    reason="worker_shutdown",
+                )
+        except ServiceUnavailableError:
+            logger.warning(
+                "session_shutdown_status_unavailable",
+                extra={"event": "session_shutdown_status_unavailable"},
+            )
+        finally:
+            await close_http_client()
+
+    if hasattr(ctx, "add_shutdown_callback"):
+        ctx.add_shutdown_callback(shutdown_session)
+
     if session_id:
         try:
             await report_session_status(session_id, "live")

@@ -14,7 +14,7 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from logging_config import configure_logging
+from logging_config import configure_logging  # noqa: E402
 
 configure_logging()
 
@@ -44,7 +44,10 @@ async def main():
         logger.exception("smoke_llm_failed", extra={"event": "smoke_llm_failed", "stage": "llm"})
         raise
 
-    logger.info("smoke_llm_reply", extra={"event": "smoke_llm_reply", "stage": "llm", "text": reply})
+    logger.info(
+        "smoke_llm_reply",
+        extra={"event": "smoke_llm_reply", "stage": "llm", "output_chars": len(reply)},
+    )
 
     try:
         audio = await synthesize(reply)
