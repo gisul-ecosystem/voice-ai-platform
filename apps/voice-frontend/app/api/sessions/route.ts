@@ -16,11 +16,8 @@ function parseRequest(value: unknown): PublicSessionRequest {
   }
 
   const body = value as Record<string, unknown>;
-  if (
-    body.productId !== "interviewer" &&
-    body.productId !== "customer-support"
-  ) {
-    throw new Error("Choose a supported voice product.");
+  if (body.productId !== "interviewer") {
+    throw new Error("Only the interviewer product is available.");
   }
   if (
     typeof body.participantName !== "string" ||
@@ -177,7 +174,8 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message =
-      error instanceof Error && error.name === "AbortError"
+      error instanceof Error &&
+      (error.name === "AbortError" || error.name === "TimeoutError")
         ? "The voice service timed out. Try again."
         : "The voice service could not be reached.";
     return NextResponse.json({ error: message }, { status: 502 });

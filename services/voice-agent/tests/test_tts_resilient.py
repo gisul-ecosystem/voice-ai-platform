@@ -25,6 +25,6 @@ async def test_resilient_tts_fails_over_on_payment_required() -> None:
     tts = ResilientTts(Primary(), Fallback())
     audio = await tts.synthesize("Hello")
     assert audio == b"RIFF-fallback"
-    assert tts._use_fallback is True
     second = await tts.synthesize("Again")
     assert second == b"RIFF-fallback"
+    assert tts._primary.calls == 2

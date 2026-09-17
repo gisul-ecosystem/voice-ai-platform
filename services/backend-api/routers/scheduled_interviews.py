@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from db import interviews
@@ -19,12 +19,6 @@ from security.invitations import issue_invitation, verify_invitation
 from security.rate_limit import require_capacity
 
 router = APIRouter(prefix="/v1", tags=["scheduled-interviews"])
-
-def _as_utc(value: datetime) -> datetime:
-    """Normalize legacy naive Mongo values without changing their UTC instant."""
-    if value.tzinfo is None or value.utcoffset() is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 @router.post(
@@ -65,12 +59,6 @@ async def create_scheduled_interview(
         expires_at=int(expires_at.timestamp()),
     )
     invitation = verify_invitation(token)
-    await interviews.store_invitation(
-        invitation_id=invitation["jti"],
-        context_id=context["context_id"],
-        candidate_id=candidate_id,
-        expires_at=expires_at,
-    )
     document = {
         "_id": interview_id,
         "source_product_id": req.source_product_id,
@@ -91,6 +79,12 @@ async def create_scheduled_interview(
         "updated_at": now,
     }
     try:
+        await interviews.store_invitation(
+            invitation_id=invitation["jti"],
+            context_id=context["context_id"],
+            candidate_id=candidate_id,
+            expires_at=expires_at,
+        )
         await interviews.create_scheduled_interview(document)
     except interviews.ExternalInterviewConflictError as exc:
         await interviews.rollback_schedule_artifacts(
@@ -135,9 +129,6 @@ async def preview_invitation(
 ) -> InvitationPreviewResponse:
     _, stored = await _preview(req.invitation_token)
     now = interviews.utc_now()
-    starts_at = _as_utc(stored["starts_at"])
-    join_not_before = _as_utc(stored["join_not_before"])
-    join_closes_at = _as_utc(stored["join_closes_at"])
     status = stored["status"]
     join_not_before = interviews.as_utc(stored["join_not_before"])
     join_closes_at = interviews.as_utc(stored["join_closes_at"])

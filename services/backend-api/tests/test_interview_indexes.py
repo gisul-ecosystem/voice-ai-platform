@@ -80,6 +80,29 @@ async def test_correct_external_id_index_is_left_unchanged() -> None:
 
 
 @pytest.mark.asyncio
+async def test_correlation_index_is_migrated_from_unique_to_non_unique() -> None:
+    collection = FakeCollection(
+        [
+            {
+                "name": interviews.SESSION_CORRELATION_INDEX,
+                "key": {"correlation_id": 1},
+                "unique": True,
+            }
+        ]
+    )
+
+    await interviews.ensure_session_correlation_index(collection)
+
+    assert collection.dropped == [interviews.SESSION_CORRELATION_INDEX]
+    assert collection.created == [
+        (
+            "correlation_id",
+            {"name": interviews.SESSION_CORRELATION_INDEX},
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_external_id_duplicate_is_translated(monkeypatch) -> None:
     class ScheduledInterviews:
         async def insert_one(self, _document):

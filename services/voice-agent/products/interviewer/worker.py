@@ -14,7 +14,6 @@ from clients.backend_client import (
     report_session_status,
 )
 from clients.errors import ServiceUnavailableError
-from clients.http_util import close_http_client
 from clients.inference import parse_room_metadata
 from clients.llm import get_llm_client
 from clients.stt import get_stt_client
@@ -259,20 +258,27 @@ async def entrypoint(ctx: JobContext) -> None:
     if hasattr(ctx, "log_context_fields"):
         ctx.log_context_fields = {"room": ctx.room.name}
     logger.info("session_start", extra={"event": "session_start", "room": ctx.room.name})
-    if hasattr(ctx, "add_shutdown_callback"):
-        ctx.add_shutdown_callback(close_http_client)
     await ctx.connect()
 
     metadata = job_metadata(ctx)
     session_id = str(metadata.get("session_id") or "").strip()
-    if session_id:
+
+    async def shutdown_session() -> None:
         try:
-            await report_session_status(session_id, "live")
+            if session_id:
+                await report_session_status(
+                    session_id,
+                    "abandoned",
+                    reason="worker_shutdown",
+                )
         except ServiceUnavailableError:
-            logger.exception(
-                "session_live_status_failed",
-                extra={"event": "session_live_status_failed"},
+            logger.warning(
+                "session_shutdown_status_unavailable",
+                extra={"event": "session_shutdown_status_unavailable"},
             )
+
+    if hasattr(ctx, "add_shutdown_callback"):
+        ctx.add_shutdown_callback(shutdown_session)
 
     clients = load_inference_clients(ctx, logger)
     outline = await build_outline(ctx)
@@ -413,6 +419,14 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
         room=ctx.room,
     )
+    if session_id:
+        try:
+            await report_session_status(session_id, "live")
+        except ServiceUnavailableError:
+            logger.exception(
+                "session_live_status_failed",
+                extra={"event": "session_live_status_failed"},
+            )
 
 
 def run() -> None:

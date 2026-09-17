@@ -1,7 +1,6 @@
 """Pydantic models shared across the backend API."""
 from datetime import datetime, timezone
 from typing import Literal
-import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -168,31 +167,4 @@ class SessionTurnRequest(BaseModel):
     is_final: bool = True
     language: str | None = Field(default=None, max_length=32)
     confidence: float | None = Field(default=None, ge=0, le=1)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class Turn(BaseModel):
-    turn_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    speaker: Literal["candidate", "agent"]
-    text: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class InterviewSession(BaseModel):
-    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    candidate_id: str
-    role_id: str
-    outline: InterviewOutline | None = None
-    turns: list[Turn] = Field(default_factory=list)
-    status: Literal[
-        "scheduled",
-        "ready",
-        "joining",
-        "live",
-        "completing",
-        "completed",
-        "failed",
-        "expired",
-        "abandoned",
-    ] = "scheduled"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -145,6 +145,7 @@ async def report_session_status(
         timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
         headers=_service_headers(),
         json=payload,
+        retry_safe=True,
     )
 
 
@@ -182,4 +183,5 @@ async def record_session_turn(
             "sequence_number": sequence_number,
             "is_final": True,
         },
+        retry_safe=True,
     )

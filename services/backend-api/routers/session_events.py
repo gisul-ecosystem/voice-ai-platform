@@ -48,10 +48,12 @@ async def update_session_status(
             status=req.status,
             reason=req.reason,
         )
-        if not changed and await interviews.get_session(session_id) is None:
-            raise HTTPException(status_code=404, detail="Interview session not found")
-        if req.status == "completed":
-            await interviews.enqueue_scorecard(session_id)
+        if not changed:
+            stored = await interviews.get_session(session_id)
+            if stored is None:
+                raise HTTPException(status_code=404, detail="Interview session not found")
+            if stored.get("status") != req.status:
+                raise HTTPException(status_code=409, detail="Invalid session status transition")
     except HTTPException:
         raise
     except Exception as exc:

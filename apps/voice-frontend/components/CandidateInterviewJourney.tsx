@@ -6,7 +6,7 @@ import {
   type VoiceSessionCredentials,
 } from "@gisul/voice-ui";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   DevicePreJoin,
@@ -68,6 +68,12 @@ function invitationStatusMessage(preview: Preview): string | undefined {
   return undefined;
 }
 
+function newIdempotencyKey(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 export function CandidateInterviewJourney({
   invitationToken,
 }: {
@@ -79,6 +85,8 @@ export function CandidateInterviewJourney({
   const [choices, setChoices] = useState<DeviceChoices>();
   const [credentials, setCredentials] = useState<VoiceSessionCredentials>();
   const [error, setError] = useState<string>();
+  const joinKey = useRef<string | undefined>(undefined);
+  const intentionalDisconnect = useRef(false);
   const [consents, setConsents] = useState({
     ai_interview: false,
     transcription: false,
@@ -159,13 +167,23 @@ export function CandidateInterviewJourney({
     setChoices(values);
     setStage("connecting");
     setError(undefined);
-    const storageKey = `interview-join:${preview.interview_id}`;
-    let idempotencyKey = sessionStorage.getItem(storageKey);
-    if (!idempotencyKey) {
-      idempotencyKey = crypto.randomUUID();
-      sessionStorage.setItem(storageKey, idempotencyKey);
-    }
     try {
+      const storageKey = `interview-join:${preview.interview_id}`;
+      let idempotencyKey = joinKey.current;
+      if (!idempotencyKey) {
+        try {
+          idempotencyKey = sessionStorage.getItem(storageKey) || undefined;
+        } catch {
+          // Storage can be unavailable in privacy-restricted browser contexts.
+        }
+      }
+      idempotencyKey ||= newIdempotencyKey();
+      joinKey.current = idempotencyKey;
+      try {
+        sessionStorage.setItem(storageKey, idempotencyKey);
+      } catch {
+        // The in-memory key still makes retries on this page idempotent.
+      }
       setCredentials(
         await createVoiceSession({
           productId: "interviewer",
@@ -319,10 +337,20 @@ export function CandidateInterviewJourney({
         credentials={credentials}
         choices={choices}
         className="candidate-live-room"
-        onConnected={() => setStage("live")}
-        onDisconnected={() =>
-          setStage((current) => current === "failed" ? "failed" : "completed")
-        }
+        onConnected={() => {
+          intentionalDisconnect.current = false;
+          setStage("live");
+        }}
+        onDisconnected={() => {
+          if (intentionalDisconnect.current) {
+            setStage("completed");
+            return;
+          }
+          setError(
+            "The room disconnected before the interview was ended. Contact the inviting organization before retrying.",
+          );
+          setStage("failed");
+        }}
         onError={(reason) => {
           setError(reason.message);
           setStage("failed");
@@ -332,6 +360,9 @@ export function CandidateInterviewJourney({
           title={preview.title}
           candidateName={preview.candidate_name}
           cameraAllowed={product.cameraAllowed}
+          onEndRequested={() => {
+            intentionalDisconnect.current = true;
+          }}
         />
       </VoiceRoom>
     );

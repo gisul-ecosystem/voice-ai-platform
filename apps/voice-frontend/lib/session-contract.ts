@@ -68,8 +68,7 @@ export function buildBackendSessionPayload(
     name: input.participantName.trim(),
   };
 
-  if (input.productId === "interviewer" && contextId)
-    payload.context_id = contextId;
+  if (contextId) payload.context_id = contextId;
   if (input.invitationToken) payload.invitation_token = input.invitationToken;
   if (input.idempotencyKey) payload.idempotency_key = input.idempotencyKey;
 
@@ -83,8 +82,7 @@ export function sanitizeSessionResponse(
     typeof value.room !== "string" ||
     typeof value.token !== "string" ||
     typeof value.livekit_url !== "string" ||
-    (value.product_id !== "interviewer" &&
-      value.product_id !== "customer-support")
+    value.product_id !== "interviewer"
   ) {
     throw new Error("The session service returned an invalid response.");
   }
