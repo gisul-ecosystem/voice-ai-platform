@@ -18,6 +18,7 @@ export function RecruiterInterviewSetup() {
   const [created, setCreated] = useState<CreatedInterview>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   async function schedule(value: PublicSessionRequest) {
     setDraft(value);
@@ -44,6 +45,7 @@ export function RecruiterInterviewSetup() {
         throw new Error(data.error || "The interview could not be scheduled.");
       }
       setCreated(data as CreatedInterview);
+      sessionStorage.removeItem("ai-interviewer:setup-draft");
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -69,16 +71,42 @@ export function RecruiterInterviewSetup() {
           The production product sends this link through its branded email
           workflow. The reference application exposes it for end-to-end testing.
         </p>
+        {error ? <div className="alert" role="alert">{error}</div> : null}
         <div className="invitation-link">
           <label htmlFor="candidate-link">Candidate URL</label>
-          <input id="candidate-link" readOnly value={candidateUrl} />
+          <div className="copy-field">
+            <input id="candidate-link" readOnly value={candidateUrl} />
+            <button
+              className="button secondary compact-button"
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(candidateUrl);
+                  setCopied(true);
+                } catch {
+                  setError("Copy was blocked. Select and copy the URL manually.");
+                }
+              }}
+            >
+              {copied ? "Copied" : "Copy link"}
+            </button>
+          </div>
+          <p className="form-note" role="status">
+            {copied
+              ? "Invitation link copied."
+              : "Share this complete signed link with the candidate."}
+          </p>
         </div>
         <div className="button-row">
           <Link className="button primary" href={created.candidatePath}>
             Open candidate journey
           </Link>
           <button className="button secondary" type="button"
-            onClick={() => setCreated(undefined)}>
+            onClick={() => {
+              setCreated(undefined);
+              setCopied(false);
+              setError(undefined);
+            }}>
             Create another
           </button>
         </div>

@@ -12,12 +12,12 @@ export default async function AttendInterviewPage({
     <main className="demo-page demo-stage-candidate">
       <nav className="topbar" aria-label="Candidate interview navigation">
         <Link href="/interviewer" className="brand">AI Interviewer</Link>
-        <span>Candidate reference flow</span>
+        <span>Candidate interview</span>
       </nav>
       <section className="demo-intro">
         <p className="eyebrow">Secure interview</p>
-        <h1>Candidate journey</h1>
-        <p>Verify your invitation before granting device permissions.</p>
+        <h1>Your AI interview</h1>
+        <p>Review the details and consent before granting microphone access.</p>
       </section>
       <section className="demo-card">
         {invitation ? (

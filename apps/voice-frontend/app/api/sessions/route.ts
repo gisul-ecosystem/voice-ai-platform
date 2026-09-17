@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import {
   buildBackendSessionPayload,
+  normalizeInterviewDuration,
   sanitizeSessionResponse,
   toUserFacingSessionError,
   type PublicSessionRequest,
@@ -63,7 +64,7 @@ function parseRequest(value: unknown): PublicSessionRequest {
       role: String(setup.role).trim(),
       seniority: String(setup.seniority).trim(),
       difficulty: String(setup.difficulty).trim(),
-      durationMinutes: setup.durationMinutes,
+      durationMinutes: normalizeInterviewDuration(setup.durationMinutes),
       language: String(setup.language).trim(),
       competencies: setup.competencies
         .filter((item): item is string => typeof item === "string")

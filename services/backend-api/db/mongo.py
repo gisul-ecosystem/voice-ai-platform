@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from datetime import timezone
 from typing import Any
 
 from dotenv import load_dotenv
@@ -183,7 +184,12 @@ def get_client() -> AsyncIOMotorClient:
     global _client
     if _client is None:
         url = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-        _client = AsyncIOMotorClient(url, serverSelectionTimeoutMS=1000)
+        _client = AsyncIOMotorClient(
+            url,
+            serverSelectionTimeoutMS=3000,
+            tz_aware=True,
+            tzinfo=timezone.utc,
+        )
         logger.info("mongo_client_created", extra={"event": "mongo_client_created"})
     return _client
 
