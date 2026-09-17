@@ -32,6 +32,35 @@ from db.mongo import close_client, get_db, set_fallback_mode  # noqa: E402
 
 logger = logging.getLogger("backend-api")
 
+
+def validate_startup_configuration() -> None:
+    if (os.getenv("APP_ENV") or "development").strip().lower() not in {
+        "production",
+        "staging",
+    }:
+        return
+    required = {
+        "MONGO_URL",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "BACKEND_SERVICE_TOKEN",
+        "VOICE_AGENT_SERVICE_TOKEN",
+        "INTERVIEW_INVITATION_SECRET",
+    }
+    if (os.getenv("LLM_PROVIDER") or "self_hosted").strip().lower() in {
+        "openai",
+        "openai_api",
+        "api",
+    }:
+        required.add("OPENAI_API_KEY")
+    missing = sorted(name for name in required if not (os.getenv(name) or "").strip())
+    if missing:
+        raise RuntimeError(
+            "Missing required backend-api settings: " + ", ".join(missing)
+        )
+
+
 app = FastAPI(title="Voice AI Platform - Backend API")
 test_frontend_origins = [
     origin.strip()
@@ -80,16 +109,25 @@ async def log_requests(request: Request, call_next):
 @app.on_event("startup")
 async def startup():
     configure_logging()
+    validate_startup_configuration()
     db = get_db()
     try:
         await db.command("ping")
         await ensure_indexes()
         logger.info("startup", extra={"event": "startup", "mongo_connected": True})
     except Exception:
+        logger.exception(
+            "startup_failed",
+            extra={"event": "startup_failed", "mongo_connected": False},
+        )
+        if (os.getenv("APP_ENV") or "development").strip().lower() in {
+            "production",
+            "staging",
+        }:
+            raise
         # No reachable MongoDB (e.g. local dev without a DB running) -- fall
         # back to the in-memory store so the app stays usable, just non-durable.
         set_fallback_mode(True)
-        logger.warning("startup", extra={"event": "startup", "mongo_connected": False})
 
 
 @app.on_event("shutdown")

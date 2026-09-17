@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 import aaptor_agent
@@ -52,6 +54,8 @@ async def test_aaptor_forces_advance_after_probe_limit() -> None:
             ]
         },
         llm,
+        max_probes_per_phase=2,
+        initial_state={"candidate_turns": ["I already introduced myself."]},
     )
 
     await agent.generate_next_question("Answer one")
@@ -60,7 +64,12 @@ async def test_aaptor_forces_advance_after_probe_limit() -> None:
 
     assert agent.phase_index == 1
     assert agent.probe_count == 0
-    assert agent.candidate_turns == ["Answer one", "Answer two", "Answer three"]
+    assert agent.candidate_turns == [
+        "I already introduced myself.",
+        "Answer one",
+        "Answer two",
+        "Answer three",
+    ]
 
 
 @pytest.mark.asyncio
@@ -82,10 +91,13 @@ async def test_aaptor_closes_after_last_phase_probe_limit() -> None:
         },
         llm,
         max_probes_per_phase=2,
+        min_turns_before_close=3,
+        initial_state={"candidate_turns": ["I already introduced myself."]},
     )
 
     await agent.generate_next_question("Answer one")
     await agent.generate_next_question("Answer two")
+    agent.flow.started_at = time.monotonic() - agent.flow.max_duration_seconds - 1
     closing = await agent.generate_next_question("Answer three")
 
     assert closing == aaptor_agent.CLOSING_MESSAGE

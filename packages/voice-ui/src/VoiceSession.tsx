@@ -10,9 +10,10 @@ import {
   useTracks,
   useTranscriptions,
   useVoiceAssistant,
+  useRoomContext,
 } from "@livekit/components-react";
-import { Track } from "livekit-client";
-import { useEffect, useState, type ReactNode } from "react";
+import { Track, RoomEvent } from "livekit-client";
+import { type ReactNode, useEffect, useState } from "react";
 
 import type {
   VoiceDeviceChoices,
@@ -61,6 +62,69 @@ export function VoiceRoom({
   );
 }
 
+function useInterviewerLiveState(voiceAssistantState: string) {
+  const room = useRoomContext();
+  const { agent } = useVoiceAssistant();
+  const [remoteCount, setRemoteCount] = useState(
+    () => room.remoteParticipants.size,
+  );
+  const [remoteSpeaking, setRemoteSpeaking] = useState(false);
+
+  useEffect(() => {
+    const refresh = () => {
+      const remotes = [...room.remoteParticipants.values()];
+      setRemoteCount(remotes.length);
+      setRemoteSpeaking(remotes.some((participant) => participant.isSpeaking));
+    };
+    refresh();
+    room.on(RoomEvent.ParticipantConnected, refresh);
+    room.on(RoomEvent.ParticipantDisconnected, refresh);
+    room.on(RoomEvent.ActiveSpeakersChanged, refresh);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, refresh);
+      room.off(RoomEvent.ParticipantDisconnected, refresh);
+      room.off(RoomEvent.ActiveSpeakersChanged, refresh);
+    };
+  }, [room]);
+
+  const present = Boolean(agent) || remoteCount > 0;
+  if (!present) return "joining";
+  if (voiceAssistantState === "speaking" || remoteSpeaking) return "speaking";
+  if (voiceAssistantState === "thinking") return "thinking";
+  if (voiceAssistantState === "listening") return "listening";
+  return "starting";
+}
+
+function interviewerStatusCopy(
+  agentName: string,
+  waitingLabel: string,
+  state: string,
+): { title: string; detail: string } {
+  switch (state) {
+    case "speaking":
+      return { title: agentName, detail: "Talking" };
+    case "thinking":
+      return { title: agentName, detail: "Preparing the next question" };
+    case "listening":
+      return { title: agentName, detail: "Listening" };
+    case "starting":
+      return { title: agentName, detail: "Starting the interview" };
+    case "joining":
+      return {
+        title: agentName,
+        detail: waitingLabel || "The interviewer is joining…",
+      };
+    default:
+      return { title: agentName, detail: "Starting the interview" };
+  }
+}
+
+function connectionCopy(connectionState: string) {
+  if (connectionState === "connected") return "live";
+  if (connectionState === "connecting") return "joining";
+  return connectionState;
+}
+
 export function LocalParticipantVideo({
   label = "You",
 }: {
@@ -96,13 +160,15 @@ export function VoiceAgentStatus({
   participantLabel?: string;
   waitingLabel?: string;
 }) {
-  const { agent, state } = useVoiceAssistant();
+  const { state } = useVoiceAssistant();
+  const liveState = useInterviewerLiveState(state);
+  const copy = interviewerStatusCopy(agentName, waitingLabel, liveState);
 
   return (
     <section
       className="video-panel agent-panel"
       data-voice-ui="agent-status"
-      data-agent-state={state}
+      data-agent-state={liveState}
     >
       <div className="agent-visual" aria-hidden="true">
         <div className="agent-orb">
@@ -114,9 +180,9 @@ export function VoiceAgentStatus({
         </div>
       </div>
       <div className="agent-copy">
-        <span className="agent-kicker">AI voice agent</span>
-        <strong>{agent ? agentName : "Connecting agent"}</strong>
-        <p>{agent ? state : waitingLabel}</p>
+        <span className="agent-kicker">AI interviewer</span>
+        <strong>{copy.title}</strong>
+        <p>{copy.detail}</p>
       </div>
       <p className="video-label">{participantLabel}</p>
     </section>
@@ -155,7 +221,13 @@ export function DefaultVoiceSession({
   labels: VoiceSessionLabels;
 }) {
   const connectionState = useConnectionState();
-  const { agent, state: agentState } = useVoiceAssistant();
+  const { state: agentState } = useVoiceAssistant();
+  const liveState = useInterviewerLiveState(agentState);
+  const agentCopy = interviewerStatusCopy(
+    labels.agentName,
+    labels.waitingForAgent || "The interviewer is joining…",
+    liveState,
+  );
 
   return (
     <div className="live-session" data-voice-ui="default-session">
@@ -169,10 +241,10 @@ export function DefaultVoiceSession({
         </div>
         <div className="status-row" aria-live="polite">
           <span className="status-pill">
-            Connection <strong>{connectionState}</strong>
+            Connection <strong>{connectionCopy(connectionState)}</strong>
           </span>
           <span className="status-pill agent-state-pill">
-            Agent <strong>{agent ? agentState : "joining"}</strong>
+            Interviewer <strong>{agentCopy.detail}</strong>
           </span>
         </div>
       </header>
@@ -196,40 +268,46 @@ export function DefaultVoiceSession({
   );
 }
 
+function isFinalTranscriptFlag(attributes?: Record<string, string>) {
+  const value = attributes?.["lk.transcription_final"];
+  return value === "true" || value === "1";
+}
+
 export function VoiceTranscripts() {
   const streams = useTranscriptions();
-  const { agentTranscriptions } = useVoiceAssistant();
-  const [lines, setLines] = useState<
-    { id: string; who: string; text: string }[]
-  >([]);
+  const { agent, agentTranscriptions } = useVoiceAssistant();
+  const agentId = agent?.identity;
+  const byId = new Map<
+    string,
+    { id: string; who: string; text: string; at: number }
+  >();
 
-  useEffect(() => {
-    const incoming = [
-      ...streams.map((item) => ({
-        id: item.streamInfo.id,
-        who: item.participantInfo.identity || "you",
-        text: item.text.trim(),
-      })),
-      ...agentTranscriptions.map((segment) => ({
-        id: segment.id,
-        who: "agent",
-        text: segment.text.trim(),
-      })),
-    ].filter((line) => line.text);
-    if (incoming.length === 0) return;
-    setLines((current) => {
-      const next = [...current];
-      for (const line of incoming) {
-        const key = `${line.who}:${line.id}`;
-        const index = next.findIndex(
-          (existing) => `${existing.who}:${existing.id}` === key,
-        );
-        if (index >= 0) next[index] = line;
-        else next.push(line);
-      }
-      return next.slice(-8);
+  for (const item of streams) {
+    if (!isFinalTranscriptFlag(item.streamInfo.attributes)) continue;
+    const text = item.text.trim();
+    if (!text) continue;
+    const isAgent = Boolean(agentId && item.participantInfo.identity === agentId);
+    byId.set(item.streamInfo.id, {
+      id: item.streamInfo.id,
+      who: isAgent ? "agent" : item.participantInfo.identity || "you",
+      text,
+      at: item.streamInfo.timestamp,
     });
-  }, [streams, agentTranscriptions]);
+  }
+
+  for (const segment of agentTranscriptions) {
+    if (!segment.final) continue;
+    const text = segment.text.trim();
+    if (!text) continue;
+    byId.set(segment.id, {
+      id: segment.id,
+      who: "agent",
+      text,
+      at: segment.firstReceivedTime,
+    });
+  }
+
+  const lines = [...byId.values()].sort((left, right) => left.at - right.at);
 
   return (
     <section className="transcript-panel" data-voice-ui="transcripts"

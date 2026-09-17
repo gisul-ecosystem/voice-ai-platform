@@ -9,13 +9,50 @@ def last_text(chat_ctx: Any, *, role: str = "user") -> str:
     for item in reversed(list(getattr(chat_ctx, "items", ()))):
         if getattr(item, "role", None) != role:
             continue
-        text = getattr(item, "text_content", None)
-        if not text:
-            content = getattr(item, "content", None)
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                text = " ".join(part for part in content if isinstance(part, str))
+        text = _item_text(item)
         if text:
             return text
     return ""
+
+
+def _item_text(item: Any) -> str:
+    text = getattr(item, "text_content", None)
+    if callable(text):
+        try:
+            text = text()
+        except TypeError:
+            text = None
+    if text:
+        return str(text).strip()
+    content = getattr(item, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return " ".join(part for part in content if isinstance(part, str)).strip()
+    return ""
+
+
+def is_usable_candidate_turn(
+    text: str,
+    last_agent_text: str = "",
+    *,
+    min_words: int = 3,
+) -> bool:
+    """Drop echo, one-word noise, and collapsed STT loops before follow-ups."""
+    words = [token.strip(".,!?;:\"'").lower() for token in text.split() if token.strip()]
+    words = [word for word in words if word]
+    if len(words) < max(1, min_words):
+        return False
+    if len(words) >= 8 and len(set(words)) <= 3:
+        return False
+    agent_words = [
+        token.strip(".,!?;:\"'").lower()
+        for token in last_agent_text.split()
+        if token.strip()
+    ]
+    agent_words = [word for word in agent_words if word]
+    if agent_words:
+        overlap = sum(1 for word in words if word in set(agent_words)) / len(words)
+        if overlap >= 0.7:
+            return False
+    return True

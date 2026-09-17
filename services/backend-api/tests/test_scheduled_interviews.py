@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
 
 from models.schemas import (
     CreateScheduledInterviewRequest,
@@ -26,6 +28,21 @@ def _setup() -> InterviewSetupConfig:
         monitoringEnabled=True,
         recordingEnabled=False,
     )
+
+
+def test_external_interview_id_rejects_whitespace() -> None:
+    with pytest.raises(ValidationError):
+        CreateScheduledInterviewRequest(
+            source_product_id="reference-demo",
+            external_interview_id="   ",
+            candidate_name="Priya",
+            candidate_email="priya@example.com",
+            starts_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            timezone="Asia/Kolkata",
+            job_description="Build backend services",
+            resume_text="Five years of Python",
+            interview_setup=_setup(),
+        )
 
 
 @pytest.mark.asyncio
@@ -69,6 +86,7 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
     )
     assert created.status == "scheduled"
     assert captured["candidate_email"] == "priya@example.com"
+    assert captured["external_interview_id"].startswith("ext_")
     assert captured["join_not_before"] <= now
 
     async def find_schedule(_invitation_id):
@@ -85,6 +103,32 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
     assert preview.status == "ready"
     assert preview.role == "Backend Engineer"
     assert preview.monitoring_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_preview_accepts_naive_mongo_datetimes(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    naive_start = (now - timedelta(minutes=1)).replace(tzinfo=None)
+    stored = {
+        "_id": "int_naive",
+        "status": "scheduled",
+        "candidate_name": "Priya",
+        "timezone": "UTC",
+        "starts_at": naive_start,
+        "join_not_before": naive_start,
+        "join_closes_at": (now + timedelta(hours=1)).replace(tzinfo=None),
+        "interview_setup": _setup().model_dump(mode="python"),
+    }
+
+    async def preview(_token):
+        return {"jti": "inv_naive", "interview_id": "int_naive"}, stored
+
+    monkeypatch.setattr(scheduled_interviews, "_preview", preview)
+    result = await scheduled_interviews.preview_invitation(
+        InvitationPreviewRequest(invitation_token="x" * 16)
+    )
+    assert result.status == "ready"
+    assert result.starts_at.tzinfo is not None
 
 
 @pytest.mark.asyncio
@@ -126,3 +170,58 @@ async def test_required_monitoring_consent_is_persisted(monkeypatch) -> None:
     assert response.status_code == 204
     assert persisted["monitoring"] is True
     assert persisted["recorded_at"] >= now
+
+
+@pytest.mark.asyncio
+async def test_duplicate_external_id_returns_conflict_and_rolls_back(
+    monkeypatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    rolled_back: dict = {}
+
+    async def create_context(*_args, **_kwargs):
+        return {"context_id": "ctx_1234567890123456", "expires_at": now}
+
+    async def store_invitation(**_kwargs):
+        return None
+
+    async def create_schedule(_document):
+        raise scheduled_interviews.interviews.ExternalInterviewConflictError
+
+    async def rollback(**kwargs):
+        rolled_back.update(kwargs)
+
+    monkeypatch.setenv("INTERVIEW_INVITATION_SECRET", "test-secret")
+    monkeypatch.setattr(
+        scheduled_interviews.interviews, "create_context", create_context
+    )
+    monkeypatch.setattr(
+        scheduled_interviews.interviews, "store_invitation", store_invitation
+    )
+    monkeypatch.setattr(
+        scheduled_interviews.interviews,
+        "create_scheduled_interview",
+        create_schedule,
+    )
+    monkeypatch.setattr(
+        scheduled_interviews.interviews, "rollback_schedule_artifacts", rollback
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await scheduled_interviews.create_scheduled_interview(
+            CreateScheduledInterviewRequest(
+                source_product_id="reference-demo",
+                external_interview_id="external-123",
+                candidate_name="Priya",
+                candidate_email="priya@example.com",
+                starts_at=now + timedelta(minutes=10),
+                timezone="Asia/Kolkata",
+                job_description="Build backend services",
+                resume_text="Five years of Python",
+                interview_setup=_setup(),
+            )
+        )
+
+    assert raised.value.status_code == 409
+    assert rolled_back["context_id"] == "ctx_1234567890123456"
+    assert rolled_back["invitation_id"].startswith("inv_")

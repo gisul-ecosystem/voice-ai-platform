@@ -8,6 +8,7 @@ import time
 import wave
 from collections.abc import AsyncIterator
 
+from clients.errors import ServiceUnavailableError
 from clients.http_util import make_timeout, request, stream_request
 from clients.settings import (
     ELEVENLABS_LATENCY_OPTIMIZATION,
@@ -17,10 +18,17 @@ from clients.settings import (
     ELEVENLABS_STYLE,
     ELEVENLABS_USE_SPEAKER_BOOST,
     ELEVENLABS_VOICE_ID,
+    ELEVENLABS_VOICE_SPEED,
     TTS_TIMEOUT_SECONDS,
 )
 
 logger = logging.getLogger("voice-agent.tts")
+
+FREE_VOICE_IDS = (
+    "EXAVITQu4vr4xnSDxMaL",
+    "pFZP5JQG7iQjIQuC4Bku",
+    "JBFqnCBsd6RMkjVDRZzb",
+)
 
 
 def normalize_speech_text(text: str) -> str:
@@ -105,6 +113,7 @@ class ElevenLabsTts:
         )
 
     def _build_payload(self, text: str) -> dict:
+        speed = max(0.7, min(float(ELEVENLABS_VOICE_SPEED or 0.82), 1.2))
         return {
             "text": normalize_speech_text(text),
             "model_id": self.model_id,
@@ -112,6 +121,7 @@ class ElevenLabsTts:
                 "stability": self.stability,
                 "similarity_boost": self.similarity_boost,
                 "style": self.style,
+                "speed": speed,
                 "use_speaker_boost": self.use_speaker_boost,
             },
         }
@@ -122,9 +132,14 @@ class ElevenLabsTts:
             params["optimize_streaming_latency"] = self.latency_optimization
         return params
 
-    async def synthesize(self, text: str, voice: str | None = None) -> bytes:
-        voice_id = (voice or self.voice_id).strip()
-        started = time.perf_counter()
+    def _is_blocked(self, exc: BaseException) -> bool:
+        text = str(exc).lower()
+        return any(
+            token in text
+            for token in ("402", "401", "paid_plan", "payment", "unauthorized")
+        )
+
+    async def _synthesize_once(self, text: str, voice_id: str) -> bytes:
         resp = await request(
             "tts",
             "POST",
@@ -134,9 +149,35 @@ class ElevenLabsTts:
             headers={"xi-api-key": self._api_key},
             json=self._build_payload(text),
         )
+        return _pcm_to_wav(resp.content, sample_rate=24000)
+
+    async def synthesize(self, text: str, voice: str | None = None) -> bytes:
+        voice_id = (voice or self.voice_id).strip()
+        started = time.perf_counter()
+        tried = {voice_id}
+        try:
+            audio = await self._synthesize_once(text, voice_id)
+        except ServiceUnavailableError as exc:
+            if not self._is_blocked(exc):
+                raise
+            audio = None
+            for alt in FREE_VOICE_IDS:
+                if alt in tried:
+                    continue
+                tried.add(alt)
+                try:
+                    audio = await self._synthesize_once(text, alt)
+                    self.voice_id = alt
+                    logger.warning(
+                        "tts_voice_failover",
+                        extra={"event": "tts_voice_failover", "voice_id": alt},
+                    )
+                    break
+                except ServiceUnavailableError:
+                    continue
+            if audio is None:
+                raise
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
-        raw_audio = resp.content
-        audio = _pcm_to_wav(raw_audio, sample_rate=24000)
         logger.info(
             "stage_latency",
             extra={
@@ -155,17 +196,46 @@ class ElevenLabsTts:
         text: str,
         voice: str | None = None,
     ) -> AsyncIterator[bytes]:
-        """Yield raw 24 kHz mono PCM chunks from ElevenLabs HTTP streaming."""
+        """Yield raw PCM 24 kHz chunks as ElevenLabs produces them."""
         voice_id = (voice or self.voice_id).strip()
-        async with stream_request(
-            "tts",
-            "POST",
-            f"{self.base_url}/text-to-speech/{voice_id}/stream",
-            params=self._build_params(),
-            timeout=make_timeout(TTS_TIMEOUT_SECONDS),
-            headers={"xi-api-key": self._api_key},
-            json=self._build_payload(text),
-        ) as resp:
-            async for chunk in resp.aiter_bytes():
-                if chunk:
+        started = time.perf_counter()
+        first_ms: float | None = None
+        audio_bytes = 0
+        try:
+            async with stream_request(
+                "tts",
+                "POST",
+                f"{self.base_url}/text-to-speech/{voice_id}/stream",
+                params=self._build_params(),
+                timeout=make_timeout(TTS_TIMEOUT_SECONDS),
+                headers={
+                    "xi-api-key": self._api_key,
+                    "accept": "application/octet-stream",
+                },
+                json=self._build_payload(text),
+            ) as resp:
+                async for chunk in resp.aiter_bytes(4096):
+                    if not chunk:
+                        continue
+                    if first_ms is None:
+                        first_ms = round((time.perf_counter() - started) * 1000, 1)
+                    audio_bytes += len(chunk)
                     yield chunk
+        except ServiceUnavailableError:
+            audio = await self.synthesize(text, voice=voice_id)
+            if audio:
+                audio_bytes = len(audio)
+                yield audio
+        logger.info(
+            "stage_latency",
+            extra={
+                "event": "stage_latency",
+                "stage": "tts",
+                "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+                "ttfb_ms": first_ms,
+                "input_chars": len(text),
+                "audio_bytes": audio_bytes,
+                "provider": "elevenlabs",
+                "streaming": True,
+            },
+        )
