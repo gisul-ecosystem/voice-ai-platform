@@ -1,0 +1,149 @@
+name: voice-ai-platform
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    env_file:
+      - /etc/voice-ai-platform/mongo.env
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging: *default-logging
+
+  context-engine:
+    image: ${IMAGE_REGISTRY}/context-engine:${IMAGE_TAG}
+    restart: unless-stopped
+    environment:
+      SERVICE_PORT: "5555"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5555/health', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  backend-api:
+    image: ${IMAGE_REGISTRY}/backend-api:${IMAGE_TAG}
+    restart: unless-stopped
+    env_file:
+      - /etc/voice-ai-platform/backend-api.env
+    environment:
+      APP_ENV: production
+      CONTEXT_ENGINE_URL: http://context-engine:5555
+    depends_on:
+      mongo:
+        condition: service_healthy
+      context-engine:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5554:5554"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:5554/health', timeout=3)); assert data['mongo_connected']",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    logging: *default-logging
+
+  voice-agent:
+    image: ${IMAGE_REGISTRY}/voice-agent:${IMAGE_TAG}
+    restart: unless-stopped
+    env_file:
+      - /etc/voice-ai-platform/voice-agent.env
+    environment:
+      APP_ENV: production
+      BACKEND_API_URL: http://backend-api:5554
+      CONTEXT_ENGINE_URL: http://context-engine:5555
+      AAPTOR_WORKER_PORT: "8081"
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8081:8081"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; connection=socket.create_connection(('127.0.0.1', 8081), 3); connection.close()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    logging: *default-logging
+
+  frontend:
+    image: ${IMAGE_REGISTRY}/voice-frontend:${IMAGE_TAG}
+    restart: unless-stopped
+    env_file:
+      - /etc/voice-ai-platform/frontend.env
+    environment:
+      BACKEND_API_URL: http://backend-api:5554
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    logging: *default-logging
+
+  gateway:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging: *default-logging
+
+volumes:
+  mongo_data:
+  caddy_data:
+  caddy_config:
