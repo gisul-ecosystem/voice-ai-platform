@@ -24,6 +24,7 @@ OPENAI_ALIASES = frozenset({"openai", "openai_api", "api"})
 ELEVENLABS_ALIASES = frozenset({"elevenlabs", "eleven_labs", "eleven-labs", "11labs"})
 SARVAM_ALIASES = frozenset({"sarvam", "sarvaam", "saaras", "s3", "saaras_v3", "saaras:v3"})
 KEYED_PROVIDERS = frozenset({"openai", "sarvam", "elevenlabs"})
+
 SUPPORTED_BY_SERVICE = {
     "llm": frozenset({"self_hosted", "openai"}),
     "stt": frozenset({"self_hosted", "openai", "sarvam"}),
@@ -82,7 +83,7 @@ def normalize_provider(
 
 
 def resolve_api_key(service: str, provider: str, api_key_override: str | None) -> str:
-    if api_key_override and api_key_override.strip():
+    if api_key_override is not None:
         return api_key_override.strip()
     specific = (_ENV_KEY.get(service) or "").strip()
     if specific:

@@ -28,7 +28,7 @@ from routers import (  # noqa: E402
     tools,
 )
 from db.interviews import ensure_indexes  # noqa: E402
-from db.mongo import close_client, get_db  # noqa: E402
+from db.mongo import close_client, get_db, set_fallback_mode  # noqa: E402
 
 logger = logging.getLogger("backend-api")
 
@@ -125,8 +125,18 @@ async def startup():
             "staging",
         }:
             raise
+        # No reachable MongoDB (e.g. local dev without a DB running) -- fall
+        # back to the in-memory store so the app stays usable, just non-durable.
+        set_fallback_mode(True)
 
 
 @app.on_event("shutdown")
 async def shutdown():
     close_client()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="127.0.0.1", port=5554, reload=True)
+

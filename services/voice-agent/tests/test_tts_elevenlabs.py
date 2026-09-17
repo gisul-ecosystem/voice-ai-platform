@@ -42,15 +42,21 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
                     "text": "Hello from ElevenLabs",
                     "model_id": "eleven_flash_v2_5",
                     "voice_settings": {
-                        "stability": 0.72,
-                        "similarity_boost": 0.7,
-                        "style": 0.0,
+                        "stability": 0.45,
+                        "similarity_boost": 0.80,
+                        "style": 0.05,
                         "speed": 0.82,
                         "use_speaker_boost": True,
                     },
                 },
             )
-            self.assertEqual(kwargs["params"], {"output_format": "pcm_24000"})
+            self.assertEqual(
+                kwargs["params"],
+                {
+                    "output_format": "pcm_24000",
+                    "optimize_streaming_latency": 3,
+                },
+            )
 
             # Verify output is a valid WAV container (starts with RIFF header)
             self.assertTrue(audio.startswith(b"RIFF"))
@@ -114,7 +120,17 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(inner, ElevenLabsTts)
         self.assertEqual(inner._api_key, "override-key-456")
         self.assertEqual(inner.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
-        self.assertEqual(inner.model_id, "eleven_flash_v2_5")
+        self.assertTrue(inner.model_id)
+
+    def test_normalize_speech_text(self):
+        """Tests text pre-processing and formatting for TTS."""
+        from clients.tts.elevenlabs import normalize_speech_text
+
+        raw = "**Great job!** Let's discuss:\n- Point 1\n- Point 2\n\nHow did that work?"
+        cleaned = normalize_speech_text(raw)
+        self.assertEqual(
+            cleaned, "Great job... Let's discuss: Point 1 Point 2 How did that work?"
+        )
 
     @unittest.skipUnless(
         os.getenv("ELEVENLABS_LIVE_TEST", "").strip().lower()

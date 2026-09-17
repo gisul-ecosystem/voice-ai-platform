@@ -54,6 +54,8 @@ def build_agent_session(clients: InferenceClients) -> AgentSession:
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
         use_tts_aligned_transcript=False,
+        # Yield instantly if the candidate talks over Aaptor, like a real interviewer,
+        # but require a deliberate interruption (not a stray word) before cutting off.
         allow_interruptions=True,
         min_interruption_duration=2.0,
         min_interruption_words=4,
@@ -61,6 +63,8 @@ def build_agent_session(clients: InferenceClients) -> AgentSession:
         max_endpointing_delay=2.5,
         resume_false_interruption=True,
         false_interruption_timeout=1.5,
+        # Start drafting the reply as soon as speech looks finished, cutting dead air.
+        preemptive_generation=True,
     )
 
 
