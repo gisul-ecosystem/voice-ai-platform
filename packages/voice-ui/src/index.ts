@@ -6,8 +6,10 @@ export {
   VoiceSession,
   VoiceSessionControls,
   VoiceTranscripts,
+  useVoiceTranscriptLines,
   type VoiceRoomProps,
   type VoiceSessionProps,
+  type VoiceTranscriptLine,
 } from "./VoiceSession";
 export {
   VoicePreJoin,

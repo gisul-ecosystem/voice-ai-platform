@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
@@ -20,6 +20,12 @@ from security.invitations import issue_invitation, verify_invitation
 from security.rate_limit import require_capacity
 
 router = APIRouter(prefix="/v1", tags=["scheduled-interviews"])
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize legacy naive Mongo values without changing their UTC instant."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 @router.post(
@@ -127,11 +133,14 @@ async def preview_invitation(
 ) -> InvitationPreviewResponse:
     _, stored = await _preview(req.invitation_token)
     now = interviews.utc_now()
+    starts_at = _as_utc(stored["starts_at"])
+    join_not_before = _as_utc(stored["join_not_before"])
+    join_closes_at = _as_utc(stored["join_closes_at"])
     status = stored["status"]
     if status == "scheduled":
-        if now < stored["join_not_before"]:
+        if now < join_not_before:
             status = "upcoming"
-        elif now <= stored["join_closes_at"]:
+        elif now <= join_closes_at:
             status = "ready"
         else:
             status = "expired"
@@ -141,11 +150,11 @@ async def preview_invitation(
         candidate_name=stored["candidate_name"],
         title=setup["title"],
         role=setup["role"],
-        starts_at=stored["starts_at"],
+        starts_at=starts_at,
         timezone=stored["timezone"],
         duration_minutes=setup["durationMinutes"],
-        join_not_before=stored["join_not_before"],
-        join_closes_at=stored["join_closes_at"],
+        join_not_before=join_not_before,
+        join_closes_at=join_closes_at,
         monitoring_enabled=setup["monitoringEnabled"],
         recording_enabled=setup["recordingEnabled"],
         status=status,

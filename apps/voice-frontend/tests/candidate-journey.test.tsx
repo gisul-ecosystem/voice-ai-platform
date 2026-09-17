@@ -39,7 +39,9 @@ describe("scheduled candidate journey", () => {
     fireEvent.click(screen.getByLabelText(/conducted by AI/i));
     fireEvent.click(screen.getByLabelText(/agree to transcription/i));
     fireEvent.click(screen.getByLabelText(/listen silently/i));
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue to audio check" }),
+    );
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
@@ -50,5 +52,37 @@ describe("scheduled candidate journey", () => {
         monitoring: true,
       },
     });
+  });
+
+  it("explains an upcoming invitation without allowing consent to continue", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            interview_id: "int_future",
+            candidate_name: "Priya",
+            title: "Backend interview",
+            role: "Backend Engineer",
+            starts_at: new Date(Date.now() + 3_600_000).toISOString(),
+            timezone: "UTC",
+            duration_minutes: 30,
+            join_not_before: new Date(Date.now() + 3_000_000).toISOString(),
+            join_closes_at: new Date(Date.now() + 5_400_000).toISOString(),
+            monitoring_enabled: false,
+            recording_enabled: false,
+            status: "upcoming",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    render(<CandidateInterviewJourney invitationToken="future-token" />);
+
+    expect(await screen.findByText(/This interview opens/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Joining unavailable" }),
+    ).toBeDisabled();
   });
 });

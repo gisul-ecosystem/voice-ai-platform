@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function publicInvitationError(status: number): string {
+  if (status === 404) return "This invitation is invalid or no longer available.";
+  if (status === 409) return "This invitation has already been used.";
+  if (status === 410) return "This invitation has expired.";
+  if (status === 422) return "The required consent could not be recorded.";
+  if (status === 429) return "Too many requests. Wait a moment and try again.";
+  return "Invitation could not be verified.";
+}
+
 export async function POST(request: Request) {
   const backendUrl = process.env.BACKEND_API_URL?.replace(/\/+$/, "");
   if (!backendUrl) {
@@ -48,12 +57,7 @@ export async function POST(request: Request) {
     const data = await upstream.json().catch(() => ({}));
     if (!upstream.ok) {
       return NextResponse.json(
-        {
-          error:
-            typeof data.detail === "string"
-              ? data.detail
-              : "Invitation could not be verified.",
-        },
+        { error: publicInvitationError(upstream.status) },
         { status: upstream.status },
       );
     }

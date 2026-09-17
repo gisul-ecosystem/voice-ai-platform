@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  VoiceSession,
+  VoiceRoom,
   createVoiceSession,
   type VoiceSessionCredentials,
 } from "@gisul/voice-ui";
@@ -12,6 +12,7 @@ import {
   DevicePreJoin,
   type DeviceChoices,
 } from "@/components/DevicePreJoin";
+import { CandidateLiveInterview } from "@/components/CandidateLiveInterview";
 import { getProduct } from "@/lib/products";
 
 type Preview = {
@@ -35,7 +36,37 @@ type Stage =
   | "prejoin"
   | "connecting"
   | "live"
-  | "completed";
+  | "completed"
+  | "failed";
+
+function formatDateTime(value: string, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: timezone,
+      timeZoneName: "short",
+    }).format(new Date(value));
+  } catch {
+    return new Date(value).toLocaleString();
+  }
+}
+
+function invitationStatusMessage(preview: Preview): string | undefined {
+  if (preview.status === "upcoming") {
+    return `This interview opens ${formatDateTime(preview.join_not_before, preview.timezone)}.`;
+  }
+  if (preview.status === "expired") {
+    return "The joining window has closed. Contact the inviting organization for assistance.";
+  }
+  if (preview.status === "completed") {
+    return "This interview has already been completed.";
+  }
+  if (preview.status !== "ready") {
+    return "This invitation is not currently available for joining.";
+  }
+  return undefined;
+}
 
 export function CandidateInterviewJourney({
   invitationToken,
@@ -54,6 +85,12 @@ export function CandidateInterviewJourney({
     monitoring: false,
     recording: false,
   });
+
+  useEffect(() => {
+    document
+      .querySelector<HTMLElement>("[data-candidate-stage] h2")
+      ?.focus({ preventScroll: true });
+  }, [stage]);
 
   useEffect(() => {
     let active = true;
@@ -149,31 +186,42 @@ export function CandidateInterviewJourney({
 
   if (stage === "loading") {
     return (
-      <div className="center-state" role="status">
+      <div className="center-state" role="status" data-candidate-stage="loading">
         <span className="spinner" aria-hidden="true" />
-        <h2>Verifying invitation</h2>
+        <h2 tabIndex={-1}>Verifying invitation</h2>
+        <p>Checking the signed invitation and interview window.</p>
       </div>
     );
   }
 
   if (!preview) {
     return (
-      <div className="center-state">
-        <h2>Invitation unavailable</h2>
+      <div className="center-state" data-candidate-stage="unavailable">
+        <h2 tabIndex={-1}>Invitation unavailable</h2>
         <p>{error || "Ask the inviting organization for a new link."}</p>
+        <Link className="button secondary" href="/interviewer">
+          Return to AI Interviewer
+        </Link>
       </div>
     );
   }
 
   if (stage === "preview") {
+    const statusMessage = invitationStatusMessage(preview);
     return (
-      <div className="candidate-preview">
+      <div className="candidate-preview" data-candidate-stage="preview">
         <div className="section-heading">
           <p className="step-label">Candidate invitation</p>
-          <h2>{preview.title}</h2>
+          <h2 tabIndex={-1}>{preview.title}</h2>
           <p>Review the interview details and required disclosures.</p>
         </div>
         {error ? <div className="alert" role="alert">{error}</div> : null}
+        {statusMessage ? (
+          <div className="invitation-status" role="status">
+            <strong>{preview.status === "upcoming" ? "Scheduled" : "Unavailable"}</strong>
+            <p>{statusMessage}</p>
+          </div>
+        ) : null}
         <div className="candidate-summary">
           <dl>
             <div><dt>Candidate</dt><dd>{preview.candidate_name}</dd></div>
@@ -181,7 +229,15 @@ export function CandidateInterviewJourney({
             <div><dt>Duration</dt><dd>{preview.duration_minutes} minutes</dd></div>
             <div>
               <dt>Scheduled</dt>
-              <dd>{new Date(preview.starts_at).toLocaleString()}</dd>
+              <dd>{formatDateTime(preview.starts_at, preview.timezone)}</dd>
+            </div>
+            <div>
+              <dt>Join window</dt>
+              <dd>
+                {formatDateTime(preview.join_not_before, preview.timezone)}
+                {" – "}
+                {formatDateTime(preview.join_closes_at, preview.timezone)}
+              </dd>
             </div>
           </dl>
           <div>
@@ -194,6 +250,11 @@ export function CandidateInterviewJourney({
               For accommodations or an alternative format, contact the inviting
               organization before starting.
             </p>
+            <ul className="disclosure-list">
+              <li>Live transcription: required</li>
+              <li>Silent human monitoring: {preview.monitoring_enabled ? "enabled" : "not enabled"}</li>
+              <li>Recording: {preview.recording_enabled ? "enabled with consent" : "not enabled"}</li>
+            </ul>
           </div>
         </div>
         <fieldset className="consent-list">
@@ -220,7 +281,7 @@ export function CandidateInterviewJourney({
           <button className="button primary" type="button"
             disabled={!readyForConsent || preview.status !== "ready"}
             onClick={confirmConsent}>
-            {preview.status === "upcoming" ? "Interview is not open yet" : "Continue"}
+            {preview.status === "ready" ? "Continue to audio check" : "Joining unavailable"}
           </button>
         </div>
       </div>
@@ -229,7 +290,7 @@ export function CandidateInterviewJourney({
 
   if (stage === "prejoin") {
     return (
-      <>
+      <div data-candidate-stage="prejoin">
         {error ? <div className="alert" role="alert">{error}</div> : null}
         <DevicePreJoin
           product={product}
@@ -238,15 +299,15 @@ export function CandidateInterviewJourney({
           onSubmit={join}
           onError={(reason) => setError(reason.message)}
         />
-      </>
+      </div>
     );
   }
 
   if (stage === "connecting" && !credentials) {
     return (
-      <div className="center-state" role="status">
+      <div className="center-state" role="status" data-candidate-stage="connecting">
         <span className="spinner" aria-hidden="true" />
-        <h2>Preparing your interview room</h2>
+        <h2 tabIndex={-1}>Preparing your interview room</h2>
         <p>The same request can safely retry if the connection is interrupted.</p>
       </div>
     );
@@ -254,34 +315,42 @@ export function CandidateInterviewJourney({
 
   if ((stage === "connecting" || stage === "live") && credentials && choices) {
     return (
-      <VoiceSession
+      <VoiceRoom
         credentials={credentials}
         choices={choices}
-        labels={{
-          title: preview.title,
-          agentName: "AI Interviewer",
-          localParticipant: preview.candidate_name,
-          cameraAllowed: product.cameraAllowed,
-        }}
+        className="candidate-live-room"
         onConnected={() => setStage("live")}
-        onDisconnected={() => setStage("completed")}
+        onDisconnected={() =>
+          setStage((current) => current === "failed" ? "failed" : "completed")
+        }
         onError={(reason) => {
           setError(reason.message);
-          setStage("completed");
+          setStage("failed");
         }}
-      />
+      >
+        <CandidateLiveInterview
+          title={preview.title}
+          candidateName={preview.candidate_name}
+          cameraAllowed={product.cameraAllowed}
+        />
+      </VoiceRoom>
     );
   }
 
+  const failed = stage === "failed";
   return (
-    <div className="center-state completion">
-      <span className="completion-mark" aria-hidden="true">✓</span>
-      <h2>Interview complete</h2>
+    <div className="center-state completion" data-candidate-stage={stage}>
+      <span className="completion-mark" aria-hidden="true">{failed ? "!" : "✓"}</span>
+      <h2 tabIndex={-1}>{failed ? "Interview disconnected" : "Interview complete"}</h2>
       <p>
-        Your responses were submitted. The inviting organization will contact
-        you after its review process.
+        {failed
+          ? "The room closed unexpectedly. Contact the inviting organization before retrying."
+          : "Your responses were submitted. The inviting organization will contact you after its review process."}
       </p>
       {error ? <div className="alert" role="alert">{error}</div> : null}
+      <Link className="button secondary" href="/interviewer">
+        Return to AI Interviewer
+      </Link>
     </div>
   );
 }

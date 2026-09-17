@@ -3,6 +3,7 @@
 import {
   DisconnectButton,
   LiveKitRoom,
+  MediaDeviceMenu,
   RoomAudioRenderer,
   TrackToggle,
   VideoTrack,
@@ -12,7 +13,7 @@ import {
   useVoiceAssistant,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   VoiceDeviceChoices,
@@ -97,10 +98,16 @@ export function VoiceAgentStatus({
   waitingLabel?: string;
 }) {
   const { agent, state } = useVoiceAssistant();
+  const stateLabel = {
+    initializing: "Getting ready",
+    listening: "Listening to you",
+    thinking: "Preparing the next question",
+    speaking: "Speaking",
+  }[String(state)] ?? "Ready";
 
   return (
     <section
-      className="video-panel agent-panel"
+      className="agent-presence agent-panel"
       data-voice-ui="agent-status"
       data-agent-state={state}
     >
@@ -116,7 +123,7 @@ export function VoiceAgentStatus({
       <div className="agent-copy">
         <span className="agent-kicker">AI voice agent</span>
         <strong>{agent ? agentName : "Connecting agent"}</strong>
-        <p>{agent ? state : waitingLabel}</p>
+        <p>{agent ? stateLabel : waitingLabel}</p>
       </div>
       <p className="video-label">{participantLabel}</p>
     </section>
@@ -125,27 +132,74 @@ export function VoiceAgentStatus({
 
 export function VoiceSessionControls({
   cameraAllowed = true,
+  confirmEnd = true,
 }: {
   cameraAllowed?: boolean;
+  confirmEnd?: boolean;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  const continueButton = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (confirming) continueButton.current?.focus();
+  }, [confirming]);
+
   return (
-    <div
-      className="session-controls"
-      aria-label="Call controls"
-      data-voice-ui="controls"
-    >
-      <TrackToggle source={Track.Source.Microphone}>
-        <span>Microphone</span>
-      </TrackToggle>
-      {cameraAllowed ? (
-        <TrackToggle source={Track.Source.Camera}>
-          <span>Camera</span>
-        </TrackToggle>
+    <>
+      <div
+        className="session-controls"
+        aria-label="Interview controls"
+        data-voice-ui="controls"
+      >
+        <div className="lk-button-group">
+          <TrackToggle source={Track.Source.Microphone}>
+            <span>Microphone</span>
+          </TrackToggle>
+          <div className="lk-button-group-menu">
+            <MediaDeviceMenu kind="audioinput" />
+          </div>
+        </div>
+        {cameraAllowed ? (
+          <TrackToggle source={Track.Source.Camera}>
+            <span>Camera</span>
+          </TrackToggle>
+        ) : null}
+        {confirmEnd ? (
+          <button
+            className="lk-button lk-disconnect-button"
+            type="button"
+            onClick={() => setConfirming(true)}
+          >
+            End interview
+          </button>
+        ) : (
+          <DisconnectButton>
+            <span>End interview</span>
+          </DisconnectButton>
+        )}
+      </div>
+      {confirming ? (
+        <div className="end-confirmation" role="dialog" aria-modal="true"
+          aria-labelledby="end-confirmation-title"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setConfirming(false);
+          }}>
+          <div>
+            <strong id="end-confirmation-title">End this interview?</strong>
+            <p>You will leave the room and cannot continue this attempt.</p>
+            <div className="button-row">
+              <button ref={continueButton} className="button secondary" type="button"
+                onClick={() => setConfirming(false)}>
+                Continue interview
+              </button>
+              <DisconnectButton>
+                <span>End interview</span>
+              </DisconnectButton>
+            </div>
+          </div>
+        </div>
       ) : null}
-      <DisconnectButton>
-        <span>End session</span>
-      </DisconnectButton>
-    </div>
+    </>
   );
 }
 
@@ -196,59 +250,103 @@ export function DefaultVoiceSession({
   );
 }
 
-export function VoiceTranscripts() {
+export type VoiceTranscriptLine = {
+  id: string;
+  who: "candidate" | "agent";
+  text: string;
+  final: boolean;
+};
+
+export function useVoiceTranscriptLines(limit = 40): VoiceTranscriptLine[] {
   const streams = useTranscriptions();
   const { agentTranscriptions } = useVoiceAssistant();
-  const [lines, setLines] = useState<
-    { id: string; who: string; text: string }[]
-  >([]);
+  const [lines, setLines] = useState<VoiceTranscriptLine[]>([]);
 
   useEffect(() => {
-    const incoming = [
+    const incoming: VoiceTranscriptLine[] = [
       ...streams.map((item) => ({
         id: item.streamInfo.id,
-        who: item.participantInfo.identity || "you",
+        who: "candidate" as const,
         text: item.text.trim(),
+        final: true,
       })),
       ...agentTranscriptions.map((segment) => ({
         id: segment.id,
-        who: "agent",
+        who: "agent" as const,
         text: segment.text.trim(),
+        final: segment.final,
       })),
     ].filter((line) => line.text);
     if (incoming.length === 0) return;
     setLines((current) => {
       const next = [...current];
+      let changed = false;
       for (const line of incoming) {
         const key = `${line.who}:${line.id}`;
         const index = next.findIndex(
           (existing) => `${existing.who}:${existing.id}` === key,
         );
-        if (index >= 0) next[index] = line;
-        else next.push(line);
+        if (index >= 0) {
+          const existing = next[index];
+          if (existing.text !== line.text || existing.final !== line.final) {
+            next[index] = line;
+            changed = true;
+          }
+        } else {
+          next.push(line);
+          changed = true;
+        }
       }
-      return next.slice(-8);
+      if (!changed) return current;
+      return next.slice(-limit);
     });
-  }, [streams, agentTranscriptions]);
+  }, [agentTranscriptions, limit, streams]);
+
+  return lines;
+}
+
+export function VoiceTranscripts({
+  candidateLabel = "You",
+  agentLabel = "AI Interviewer",
+  maxLines = 40,
+}: {
+  candidateLabel?: string;
+  agentLabel?: string;
+  maxLines?: number;
+}) {
+  const lines = useVoiceTranscriptLines(maxLines);
+  const latestFinal = [...lines].reverse().find((line) => line.final);
 
   return (
     <section className="transcript-panel" data-voice-ui="transcripts"
-      aria-live="polite">
-      <p className="step-label">Live captions</p>
+      aria-label="Live interview transcript">
+      <div className="transcript-heading">
+        <div>
+          <p className="step-label">Live transcript</p>
+          <h3>Conversation</h3>
+        </div>
+        <span className="transcript-status">Live</span>
+      </div>
       {lines.length === 0 ? (
         <p className="transcript-empty">
-          Speak a full sentence, then pause. Short noise clips are ignored.
+          The conversation will appear here when the interview begins.
         </p>
       ) : (
         <ol className="transcript-list">
           {lines.map((line) => (
-            <li key={line.id}>
-              <span>{line.who}</span>
+            <li key={`${line.who}:${line.id}`} data-final={line.final}>
+              <span>{line.who === "agent" ? agentLabel : candidateLabel}</span>
               <p>{line.text}</p>
+              {!line.final ? <small>Speaking…</small> : null}
             </li>
           ))}
         </ol>
       )}
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {latestFinal
+          ? `${latestFinal.who === "agent" ? agentLabel : candidateLabel}: ${latestFinal.text}`
+          : ""}
+      </p>
     </section>
   );
 }

@@ -24,14 +24,14 @@ describe("setup to prejoin flow", () => {
     fireEvent.change(screen.getByLabelText("Role"), {
       target: { value: "Backend Engineer" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
     fireEvent.change(screen.getByLabelText("Job description"), {
       target: { value: "Backend engineer" },
     });
     fireEvent.change(screen.getByLabelText("Candidate resume"), {
       target: { value: "Five years in Python" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
     fireEvent.change(screen.getByLabelText("Candidate name"), {
       target: { value: "Priya" },
     });
@@ -39,8 +39,12 @@ describe("setup to prejoin flow", () => {
       target: { value: "priya@example.com" },
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Preview candidate experience" }),
+      screen.getByRole("button", { name: "Review interview" }),
     );
+    expect(
+      screen.getByRole("heading", { name: "Confirm the interview" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Schedule interview" }));
 
     expect(onContinue).toHaveBeenCalledWith(expect.objectContaining({
       productId: "interviewer",
