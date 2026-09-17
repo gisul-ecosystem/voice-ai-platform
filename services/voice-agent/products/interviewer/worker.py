@@ -20,7 +20,7 @@ from clients.llm import get_llm_client
 from clients.stt import get_stt_client
 from clients.tts import get_tts_client
 from products.interviewer.agent import AaptorAgent
-from products.interviewer.flow import extract_resume_projects
+from products.interviewer.flow import extract_jd_requirements, extract_resume_projects, infer_phase_intent
 from voice_platform.runtime import (
     attach_session_metrics,
     build_agent_session,
@@ -36,24 +36,28 @@ GENERIC_OUTLINE = {
             "duration_minutes": 2,
             "topics": ["background", "introduction"],
             "source": "generic",
+            "intent": "intro",
         },
         {
             "name": "project deep-dive",
             "duration_minutes": 10,
             "topics": ["resume projects", "architecture", "implementation"],
             "source": "resume",
+            "intent": "resume_project",
         },
         {
-            "name": "skills",
+            "name": "job requirements",
             "duration_minutes": 8,
             "topics": ["role skills", "problem solving"],
             "source": "jd",
+            "intent": "jd_requirement",
         },
         {
             "name": "role fit",
             "duration_minutes": 7,
             "topics": ["why this role", "motivation"],
             "source": "jd",
+            "intent": "role_fit",
         },
     ]
 }
@@ -127,6 +131,65 @@ def enrich_outline_with_resume(outline: dict, resume_text: str) -> dict:
         seen.add(key.lower())
         merged.append(key)
     target["topics"] = merged
+    return {**outline, "phases": phases}
+
+
+def enrich_outline_with_jd(
+    outline: dict,
+    job_description: str,
+    competencies: list[str] | None = None,
+) -> dict:
+    required = extract_jd_requirements(job_description, competencies)
+    if not required:
+        return outline
+    phases = [dict(phase) for phase in (outline or {}).get("phases") or []]
+    mentioned = " ".join(
+        f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}"
+        for phase in phases
+    ).lower()
+    missing = [name for name in required if name.lower() not in mentioned]
+    if not missing:
+        return {**outline, "phases": phases} if phases else outline
+    target = None
+    for phase in phases:
+        if infer_phase_intent(phase) == "jd_requirement":
+            target = phase
+            break
+    if target is None:
+        insert_at = len(phases)
+        for index, phase in enumerate(phases):
+            if infer_phase_intent(phase) == "role_fit":
+                insert_at = index
+                break
+        phases.insert(
+            insert_at,
+            {
+                "name": "job requirements",
+                "duration_minutes": 8,
+                "topics": missing,
+                "source": "jd",
+                "intent": "jd_requirement",
+            },
+        )
+        return {**outline, "phases": phases}
+    topics = list(target.get("topics") or [])
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in missing + topics:
+        key = str(item).strip()
+        if not key or key.lower() in seen:
+            continue
+        seen.add(key.lower())
+        merged.append(key)
+    target["topics"] = merged
+    target["intent"] = "jd_requirement"
+    return {**outline, "phases": phases}
+
+
+def stamp_phase_intents(outline: dict) -> dict:
+    phases = [dict(phase) for phase in (outline or {}).get("phases") or []]
+    for phase in phases:
+        phase["intent"] = infer_phase_intent(phase)
     return {**outline, "phases": phases}
 
 
@@ -370,6 +433,8 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
     outline = enrich_outline_with_resume(outline, resume_text)
+    outline = enrich_outline_with_jd(outline, job_description, competencies)
+    outline = stamp_phase_intents(outline)
     outline = scale_outline_to_duration(outline, target_duration_minutes)
     await session.start(
         agent=AaptorAgent(

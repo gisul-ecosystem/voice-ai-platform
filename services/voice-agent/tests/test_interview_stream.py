@@ -10,11 +10,13 @@ from products.interviewer.flow import (
     FALLBACK_OPENING,
     InterviewFlow,
     SpokenQuestionStream,
+    extract_jd_requirements,
     extract_resume_projects,
     parse_stage2,
 )
 from products.interviewer.worker import (
     GENERIC_OUTLINE,
+    enrich_outline_with_jd,
     enrich_outline_with_resume,
     scale_outline_to_duration,
 )
@@ -403,3 +405,108 @@ async def test_does_not_jump_to_role_fit_while_projects_remain() -> None:
     prompt = llm.messages[0][0]["content"]
     assert "Inventory Service" in prompt
     assert "Projects still missing" in prompt
+
+
+def test_extract_jd_requirements_includes_dsa() -> None:
+    topics = extract_jd_requirements(
+        "We need strong DSA, system design, and PostgreSQL.",
+        ["Python"],
+    )
+    assert "Python" in topics
+    assert "DSA" in topics
+    assert "System design" in topics
+    assert "SQL" in topics
+
+
+def test_enrich_outline_adds_dsa_job_requirement() -> None:
+    enriched = enrich_outline_with_jd(
+        GENERIC_OUTLINE,
+        "Looking for DSA and backend ownership.",
+        ["System design"],
+    )
+    requirement_phase = next(
+        phase for phase in enriched["phases"] if phase.get("intent") == "jd_requirement"
+    )
+    topics = " ".join(requirement_phase["topics"])
+    assert "DSA" in topics
+    assert "System design" in topics
+
+
+@pytest.mark.asyncio
+async def test_intro_followup_sets_project_focus() -> None:
+    llm = FakeStreamingLlm(
+        "DECISION: probe\n\n",
+        "On Payments Gateway, which API did you own?",
+    )
+    flow = InterviewFlow(
+        {
+            "phases": [
+                {
+                    "name": "warm-up",
+                    "duration_minutes": 2,
+                    "topics": ["background"],
+                    "source": "generic",
+                    "intent": "intro",
+                }
+            ]
+        },
+        llm,
+        resume_text="Projects: Payments Gateway. Skills: Python.",
+        job_description="Backend role with DSA.",
+    )
+    async for _ in flow.generate_next_question_stream(
+        "I am a backend engineer and I built a payments gateway."
+    ):
+        pass
+    prompt = llm.messages[0][0]["content"]
+    assert "CURRENT INTENT: intro" in prompt
+    assert "Payments Gateway" in prompt
+    assert flow.focus_item == "Payments Gateway"
+
+
+@pytest.mark.asyncio
+async def test_advance_moves_to_next_resume_project_not_role_fit() -> None:
+    llm = FakeStreamingLlm(
+        "DECISION: advance\n\n",
+        "Let's look at Inventory Service next. How did you keep stock consistent?",
+    )
+    flow = InterviewFlow(
+        {
+            "phases": [
+                {
+                    "name": "project deep-dive",
+                    "duration_minutes": 10,
+                    "topics": ["Payments Gateway", "Inventory Service"],
+                    "source": "resume",
+                    "intent": "resume_project",
+                },
+                {
+                    "name": "job requirements",
+                    "duration_minutes": 8,
+                    "topics": ["DSA"],
+                    "source": "jd",
+                    "intent": "jd_requirement",
+                },
+            ]
+        },
+        llm,
+        candidate_turns=["I already introduced myself."],
+        interviewer_turns=["How did you shard Payments Gateway writes?"],
+        resume_text=(
+            "Projects\n- Payments Gateway: checkout\n- Inventory Service: stock sync"
+        ),
+        job_description="Need DSA.",
+        max_probes_per_phase=8,
+        target_duration_minutes=30,
+    )
+    flow.focus_item = "Payments Gateway"
+    flow.probe_count = 3
+    async for _ in flow.generate_next_question_stream(
+        "I owned checkout on the payments gateway."
+    ):
+        pass
+    assert flow.phase_index == 0
+    assert flow.focus_item == "Inventory Service"
+    prompt = llm.messages[0][0]["content"]
+    assert "CURRENT INTENT: resume_project" in prompt
+    assert "DSA" in prompt

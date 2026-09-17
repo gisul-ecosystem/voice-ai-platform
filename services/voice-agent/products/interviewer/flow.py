@@ -24,7 +24,14 @@ FALLBACK_FOLLOWUP = (
     "you owned, and what happened when it failed?"
 )
 
-STAGE2_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Sound like a calm, clear human in the room. Speak slowly: one idea at a time, short sentences, easy for anyone who uses Indian English at work. Invent every question from this resume, this job, and their last answer.
+STAGE2_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Sound like a calm, clear human in the room. Speak slowly: one idea at a time, short sentences, easy for anyone who uses Indian English at work.
+
+CURRENT INTENT: {intent}
+FOCUS NOW: {focus_item}
+You must ask a question that matches this intent and this focus. Do not jump ahead in the agenda.
+
+AGENDA (fixed order):
+{agenda}
 
 Interview length: about {target_minutes} minutes. Elapsed: {elapsed_minutes} min. Remaining: {remaining_minutes} min.
 Current thread: {phase_name} (guide {duration_minutes} min, {phase_elapsed_minutes} used). Topics: {topics}
@@ -37,26 +44,30 @@ Job description:
 {jd_excerpt}
 
 Role competencies: {competencies}
+Job requirements still missing a question: {uncovered_requirements}
+Job requirements already touched: {covered_requirements}
 
 Projects still missing a technical question: {uncovered_projects}
 Projects already touched: {covered_projects}
 
-Recent candidate turns:
+Recent candidate turns (their knowledge in this interview):
 {recent_turns}
 
 Questions you already asked — do not copy the wording, the stem, or the pattern:
 {recent_questions}
 
-Last answer:
+Last answer — stay in this context:
 {last_turn}
 
 Think, then choose PROBE or ADVANCE.
 {phase_pacing}
 - Deep-dive slowly. Stay on the same answer. Ask the next layer: first what they built, then how it worked, then one technical detail (API, schema, queue, lock, index, timeout, retry), then a failure or tradeoff. Do not jump to a new project until that thread has a real technical example.
-- Use proper technical terms, but always attach context from their words. Example: "You mentioned the payments API — when the downstream timed out, did you retry at the HTTP client or with a queue?" Do not dump jargon they did not mention.
+- If INTENT is resume_project: the question must be about FOCUS NOW, using their last answer and the resume. ADVANCE means the next uncovered resume project, not DSA or role-fit.
+- If INTENT is jd_requirement: the question must check FOCUS NOW from the job (for example DSA if that is the focus). Ground it in their resume or last answer when you can, but still ask the requirement.
+- Use proper technical terms, but always attach context from their words.
 - Prefer PROBE. ADVANCE only after two or three connected technical follow-ups, unless time is almost gone.
 - Never repeat an asking style (no looping walk-me-through / challenges / tell-me-more).
-- You must still reach every listed resume project. If time is short, one clear technical question per remaining project.
+- You must still reach every listed resume project, then remaining job requirements. If time is short, one clear technical question per remaining item.
 - Do not invent employers, projects, or skills. Anti-bias: no age, family, nationality, or health.
 
 Speak 1-2 short sentences: a brief reaction, then one original question. Simple English. No markdown, lists, or quotation marks. Never say phase, outline, probe, or advance.
@@ -70,6 +81,10 @@ Then a blank line, then the spoken words only.
 
 INTRO_FOLLOWUP_SYSTEM = """You are Aaptor, a senior technical interviewer. Speak slowly and clearly. The candidate just introduced themselves.
 
+CURRENT INTENT: intro
+FOCUS NOW: {focus_item}
+After the introduction, start the first resume project. Do not ask DSA, system design, or role-fit yet.
+
 {resume_brief}
 
 Job description:
@@ -78,12 +93,14 @@ Job description:
 Role competencies: {competencies}
 
 Projects you must eventually cover: {uncovered_projects}
+First project to open: {focus_item}
 
 Their introduction:
 {last_turn}
 
 - Always DECISION: probe.
-- Start a slow deep-dive: pick one project or system they named (or the first uncovered resume project) and ask one technical question in context — for example the API, data store, or their ownership. Do not jump to a hard design puzzle yet.
+- Pick the project they named in the intro if it is on the resume; otherwise use FOCUS NOW.
+- Ask one technical question in that project's context — for example the API, data store, or their ownership.
 - Use a technical term and explain it in the same sentence with their context.
 - 1-2 short spoken sentences. No markdown, lists, or quotation marks. Never say phase, outline, probe, or advance.
 - Do not invent employers, projects, or skills. Anti-bias: no age, family, nationality, or health.
@@ -127,6 +144,7 @@ _NEXT_HEADING = re.compile(
 _PROJECT_LABEL = re.compile(
     r"(?i)^\s*(?:project(?:\s+name)?|title)\s*[:\-–]\s*(.+)$"
 )
+_INLINE_PROJECTS = re.compile(r"(?i)^\s*projects?\s*[:\-–]\s+(.+)$")
 _BULLET = re.compile(r"^\s*(?:[-•*]|\d+[.)])\s+(.+)$")
 
 
@@ -162,6 +180,18 @@ def extract_resume_projects(resume_text: str) -> list[str]:
         if _SECTION_HEADINGS.match(line):
             in_section = True
             continue
+        inline = _INLINE_PROJECTS.match(line)
+        if inline:
+            rest = re.split(
+                r"(?i)\b(skills|education|experience|certifications)\b",
+                inline.group(1),
+                maxsplit=1,
+            )[0]
+            for part in re.split(r"[;•]|\s+\|\s+", rest):
+                title = _project_title(part)
+                if title and title.lower() not in {"project", "projects"}:
+                    titles.append(title)
+            continue
         if in_section and _NEXT_HEADING.match(line):
             in_section = False
             continue
@@ -188,6 +218,73 @@ def extract_resume_projects(resume_text: str) -> list[str]:
         if len(unique) >= 12:
             break
     return unique
+
+
+INTENT_VALUES = {"intro", "resume_project", "jd_requirement", "role_fit"}
+_JD_TOPIC_PATTERNS = (
+    (
+        re.compile(
+            r"\b(dsa|data[- ]structures?(?:\s+and\s+algorithms?)?|"
+            r"algorithms?|leetcode|coding (?:round|interview|problem)s?)\b",
+            re.I,
+        ),
+        "DSA",
+    ),
+    (re.compile(r"\bsystem design\b", re.I), "System design"),
+    (re.compile(r"\b(sql|postgresql|mysql)\b", re.I), "SQL"),
+)
+
+
+def infer_phase_intent(phase: dict) -> str:
+    listed = str(phase.get("intent") or "").strip().lower()
+    if listed in INTENT_VALUES:
+        return listed
+    blob = (
+        f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}"
+    ).lower()
+    source = str(phase.get("source") or "").lower()
+    if any(token in blob for token in ("warm", "intro", "opening")):
+        return "intro"
+    if any(token in blob for token in ("role", "fit", "behav", "motiv", "close")):
+        return "role_fit"
+    if "project" in blob or source == "resume":
+        return "resume_project"
+    return "jd_requirement"
+
+
+def extract_jd_requirements(
+    job_description: str, competencies: list[str] | None = None
+) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(label: str) -> None:
+        key = (label or "").strip()
+        if not key or key.lower() in seen:
+            return
+        seen.add(key.lower())
+        found.append(key)
+
+    for item in competencies or []:
+        add(str(item))
+    text = job_description or ""
+    for pattern, label in _JD_TOPIC_PATTERNS:
+        if pattern.search(text):
+            add(label)
+    return found[:12]
+
+
+def _item_mentioned(name: str, text: str) -> bool:
+    blob = (text or "").lower()
+    full = (name or "").strip().lower()
+    if not full:
+        return False
+    if full in blob:
+        return True
+    tokens = [token for token in re.split(r"\W+", full) if len(token) > 3]
+    if not tokens:
+        return False
+    return all(token in blob for token in tokens[:2])
 
 
 def format_resume_brief(
@@ -325,6 +422,11 @@ class InterviewFlow:
         self.resume_text = resume_text
         self.competencies = list(competencies or [])
         self.resume_projects = extract_resume_projects(resume_text)
+        self.jd_requirements = extract_jd_requirements(
+            job_description, self.competencies
+        )
+        self.focus_item = ""
+        self._touched_topics: set[str] = set()
         self.completed = False
         self.started_at = time.monotonic()
         self.phase_started_at = self.started_at
@@ -365,6 +467,11 @@ class InterviewFlow:
     def apply_decision(self, decision: str) -> None:
         at_last = self.phase_index >= max(len(self.phases) - 1, 0)
         must_advance = self._should_leave_phase()
+        if decision != "advance" and not must_advance:
+            self.probe_count += 1
+            return
+        if self._rotate_focus():
+            return
         if at_last:
             self.probe_count += 1
             if self._time_up():
@@ -378,15 +485,20 @@ class InterviewFlow:
                 )
             return
         next_phase = self.next_phase()
-        skip_soft = (
-            decision == "advance"
-            and next_phase is not None
-            and self._is_soft_phase_name(str(next_phase.get("name") or ""))
-            and bool(self._uncovered_projects())
-            and self._time_remaining_minutes() > 2
+        skip_ahead = False
+        if (
+            next_phase is not None
             and not must_advance
-        )
-        if skip_soft:
+            and self._time_remaining_minutes() > 2
+        ):
+            next_intent = infer_phase_intent(next_phase)
+            if next_intent == "role_fit" and (
+                self._uncovered_projects() or self._uncovered_requirements()
+            ):
+                skip_ahead = True
+            elif next_intent == "jd_requirement" and self._uncovered_projects():
+                skip_ahead = True
+        if skip_ahead:
             self.probe_count += 1
             return
         if decision == "advance" or must_advance:
@@ -394,6 +506,8 @@ class InterviewFlow:
             self.phase_index += 1
             self.probe_count = 0
             self.phase_started_at = time.monotonic()
+            self.focus_item = ""
+            self._ensure_focus(None)
             logger.info(
                 "phase_advanced",
                 extra={
@@ -401,6 +515,7 @@ class InterviewFlow:
                     "from_phase": previous,
                     "to_phase": self.current_phase().get("name"),
                     "forced": must_advance and decision != "advance",
+                    "intent": self._phase_intent(),
                 },
             )
             return
@@ -414,8 +529,7 @@ class InterviewFlow:
         return min(self.max_probes_per_phase, flow_limit)
 
     def _is_warmup_phase(self) -> bool:
-        name = str(self.current_phase().get("name") or "").lower()
-        return any(token in name for token in ("warm", "intro", "opening"))
+        return self._phase_intent() == "intro"
 
     @staticmethod
     def _is_soft_phase_name(name: str) -> bool:
@@ -425,7 +539,17 @@ class InterviewFlow:
             for token in ("role", "fit", "behav", "motiv", "close", "culture")
         )
 
+    def _phase_intent(self) -> str:
+        return infer_phase_intent(self.current_phase())
+
+    def _turn_intent(self, *, is_intro_reply: bool) -> str:
+        if is_intro_reply:
+            return "intro"
+        return self._phase_intent()
+
     def _is_project_phase(self) -> bool:
+        if self._phase_intent() == "resume_project":
+            return True
         phase = self.current_phase()
         blob = f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}".lower()
         if "project" in blob:
@@ -435,29 +559,134 @@ class InterviewFlow:
     def _spoken_so_far(self) -> str:
         return " ".join(self.interviewer_turns + self.candidate_turns).lower()
 
-    def _covered_projects(self) -> list[str]:
+    def _covered_items(self, names: list[str]) -> list[str]:
         spoken = self._spoken_so_far()
-        return [name for name in self.resume_projects if name.lower() in spoken]
+        return [
+            name
+            for name in names
+            if _item_mentioned(name, spoken) or name.lower() in self._touched_topics
+        ]
+
+    def _uncovered_items(self, names: list[str]) -> list[str]:
+        spoken = self._spoken_so_far()
+        return [
+            name
+            for name in names
+            if not _item_mentioned(name, spoken)
+            and name.lower() not in self._touched_topics
+        ]
+
+    def _covered_projects(self) -> list[str]:
+        return self._covered_items(self.resume_projects)
 
     def _uncovered_projects(self) -> list[str]:
-        spoken = self._spoken_so_far()
-        return [name for name in self.resume_projects if name.lower() not in spoken]
+        return self._uncovered_items(self.resume_projects)
+
+    def _covered_requirements(self) -> list[str]:
+        return self._covered_items(self.jd_requirements)
+
+    def _uncovered_requirements(self) -> list[str]:
+        return self._uncovered_items(self.jd_requirements)
+
+    def _project_from_text(self, text: str | None) -> str:
+        blob = text or ""
+        for name in self.resume_projects:
+            if _item_mentioned(name, blob):
+                return name
+        return ""
+
+    def _ensure_focus(self, last_turn: str | None, *, is_intro_reply: bool = False) -> None:
+        intent = self._turn_intent(is_intro_reply=is_intro_reply)
+        if intent == "intro":
+            self.focus_item = (
+                self._project_from_text(last_turn)
+                or (self._uncovered_projects() or self.resume_projects or ["your recent work"])[0]
+            )
+            return
+        if intent == "resume_project":
+            if self.focus_item and self.focus_item.lower() not in self._touched_topics:
+                return
+            uncovered = self._uncovered_projects()
+            named = self._project_from_text(last_turn)
+            if named and named in uncovered:
+                self.focus_item = named
+                return
+            self.focus_item = (
+                uncovered or self.resume_projects or [self.focus_item or "this project"]
+            )[0]
+            return
+        if intent == "jd_requirement":
+            uncovered = self._uncovered_requirements()
+            if self.focus_item in uncovered:
+                return
+            self.focus_item = (uncovered or self.jd_requirements or ["this job requirement"])[0]
+            return
+        self.focus_item = "why this role fits your experience"
+
+    def _rotate_focus(self) -> bool:
+        if self.focus_item:
+            self._touched_topics.add(self.focus_item.lower())
+        intent = self._phase_intent()
+        if intent == "resume_project":
+            remaining = [
+                name
+                for name in self._uncovered_projects()
+                if name.lower() != (self.focus_item or "").lower()
+            ]
+            if remaining and self._time_remaining_minutes() > 2:
+                self.focus_item = remaining[0]
+                self.probe_count = 0
+                return True
+        if intent == "jd_requirement":
+            remaining = [
+                name
+                for name in self._uncovered_requirements()
+                if name.lower() != (self.focus_item or "").lower()
+            ]
+            if remaining and self._time_remaining_minutes() > 2:
+                self.focus_item = remaining[0]
+                self.probe_count = 0
+                return True
+        return False
+
+    def _agenda_text(self) -> str:
+        projects = ", ".join(self.resume_projects) or "(none parsed)"
+        requirements = ", ".join(self.jd_requirements) or "(none parsed from JD)"
+        return (
+            "1. Intro — candidate background.\n"
+            f"2. Resume projects, one by one: {projects}\n"
+            f"3. Job requirements after projects: {requirements}\n"
+            "4. Role fit only if time remains."
+        )
 
     def _time_remaining_minutes(self) -> int:
         return max(0, self.target_duration_minutes - self._elapsed_minutes())
 
     def _phase_pacing(self) -> str:
         uncovered = ", ".join(self._uncovered_projects()) or "none"
-        if self._is_warmup_phase():
+        missing_req = ", ".join(self._uncovered_requirements()) or "none"
+        intent = self._phase_intent()
+        if intent == "intro":
             return (
                 "- Warm-up is a short bridge. After the intro, start a slow "
-                "technical deep-dive on one named resume project. ADVANCE later "
-                f"toward uncovered projects: {uncovered}."
+                f"technical deep-dive on FOCUS NOW. Uncovered projects: {uncovered}."
+            )
+        if intent == "jd_requirement":
+            return (
+                "- Projects are done or time is tight. Ask the next uncovered job "
+                f"requirement ({missing_req}). If FOCUS NOW is DSA, ask one practical "
+                "DSA question tied to their work when possible."
+            )
+        if intent == "role_fit":
+            return (
+                "- Only motivation/role-fit now. Do not reopen a finished project "
+                "unless they bring it up."
             )
         return (
             "- Stay on this answer and go one layer deeper with a technical term "
             "in context. When you ADVANCE, go to the next uncovered resume "
-            f"project ({uncovered}), not generic motivation."
+            f"project ({uncovered}), not generic motivation or DSA yet. "
+            f"Job requirements waiting after projects: {missing_req}."
         )
 
     def _too_early_to_advance(self) -> bool:
@@ -548,16 +777,26 @@ class InterviewFlow:
             "uncovered_projects": ", ".join(self._uncovered_projects())
             or "(none left)",
             "covered_projects": ", ".join(self._covered_projects()) or "(none yet)",
+            "uncovered_requirements": ", ".join(self._uncovered_requirements())
+            or "(none left)",
+            "covered_requirements": ", ".join(self._covered_requirements())
+            or "(none yet)",
         }
+        is_intro_reply = bool(last_candidate_turn) and not self.candidate_turns
+        self._ensure_focus(last_candidate_turn, is_intro_reply=is_intro_reply)
         if last_candidate_turn:
-            if not self.candidate_turns:
+            if is_intro_reply:
                 prompt = INTRO_FOLLOWUP_SYSTEM.format(
                     last_turn=last_candidate_turn,
+                    focus_item=self.focus_item or "(first resume project)",
                     **briefing,
                     **coverage,
                 )
                 return prompt, last_candidate_turn
             prompt = STAGE2_SYSTEM.format(
+                intent=self._phase_intent(),
+                focus_item=self.focus_item or phase.get("name", "this topic"),
+                agenda=self._agenda_text(),
                 phase_name=phase.get("name", "unnamed"),
                 duration_minutes=phase.get("duration_minutes", 0),
                 topics=phase_topics(phase),

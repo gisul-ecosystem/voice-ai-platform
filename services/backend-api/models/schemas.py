@@ -6,11 +6,15 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field
 
 
+InterviewIntent = Literal["intro", "resume_project", "jd_requirement", "role_fit"]
+
+
 class InterviewPhase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     duration_minutes: int = Field(ge=1, le=60)
     topics: list[str] = Field(min_length=1, max_length=20)
     source: Literal["resume", "jd", "generic"]
+    intent: InterviewIntent = "resume_project"
 
 
 class InterviewOutline(BaseModel):
