@@ -5,14 +5,31 @@ export type PublicSessionRequest = {
   participantName: string;
   jobDescription?: string;
   resumeText?: string;
+  invitationToken?: string;
+  idempotencyKey?: string;
+  candidateEmail?: string;
+  startsAt?: string;
+  timezone?: string;
+  interviewSetup?: {
+    title: string;
+    role: string;
+    seniority: string;
+    difficulty: string;
+    durationMinutes: number;
+    language: string;
+    competencies: string[];
+    maxProbesPerPhase: number;
+    monitoringEnabled: boolean;
+    recordingEnabled: boolean;
+  };
 };
 
 export type BackendSessionPayload = {
   product_id: ProductId;
-  identity: string;
   name: string;
-  job_description?: string;
-  resume_text?: string;
+  context_id?: string;
+  invitation_token?: string;
+  idempotency_key?: string;
 };
 
 export type SessionCredentials = {
@@ -31,20 +48,17 @@ type BackendSessionResponse = {
 
 export function buildBackendSessionPayload(
   input: PublicSessionRequest,
-  identity: string,
+  contextId?: string,
 ): BackendSessionPayload {
   const payload: BackendSessionPayload = {
     product_id: input.productId,
-    identity,
     name: input.participantName.trim(),
   };
 
-  if (input.productId === "interviewer") {
-    const jobDescription = input.jobDescription?.trim();
-    const resumeText = input.resumeText?.trim();
-    if (jobDescription) payload.job_description = jobDescription;
-    if (resumeText) payload.resume_text = resumeText;
-  }
+  if (input.productId === "interviewer" && contextId)
+    payload.context_id = contextId;
+  if (input.invitationToken) payload.invitation_token = input.invitationToken;
+  if (input.idempotencyKey) payload.idempotency_key = input.idempotencyKey;
 
   return payload;
 }

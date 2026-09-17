@@ -14,6 +14,7 @@ import {
   DevicePreJoin,
   type DeviceChoices,
 } from "@/components/DevicePreJoin";
+import { CandidatePreview } from "@/components/CandidatePreview";
 import { SetupForm } from "@/components/SetupForm";
 import type { ProductConfig } from "@/lib/products";
 import type { PublicSessionRequest } from "@/lib/session-contract";
@@ -28,7 +29,11 @@ export function VoiceDemo({ product }: { product: ProductConfig }) {
   function continueFromSetup(value: PublicSessionRequest) {
     setSetup(value);
     setError(undefined);
-    setStage((current) => transitionVoiceFlow(current, "setup-submitted"));
+    setStage(
+      product.id === "interviewer"
+        ? (current) => transitionVoiceFlow(current, "setup-submitted")
+        : "prejoin",
+    );
   }
 
   async function join(values: DeviceChoices) {
@@ -96,11 +101,25 @@ export function VoiceDemo({ product }: { product: ProductConfig }) {
           />
         ) : null}
 
+        {stage === "preview" && setup ? (
+          <CandidatePreview
+            request={setup}
+            onBack={() => setStage("setup")}
+            onContinue={() =>
+              setStage((current) =>
+                transitionVoiceFlow(current, "preview-confirmed"),
+              )
+            }
+          />
+        ) : null}
+
         {stage === "prejoin" && setup ? (
           <DevicePreJoin
             product={product}
             participantName={setup.participantName}
-            onBack={() => setStage("setup")}
+            onBack={() =>
+              setStage(product.id === "interviewer" ? "preview" : "setup")
+            }
             onSubmit={join}
             onError={(reason) => setError(reason.message)}
           />
@@ -123,6 +142,7 @@ export function VoiceDemo({ product }: { product: ProductConfig }) {
             labels={{
               title: product.title,
               agentName: product.eyebrow,
+              cameraAllowed: product.cameraAllowed,
             }}
             onConnected={() =>
               setStage((current) => transitionVoiceFlow(current, "connected"))

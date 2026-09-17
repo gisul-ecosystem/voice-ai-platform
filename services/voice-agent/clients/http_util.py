@@ -1,21 +1,20 @@
-"""Shared httpx + tenacity helper for laptop-to-laptop HTTP calls."""
+"""Pooled, bounded HTTP transport shared by provider and service clients."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import time
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 
 import httpx
-from tenacity import (
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from clients.errors import ServiceUnavailableError
 from clients.settings import HTTP_CONNECT_TIMEOUT_SECONDS, HTTP_RETRY_ATTEMPTS
 
 logger = logging.getLogger("voice-agent.http")
+_CLIENT: httpx.AsyncClient | None = None
 
 
 def make_timeout(seconds: float) -> httpx.Timeout:
@@ -26,8 +25,69 @@ def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.TransportError):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response is not None and exc.response.status_code >= 500
+        return exc.response is not None and (
+            exc.response.status_code == 429 or exc.response.status_code >= 500
+        )
     return False
+
+
+def _client() -> httpx.AsyncClient:
+    global _CLIENT
+    if _CLIENT is None or _CLIENT.is_closed:
+        _CLIENT = httpx.AsyncClient()
+    return _CLIENT
+
+
+async def close_http_client() -> None:
+    global _CLIENT
+    if _CLIENT is not None:
+        await _CLIENT.aclose()
+        _CLIENT = None
+
+
+@asynccontextmanager
+async def stream_request(
+    service: str,
+    method: str,
+    url: str,
+    *,
+    timeout: httpx.Timeout,
+    api_key: str | None = None,
+    headers: dict | None = None,
+    **kwargs,
+) -> AsyncIterator[httpx.Response]:
+    """Open a non-retried streaming response using the shared connection pool."""
+    req_headers = dict(headers or {})
+    if api_key:
+        req_headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with _client().stream(
+            method,
+            url,
+            headers=req_headers or None,
+            timeout=timeout,
+            **kwargs,
+        ) as response:
+            response.raise_for_status()
+            yield response
+    except httpx.HTTPError as exc:
+        raise ServiceUnavailableError(
+            service,
+            f"{type(exc).__name__}: {exc}",
+            url=url,
+        ) from exc
+
+
+def _retry_delay(exc: BaseException, attempt: int) -> float:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        raw = exc.response.headers.get("Retry-After")
+        try:
+            if raw is not None:
+                return min(max(float(raw), 0.0), 30.0)
+        except ValueError:
+            pass
+    ceiling = min(0.5 * (2 ** max(attempt - 1, 0)), 4.0)
+    return random.uniform(0.0, ceiling)
 
 
 async def request(
@@ -38,55 +98,51 @@ async def request(
     timeout: httpx.Timeout,
     api_key: str | None = None,
     headers: dict | None = None,
+    retry_safe: bool | None = None,
     **kwargs,
 ) -> httpx.Response:
-    """POST/GET with exponential backoff. Raises ServiceUnavailableError, never raw httpx errors.
+    """Pooled request with bounded safe retries and secret-aware logging.
 
     api_key is sent as Authorization: Bearer … and is never written to logs.
-    Client-provided keys must never land in log files or observability tooling.
+    Paid/mutating POST operations are not retried unless a caller explicitly
+    supplies an idempotency strategy and opts in with ``retry_safe=True``.
     """
     req_headers = dict(headers or {})
     if api_key:
         req_headers["Authorization"] = f"Bearer {api_key}"
-
-    def _log_retry(retry_state) -> None:
-        exc = retry_state.outcome.exception() if retry_state.outcome else None
-        wait_s = getattr(getattr(retry_state, "next_action", None), "sleep", None)
-        logger.warning(
-            "http_retry",
-            extra={
-                "event": "http_retry",
-                "remote_service": service,
-                "url": url,
-                "method": method,
-                "attempt": retry_state.attempt_number,
-                "wait_s": wait_s,
-                "error_type": type(exc).__name__ if exc else None,
-                "has_api_key": bool(api_key),
-            },
-        )
-
-    @retry(
-        reraise=True,
-        stop=stop_after_attempt(HTTP_RETRY_ATTEMPTS),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-        retry=retry_if_exception(_is_retryable),
-        before_sleep=_log_retry,
-    )
-    async def _once() -> httpx.Response:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(
-                method,
-                url,
-                headers=req_headers or None,
-                **kwargs,
-            )
-            resp.raise_for_status()
-            return resp
+    may_retry = method.upper() in {"GET", "HEAD", "OPTIONS"} if retry_safe is None else retry_safe
 
     started = time.perf_counter()
     try:
-        resp = await _once()
+        for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+            try:
+                resp = await _client().request(
+                    method,
+                    url,
+                    headers=req_headers or None,
+                    timeout=timeout,
+                    **kwargs,
+                )
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPError as exc:
+                if not may_retry or not _is_retryable(exc) or attempt >= HTTP_RETRY_ATTEMPTS:
+                    raise
+                wait_s = _retry_delay(exc, attempt)
+                logger.warning(
+                    "http_retry",
+                    extra={
+                        "event": "http_retry",
+                        "remote_service": service,
+                        "url": url,
+                        "method": method,
+                        "attempt": attempt,
+                        "wait_s": round(wait_s, 3),
+                        "error_type": type(exc).__name__,
+                        "has_api_key": bool(api_key),
+                    },
+                )
+                await asyncio.sleep(wait_s)
     except httpx.HTTPError as exc:
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
         logger.error(
@@ -102,4 +158,4 @@ async def request(
         )
         raise ServiceUnavailableError(service, f"{type(exc).__name__}: {exc}", url=url) from exc
 
-    return resp
+    raise AssertionError("unreachable")

@@ -70,10 +70,10 @@ This stays free-text (not JSON-constrained) since it's natural conversational ou
 ```
 voice-ai-platform/
 ├── apps/
-│   ├── aaptor-frontend/          # Next.js — candidate web app
-│   ├── aaptor-admin/              # Next.js — test builder, candidate manager, results dashboard
-│   ├── racko-frontend/            # Next.js — CS web/mobile client
-│   └── racko-agent-console/       # Next.js — human agent handoff console
+│   └── voice-frontend/             # Neutral internal integration demo
+│
+├── packages/
+│   └── voice-ui/                  # Product-neutral LiveKit UI primitives
 │
 ├── services/
 │   ├── backend-api/               # FastAPI — auth, session mgmt, scoring, tool routing
@@ -109,6 +109,9 @@ voice-ai-platform/
 │
 └── proctoring/                     # Face detect, audio anomaly, tab/focus, screen capture
 ```
+
+Branded Aaptor and Racko applications live in separate product repositories and
+consume the platform APIs and versioned shared voice packages.
 
 ---
 

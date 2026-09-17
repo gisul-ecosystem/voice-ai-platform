@@ -10,8 +10,10 @@ import json
 import logging
 import time
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 from models.schemas import InterviewPlanRequest, InterviewOutline
+from security.auth import require_worker_service
 
 logger = logging.getLogger("backend-api.interviews")
 
@@ -19,11 +21,13 @@ router = APIRouter(prefix="/interviews", tags=["interviews"])
 
 OUTLINE_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "phases": {
             "type": "array",
             "items": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "name": {"type": "string"},
                     "duration_minutes": {"type": "integer"},
@@ -48,7 +52,11 @@ SYSTEM_PROMPT = (
 )
 
 
-@router.post("/plan", response_model=InterviewOutline)
+@router.post(
+    "/plan",
+    response_model=InterviewOutline,
+    dependencies=[Depends(require_worker_service)],
+)
 async def create_interview_plan(req: InterviewPlanRequest):
     llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:11434/v1").rstrip("/")
     timeout_s = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
@@ -60,18 +68,41 @@ async def create_interview_plan(req: InterviewPlanRequest):
     if use_openai and (":" in model or model.lower().startswith("qwen")):
         model = "gpt-4o-mini"
 
+    setup = req.interview_setup
+    setup_context = ""
+    if setup:
+        setup_context = (
+            f"\n\nINTERVIEW CONFIGURATION:\n"
+            f"Title: {setup.title}\nRole: {setup.role}\n"
+            f"Seniority: {setup.seniority}\nComplexity: {setup.difficulty}\n"
+            f"Total duration: {setup.durationMinutes} minutes\n"
+            f"Language: {setup.language}\n"
+            f"Competencies: {', '.join(setup.competencies)}\n"
+            "Build phases around these job-related competencies and keep their "
+            "combined duration within the configured total."
+        )
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"JD:\n{req.job_description}\n\nResume:\n{req.resume_text}",
+                "content": (
+                    f"JD:\n{req.job_description}\n\nResume:\n{req.resume_text}"
+                    f"{setup_context}"
+                ),
             },
         ],
     }
     if use_openai:
-        payload["response_format"] = {"type": "json_object"}
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "interview_outline",
+                "strict": True,
+                "schema": OUTLINE_SCHEMA,
+            },
+        }
         payload["messages"][0]["content"] += (
             " Reply with JSON only, matching keys phases[].name, "
             "duration_minutes, topics, source."
@@ -106,8 +137,18 @@ async def create_interview_plan(req: InterviewPlanRequest):
             raise HTTPException(status_code=502, detail=f"LLM service unreachable: {e}")
 
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
-    content = resp.json()["choices"][0]["message"]["content"]
-    parsed = json.loads(content)
+    try:
+        content = resp.json()["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        logger.error(
+            "interview_plan_invalid_provider_response",
+            extra={"event": "interview_plan_invalid_provider_response"},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="LLM returned an invalid interview plan",
+        ) from exc
     for phase in parsed.get("phases") or []:
         src = str(phase.get("source") or "generic").strip().lower()
         if "resume" in src:
@@ -116,7 +157,13 @@ async def create_interview_plan(req: InterviewPlanRequest):
             phase["source"] = "jd"
         else:
             phase["source"] = "generic"
-    outline = InterviewOutline(**parsed)
+    try:
+        outline = InterviewOutline(**parsed)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="LLM returned an invalid interview plan",
+        ) from exc
     logger.info(
         "stage_latency",
         extra={

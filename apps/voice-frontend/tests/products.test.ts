@@ -12,10 +12,12 @@ describe("product registry", () => {
     expect(JSON.stringify(products)).not.toContain("racko");
   });
 
-  it("uses interview context and camera only where needed", () => {
+  it("uses interview context while camera remains feature-gated", () => {
     expect(getProduct("interviewer").requiresInterviewContext).toBe(true);
-    expect(getProduct("interviewer").cameraEnabledByDefault).toBe(true);
+    expect(getProduct("interviewer").cameraAllowed).toBe(false);
+    expect(getProduct("interviewer").cameraEnabledByDefault).toBe(false);
     expect(getProduct("customer-support").requiresInterviewContext).toBe(false);
+    expect(getProduct("customer-support").cameraAllowed).toBe(false);
     expect(getProduct("customer-support").cameraEnabledByDefault).toBe(false);
   });
 });

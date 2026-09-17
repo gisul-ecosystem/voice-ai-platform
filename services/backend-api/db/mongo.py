@@ -22,3 +22,10 @@ def get_client() -> AsyncIOMotorClient:
 
 def get_db():
     return get_client()[os.getenv("MONGO_DB_NAME", "voiceai_pilot")]
+
+
+def close_client() -> None:
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None
