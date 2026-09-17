@@ -86,7 +86,11 @@ async def fetch_invoice_status(invoice_id: str) -> dict:
     return payload
 
 
-async def fetch_interview_plan(job_description: str, resume_text: str) -> dict:
+async def fetch_interview_plan(
+    job_description: str,
+    resume_text: str,
+    interview_setup: dict | None = None,
+) -> dict:
     started = time.perf_counter()
     resp = await request(
         "backend-api",
@@ -94,7 +98,11 @@ async def fetch_interview_plan(job_description: str, resume_text: str) -> dict:
         f"{BACKEND_API_URL}/interviews/plan",
         timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
         headers=_service_headers(),
-        json={"job_description": job_description, "resume_text": resume_text},
+        json={
+            "job_description": job_description,
+            "resume_text": resume_text,
+            "interview_setup": interview_setup,
+        },
     )
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
     outline = resp.json()
@@ -158,6 +166,7 @@ async def record_session_turn(
     speaker: str,
     text: str,
     phase_index: int,
+    sequence_number: int,
 ) -> None:
     await request(
         "backend-api",
@@ -170,5 +179,7 @@ async def record_session_turn(
             "speaker": speaker,
             "text": text,
             "phase_index": phase_index,
+            "sequence_number": sequence_number,
+            "is_final": True,
         },
     )

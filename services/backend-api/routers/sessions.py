@@ -106,15 +106,41 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         raise HTTPException(status_code=401, detail="Interview invitation is required")
 
     context_id = req.context_id
+    invitation_id: str | None = None
+    existing_session: dict | None = None
+    reservation_id: str | None = None
     if invitation:
         invited_context = invitation["context_id"]
         if context_id and context_id != invited_context:
             raise HTTPException(status_code=403, detail="Interview context mismatch")
-        if not await interviews.consume_invitation(invitation["jti"]):
-            raise HTTPException(
-                status_code=403,
-                detail="Interview invitation was already used or expired",
+        invitation_id = invitation["jti"]
+        scheduled = await interviews.get_scheduled_interview_by_invitation(
+            invitation_id
+        )
+        if scheduled:
+            if not req.idempotency_key:
+                raise HTTPException(
+                    status_code=422,
+                    detail="idempotency_key is required for scheduled interviews",
+                )
+            allowed = await interviews.validate_join_window(invitation_id)
+            if allowed is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Interview is outside its join window or consent is incomplete",
+                )
+            existing_session = await interviews.get_session_for_join(
+                invitation_id, req.idempotency_key
             )
+        if existing_session is None:
+            reservation_id = f"ses_{uuid.uuid4().hex}"
+            if not await interviews.reserve_invitation(
+                invitation_id, reservation_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Interview invitation was already used or expired",
+                )
         context_id = invited_context
         candidate_id = invitation["candidate_id"]
     else:
@@ -123,19 +149,30 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     if product.product_id == "interviewer" and not context_id:
         raise HTTPException(status_code=422, detail="Interview context is required")
 
-    room_name = f"interview-{uuid.uuid4().hex}"
+    room_name = (
+        str(existing_session["room"])
+        if existing_session
+        else f"interview-{uuid.uuid4().hex}"
+    )
     agent_name = product.agent_name
     ttl = max(5, min(int(os.getenv("LIVEKIT_TOKEN_TTL_MINUTES", "45")), 60))
     max_participants = max(2, min(int(os.getenv("LIVEKIT_ROOM_CAPACITY", "2")), 3))
     expires_at = interviews.utc_now() + timedelta(minutes=ttl)
     correlation_id = get_correlation_id()
-    session_id = await interviews.create_live_session(
-        product_id=product.product_id,
-        context_id=context_id,
-        candidate_id=candidate_id,
-        room=room_name,
-        correlation_id=correlation_id,
-        expires_at=expires_at,
+    session_id = (
+        str(existing_session["_id"])
+        if existing_session
+        else await interviews.create_live_session(
+            product_id=product.product_id,
+            context_id=context_id,
+            candidate_id=candidate_id,
+            room=room_name,
+            correlation_id=correlation_id,
+            expires_at=expires_at,
+            session_id=reservation_id,
+            invitation_id=invitation_id,
+            idempotency_key=req.idempotency_key,
+        )
     )
     metadata = _room_metadata(
         product=product,
@@ -148,21 +185,24 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     lk = api.LiveKitAPI(_http_url(ws_url), api_key, api_secret)
     try:
         try:
-            await lk.room.create_room(
-                api.CreateRoomRequest(
-                    name=room_name,
-                    metadata=metadata_json,
-                    max_participants=max_participants,
+            if existing_session is None:
+                await lk.room.create_room(
+                    api.CreateRoomRequest(
+                        name=room_name,
+                        metadata=metadata_json,
+                        max_participants=max_participants,
+                    )
                 )
-            )
-            await lk.agent_dispatch.create_dispatch(
-                api.CreateAgentDispatchRequest(
-                    room=room_name,
-                    agent_name=agent_name,
-                    metadata=metadata_json,
+                await lk.agent_dispatch.create_dispatch(
+                    api.CreateAgentDispatchRequest(
+                        room=room_name,
+                        agent_name=agent_name,
+                        metadata=metadata_json,
+                    )
                 )
-            )
         except api.TwirpError as exc:
+            if invitation_id and reservation_id:
+                await interviews.release_invitation(invitation_id, reservation_id)
             await interviews.transition_session(
                 session_id,
                 expected=("joining",),
@@ -183,8 +223,31 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
                 status_code=502,
                 detail=f"LiveKit could not create the interview room ({exc.code})",
             ) from exc
+        except Exception as exc:
+            if invitation_id and reservation_id:
+                await interviews.release_invitation(invitation_id, reservation_id)
+            await interviews.transition_session(
+                session_id,
+                expected=("joining",),
+                status="failed",
+                reason="livekit_transport_error",
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="LiveKit could not prepare the interview room",
+            ) from exc
     finally:
         await lk.aclose()
+
+    if (
+        invitation_id
+        and reservation_id
+        and not await interviews.commit_invitation(invitation_id, reservation_id)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Interview invitation could not be committed",
+        )
 
     token = (
         api.AccessToken(api_key, api_secret)

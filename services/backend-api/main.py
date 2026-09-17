@@ -22,6 +22,7 @@ from routers import (  # noqa: E402
     health,
     interview_contexts,
     interviews,
+    scheduled_interviews,
     session_events,
     sessions,
     tools,
@@ -50,6 +51,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(interview_contexts.router)
 app.include_router(interviews.router)
+app.include_router(scheduled_interviews.router)
 app.include_router(session_events.router)
 app.include_router(sessions.router)
 app.include_router(tools.router)

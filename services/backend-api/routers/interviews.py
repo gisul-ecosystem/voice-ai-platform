@@ -68,13 +68,29 @@ async def create_interview_plan(req: InterviewPlanRequest):
     if use_openai and (":" in model or model.lower().startswith("qwen")):
         model = "gpt-4o-mini"
 
+    setup = req.interview_setup
+    setup_context = ""
+    if setup:
+        setup_context = (
+            f"\n\nINTERVIEW CONFIGURATION:\n"
+            f"Title: {setup.title}\nRole: {setup.role}\n"
+            f"Seniority: {setup.seniority}\nComplexity: {setup.difficulty}\n"
+            f"Total duration: {setup.durationMinutes} minutes\n"
+            f"Language: {setup.language}\n"
+            f"Competencies: {', '.join(setup.competencies)}\n"
+            "Build phases around these job-related competencies and keep their "
+            "combined duration within the configured total."
+        )
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"JD:\n{req.job_description}\n\nResume:\n{req.resume_text}",
+                "content": (
+                    f"JD:\n{req.job_description}\n\nResume:\n{req.resume_text}"
+                    f"{setup_context}"
+                ),
             },
         ],
     }

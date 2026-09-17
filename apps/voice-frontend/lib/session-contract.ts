@@ -5,12 +5,31 @@ export type PublicSessionRequest = {
   participantName: string;
   jobDescription?: string;
   resumeText?: string;
+  invitationToken?: string;
+  idempotencyKey?: string;
+  candidateEmail?: string;
+  startsAt?: string;
+  timezone?: string;
+  interviewSetup?: {
+    title: string;
+    role: string;
+    seniority: string;
+    difficulty: string;
+    durationMinutes: number;
+    language: string;
+    competencies: string[];
+    maxProbesPerPhase: number;
+    monitoringEnabled: boolean;
+    recordingEnabled: boolean;
+  };
 };
 
 export type BackendSessionPayload = {
   product_id: ProductId;
   name: string;
   context_id?: string;
+  invitation_token?: string;
+  idempotency_key?: string;
 };
 
 export type SessionCredentials = {
@@ -38,6 +57,8 @@ export function buildBackendSessionPayload(
 
   if (input.productId === "interviewer" && contextId)
     payload.context_id = contextId;
+  if (input.invitationToken) payload.invitation_token = input.invitationToken;
+  if (input.idempotencyKey) payload.idempotency_key = input.idempotencyKey;
 
   return payload;
 }

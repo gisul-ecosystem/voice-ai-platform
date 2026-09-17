@@ -44,6 +44,18 @@ describe("same-origin session proxy", () => {
           participantName: "Priya",
           jobDescription: "Backend role",
           resumeText: "Python",
+          interviewSetup: {
+            title: "Backend interview",
+            role: "Backend Engineer",
+            seniority: "mid",
+            difficulty: "applied",
+            durationMinutes: 30,
+            language: "English",
+            competencies: ["Problem solving", "Python"],
+            maxProbesPerPhase: 2,
+            monitoringEnabled: true,
+            recordingEnabled: false,
+          },
           llm_api_key: "browser-secret",
           agent_name: "aaptor",
         }),
@@ -56,6 +68,18 @@ describe("same-origin session proxy", () => {
     expect(contextPayload).toEqual({
       job_description: "Backend role",
       resume_text: "Python",
+      interview_setup: {
+        title: "Backend interview",
+        role: "Backend Engineer",
+        seniority: "mid",
+        difficulty: "applied",
+        durationMinutes: 30,
+        language: "English",
+        competencies: ["Problem solving", "Python"],
+        maxProbesPerPhase: 2,
+        monitoringEnabled: true,
+        recordingEnabled: false,
+      },
     });
     const forwarded = JSON.parse(upstreamFetch.mock.calls[1][1].body);
     expect(forwarded).toMatchObject({

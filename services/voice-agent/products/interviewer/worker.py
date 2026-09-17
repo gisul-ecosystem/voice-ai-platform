@@ -78,7 +78,15 @@ async def plan_inputs_from_job(ctx: JobContext) -> tuple[str, str]:
 
 async def build_outline(ctx: JobContext) -> dict:
     try:
-        job_description, resume = await plan_inputs_from_job(ctx)
+        context_id = context_id_from_job(ctx)
+        context = await fetch_interview_context(context_id) if context_id else {}
+        if context:
+            job_description = str(context.get("job_description") or "").strip()
+            resume = str(context.get("resume_text") or "").strip()
+            interview_setup = context.get("interview_setup")
+        else:
+            job_description, resume = await plan_inputs_from_job(ctx)
+            interview_setup = None
     except ServiceUnavailableError:
         logger.exception(
             "interview_context_fetch_failed",
@@ -96,7 +104,11 @@ async def build_outline(ctx: JobContext) -> dict:
         )
         return GENERIC_OUTLINE
     try:
-        return await fetch_interview_plan(job_description, resume)
+        return await fetch_interview_plan(
+            job_description,
+            resume,
+            interview_setup if isinstance(interview_setup, dict) else None,
+        )
     except ServiceUnavailableError:
         logger.exception("stage1_plan_failed", extra={"event": "stage1_plan_failed"})
         return GENERIC_OUTLINE
@@ -166,6 +178,14 @@ async def entrypoint(ctx: JobContext) -> None:
                     "initial_phase_index": phase_index,
                     "initial_probe_count": probe_count,
                     "candidate_turns": candidate_turns,
+                    "initial_sequence_number": max(
+                        (
+                            int(turn.get("sequence_number", 0))
+                            for turn in turns
+                            if isinstance(turn, dict)
+                        ),
+                        default=0,
+                    ),
                 }
         except ServiceUnavailableError:
             logger.exception(
@@ -181,10 +201,24 @@ async def entrypoint(ctx: JobContext) -> None:
         if session_id:
             await report_session_status(session_id, status, reason=reason)
 
+    max_probes: int | None = None
+    context_id = context_id_from_job(ctx)
+    if context_id:
+        try:
+            setup = (await fetch_interview_context(context_id)).get("interview_setup")
+            if isinstance(setup, dict):
+                max_probes = int(setup.get("maxProbesPerPhase", 2))
+        except (ServiceUnavailableError, TypeError, ValueError):
+            logger.warning(
+                "interview_setup_unavailable",
+                extra={"event": "interview_setup_unavailable"},
+            )
+
     await session.start(
         agent=AaptorAgent(
             outline,
             clients.llm,
+            max_probes_per_phase=max_probes,
             initial_state=initial_state,
             turn_sink=turn_sink,
             status_sink=status_sink,
