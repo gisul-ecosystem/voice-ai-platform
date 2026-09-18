@@ -62,16 +62,17 @@ SYSTEM_PROMPT = (
     "resume, produce a structured interview outline the live interviewer must "
     "follow in order. Each phase has name, duration_minutes, topics, source, "
     "and intent. Intent tells the live interviewer what kind of question to ask. "
-    "Required order, do not skip: "
+    "Required order, do not skip or mix: "
     "1) intent=intro — short self-introduction only. "
     "2) intent=resume_project — every named resume project, product, or "
-    "substantial piece of work, in resume order. One phase may list several "
-    "projects as topics; the interviewer will deep-dive them one by one. "
-    "3) intent=jd_requirement — every explicit job requirement that is not "
-    "already a resume project. If the JD mentions DSA, data structures, "
-    "algorithms, coding rounds, system design, SQL, or similar, those MUST "
-    "appear as topics (for example a topic named DSA). "
-    "4) intent=role_fit — only if minutes remain after projects and JD topics. "
+    "substantial piece of work, in resume order. Deep-dive projects here only. "
+    "3) intent=jd_requirement — required job skills first (languages, APIs, "
+    "SQL, system design, listed competencies). These are independent of resume "
+    "projects. Do not write skill topics as 'DSA in Project X'. "
+    "4) If the JD mentions DSA, data structures, algorithms, or a coding round, "
+    "add a separate DSA topic (or a later jd_requirement phase named DSA). "
+    "DSA questions are standalone algorithm/coding questions, not project follow-ups. "
+    "5) intent=role_fit — only if minutes remain after projects, skills, and DSA. "
     "The live interviewer invents questions from resume, JD, and the last "
     "answer; you only plan coverage and intent. "
     "Recruiter length is 15, 30, or 45 minutes. duration_minutes must sum to it. "
@@ -133,7 +134,13 @@ def extract_jd_requirement_topics(
     for pattern, label in _JD_TOPIC_PATTERNS:
         if pattern.search(text):
             add(label)
-    return found[:12]
+    skills = [
+        item
+        for item in found
+        if "dsa" not in item.lower() and "algorithm" not in item.lower()
+    ]
+    dsa = [item for item in found if item not in skills]
+    return (skills + dsa)[:12]
 
 
 def _merge_topics(existing: list, extra: list[str]) -> list[str]:
@@ -224,9 +231,9 @@ async def create_interview_plan(req: InterviewPlanRequest):
             f"Total duration: {setup.durationMinutes} minutes\n"
             f"Language: {setup.language}\n"
             f"Competencies: {', '.join(setup.competencies)}\n"
-            "Set intent on every phase. Order: intro, then resume_project, "
-            "then jd_requirement (include DSA if the JD asks for it), then "
-            "role_fit only if time remains. "
+            "Set intent on every phase. Order: intro, resume projects, then "
+            "independent job skills, then standalone DSA if the JD asks for it, "
+            "then role_fit only if time remains. "
             f"Phase duration_minutes MUST sum to exactly {setup.durationMinutes} minutes. "
             "List every resume project. Compact 15-minute plans by asking fewer "
             "questions per project, not by dropping projects or JD requirements. "

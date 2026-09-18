@@ -60,7 +60,6 @@ async def test_aaptor_forces_advance_after_probe_limit() -> None:
 
     await agent.generate_next_question("Answer one")
     await agent.generate_next_question("Answer two")
-    await agent.generate_next_question("Answer three")
 
     assert agent.phase_index == 1
     assert agent.probe_count == 0
@@ -68,7 +67,6 @@ async def test_aaptor_forces_advance_after_probe_limit() -> None:
         "I already introduced myself.",
         "Answer one",
         "Answer two",
-        "Answer three",
     ]
 
 

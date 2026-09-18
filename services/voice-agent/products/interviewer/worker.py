@@ -20,7 +20,12 @@ from clients.llm import get_llm_client
 from clients.stt import get_stt_client
 from clients.tts import get_tts_client
 from products.interviewer.agent import AaptorAgent
-from products.interviewer.flow import extract_jd_requirements, extract_resume_projects, infer_phase_intent
+from products.interviewer.flow import (
+    extract_jd_requirements,
+    extract_resume_projects,
+    infer_phase_intent,
+    order_job_topics,
+)
 from voice_platform.runtime import (
     attach_session_metrics,
     build_agent_session,
@@ -166,7 +171,7 @@ def enrich_outline_with_jd(
             {
                 "name": "job requirements",
                 "duration_minutes": 8,
-                "topics": missing,
+                "topics": order_job_topics(missing),
                 "source": "jd",
                 "intent": "jd_requirement",
             },
@@ -181,7 +186,7 @@ def enrich_outline_with_jd(
             continue
         seen.add(key.lower())
         merged.append(key)
-    target["topics"] = merged
+    target["topics"] = order_job_topics(merged)
     target["intent"] = "jd_requirement"
     return {**outline, "phases": phases}
 

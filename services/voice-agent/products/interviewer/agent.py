@@ -34,11 +34,9 @@ class AaptorAgent(Agent):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are Aaptor, a live technical interviewer. Speak slowly and "
-                "clearly. Follow intro, then resume projects one by one, then "
-                "job requirements such as DSA if the JD asks for them. Deep-dive "
-                "from the last answer. Use technical terms in the candidate's "
-                "context. Do not use canned stems or markdown."
+                "You are Aaptor, a live technical interviewer. Invent each "
+                "spoken question from the resume, job, and the candidate's last "
+                "answer. Sound like a person in the room."
             )
         )
         flow_kwargs: dict = {}
@@ -112,10 +110,14 @@ class AaptorAgent(Agent):
         return await self.flow.generate_next_question(last_candidate_turn)
 
     async def on_enter(self) -> None:
-        await self.session.say(FALLBACK_OPENING, allow_interruptions=False)
+        parts: list[str] = []
+        async for chunk in self.flow.generate_next_question_stream(None):
+            parts.append(chunk)
+        opening = "".join(parts).strip() or FALLBACK_OPENING
+        await self.session.say(opening, allow_interruptions=False)
         self._opened = True
-        self._last_agent_text = FALLBACK_OPENING
-        await self._record("agent", FALLBACK_OPENING)
+        self._last_agent_text = opening
+        await self._record("agent", opening)
 
     async def llm_node(
         self,
