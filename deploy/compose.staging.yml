@@ -26,6 +26,20 @@ services:
       start_period: 20s
     logging: *default-logging
 
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 5s
+    logging: *default-logging
+
   context-engine:
     image: ${IMAGE_REGISTRY}/context-engine:${IMAGE_TAG}
     restart: unless-stopped
@@ -52,8 +66,13 @@ services:
     environment:
       APP_ENV: production
       CONTEXT_ENGINE_URL: http://context-engine:5555
+      # Hot interview-brain layer (override only if backend-api.env already sets REDIS_URL)
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      INTERVIEW_BRAIN_REDIS_TTL_SECONDS: ${INTERVIEW_BRAIN_REDIS_TTL_SECONDS:-21600}
     depends_on:
       mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       context-engine:
         condition: service_healthy
@@ -146,5 +165,6 @@ services:
 
 volumes:
   mongo_data:
+  redis_data:
   caddy_data:
   caddy_config:
