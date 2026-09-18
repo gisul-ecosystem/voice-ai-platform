@@ -25,7 +25,7 @@ from products.interviewer.brain_runtime import (
     definition_id_for_session,
     load_brain_initial_state,
 )
-from products.interviewer.flow import extract_resume_projects
+from products.interviewer.flow import build_candidate_profile, extract_resume_projects
 from voice_platform.runtime import (
     attach_session_metrics,
     build_agent_session,
@@ -494,6 +494,12 @@ async def entrypoint(ctx: JobContext) -> None:
                 "interview_definition_unavailable",
                 extra={"event": "interview_definition_unavailable"},
             )
+    candidate_profile = build_candidate_profile(
+        resume_text=resume_text,
+        interview_setup=context.get("interview_setup") if isinstance(context, dict) else None,
+        definition=interview_definition,
+        existing=context.get("candidate_profile") if isinstance(context, dict) else None,
+    )
     await session.start(
         agent=AaptorAgent(
             outline,
@@ -508,6 +514,7 @@ async def entrypoint(ctx: JobContext) -> None:
             status_sink=status_sink,
             brain_bridge=brain_bridge,
             interview_definition=interview_definition,
+            candidate_profile=candidate_profile,
         ),
         room=ctx.room,
     )

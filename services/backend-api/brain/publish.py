@@ -1,24 +1,16 @@
 """Publication validation and immutable definition versioning."""
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import datetime, timezone
 
 from brain.defaults import default_question_ladder
+from brain.safety import PROHIBITED_PATTERNS
 from models.brain import (
     InterviewDefinitionDraft,
     InterviewDefinitionVersion,
     PublicationIssue,
     PublicationValidationResult,
-)
-
-_PROHIBITED_PATTERNS = (
-    re.compile(r"\b(age|birthday|birth ?date)\b", re.I),
-    re.compile(r"\b(marital|married|spouse|children|pregnant)\b", re.I),
-    re.compile(r"\b(religion|caste|race|ethnicity|nationality)\b", re.I),
-    re.compile(r"\b(disability|medical|illness|health condition)\b", re.I),
-    re.compile(r"\b(gender|sex orientation|sexual orientation)\b", re.I),
 )
 
 
@@ -155,7 +147,7 @@ def validate_for_publication(
                     field=f"scenario_bank.{scenario.id}.approved",
                 )
             )
-        for pattern in _PROHIBITED_PATTERNS:
+        for pattern in PROHIBITED_PATTERNS:
             if pattern.search(scenario.scenario):
                 issues.append(
                     PublicationIssue(
@@ -167,7 +159,7 @@ def validate_for_publication(
                 break
 
     for probe in draft.allowed_probes:
-        for pattern in _PROHIBITED_PATTERNS:
+        for pattern in PROHIBITED_PATTERNS:
             if pattern.search(probe):
                 issues.append(
                     PublicationIssue(

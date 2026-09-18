@@ -34,6 +34,7 @@ class AaptorAgent(Agent):
         status_sink: Callable[..., Awaitable[None]] | None = None,
         brain_bridge: BrainSessionBridge | None = None,
         interview_definition: dict | None = None,
+        candidate_profile: dict | None = None,
     ) -> None:
         super().__init__(
             instructions=(
@@ -58,6 +59,8 @@ class AaptorAgent(Agent):
             flow_kwargs["target_duration_minutes"] = target_duration_minutes
         if interview_definition is not None:
             flow_kwargs["interview_definition"] = interview_definition
+        if candidate_profile is not None:
+            flow_kwargs["candidate_profile"] = candidate_profile
         restored_state = dict(initial_state or {})
         self._sequence_number = int(restored_state.pop("initial_sequence_number", 0))
         # Brain metadata is not InterviewFlow constructor input.
@@ -101,11 +104,27 @@ class AaptorAgent(Agent):
         if self._brain is None or not text.strip():
             return
         if speaker == "candidate" and turn_id:
-            await self._brain.on_candidate_answer(text.strip(), turn_id=turn_id)
+            await self._brain.on_candidate_answer(
+                text.strip(),
+                turn_id=turn_id,
+                usability=getattr(self.flow, "last_answer_usability", "usable"),
+            )
         elif speaker == "agent":
             await self._brain.on_agent_question(
                 text.strip(),
                 phase_index=self.phase_index,
+                competency_id=getattr(self.flow, "last_question_competency_id", None),
+                intent=getattr(self.flow, "last_question_intent", None),
+                depth=getattr(self.flow, "last_question_depth", None),
+                source_claim_ids=getattr(self.flow, "last_question_claim_ids", None),
+                prompt_version=getattr(self.flow, "_prompt_version", lambda: None)(),
+                definition_id=self._brain.definition_id,
+                policy_action=(
+                    getattr(getattr(self.flow, "last_policy_decision", None), "action", None)
+                ),
+                validator_ok=getattr(self.flow, "last_validator_ok", None),
+                validator_reasons=getattr(self.flow, "last_validator_reasons", None),
+                raw_model_output=getattr(self.flow, "last_raw_model_output", None),
             )
         await self._brain.checkpoint(self.flow)
 
@@ -167,6 +186,7 @@ class AaptorAgent(Agent):
     ):
         candidate_turn = last_text(chat_ctx)
         opening = not self._opened
+        candidate_brain_turn_id = None
         if opening:
             self._opened = True
             candidate_turn = None
@@ -189,19 +209,25 @@ class AaptorAgent(Agent):
             return
         elif candidate_turn:
             turn_id = await self._record("candidate", candidate_turn)
-            await self._persist_brain_after_exchange(
-                speaker="candidate",
-                text=candidate_turn,
-                turn_id=turn_id,
-            )
+            candidate_brain_turn_id = turn_id
         parts: list[str] = []
         async for chunk in self.flow.generate_next_question_stream(candidate_turn):
             parts.append(chunk)
             yield chunk
         question = "".join(parts).strip()
         if not question:
-            question = FALLBACK_FOLLOWUP
+            question = (
+                self.flow._fallback_spoken_question(self.flow.last_policy_decision)
+                if getattr(self.flow, "policy_mode", False)
+                else FALLBACK_FOLLOWUP
+            )
             yield question
+        if candidate_turn and candidate_brain_turn_id:
+            await self._persist_brain_after_exchange(
+                speaker="candidate",
+                text=candidate_turn,
+                turn_id=candidate_brain_turn_id,
+            )
         if question:
             self._last_agent_text = question
             turn_id = await self._record("agent", question)

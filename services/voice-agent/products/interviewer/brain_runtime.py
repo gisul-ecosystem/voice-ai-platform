@@ -46,21 +46,43 @@ def flow_to_brain_state(
         section = "opening"
     elif len(flow.candidate_turns) == 1 and flow.probe_count <= 1:
         section = "candidate_map"
+    policy = getattr(flow, "last_policy_decision", None)
+    phase = flow.current_phase() if hasattr(flow, "current_phase") else {}
+    competency_id = (
+        getattr(flow, "last_question_competency_id", None)
+        or (getattr(policy, "competency_id", None) if policy else None)
+        or phase.get("competency_id")
+    )
+    profile = getattr(flow, "candidate_profile", None) or {}
+    claim_ids = [
+        str(item.get("claim_id"))
+        for item in (profile.get("claims") or [])
+        if isinstance(item, dict) and item.get("claim_id")
+    ]
     return {
         "session_id": session_id,
         "definition_id": definition_id,
         "state_version": max(0, state_version),
         "current_section": section,
-        "current_competency_id": None,
-        "current_depth": min(5, max(1, int(flow.probe_count) + 1)),
+        "current_competency_id": competency_id,
+        "current_depth": min(
+            5,
+            max(1, int(getattr(flow, "last_question_depth", 0) or flow.probe_count + 1)),
+        ),
         "active_question_id": active_question_id,
         "asked_question_ids": list(asked_question_ids),
-        "candidate_claim_ids": [],
-        "coverage": {},
-        "consecutive_unusable_answers": 0,
+        "candidate_claim_ids": claim_ids,
+        "coverage": dict(getattr(flow, "coverage", None) or {}),
+        "consecutive_unusable_answers": max(
+            0, int(getattr(flow, "consecutive_unusable", 0) or 0)
+        ),
         "elapsed_seconds": max(0, int(time.monotonic() - started_monotonic)),
         "last_processed_turn_id": None,
-        "next_action": "CLOSE_INTERVIEW" if flow.completed else None,
+        "next_action": (
+            "CLOSE_INTERVIEW"
+            if flow.completed
+            else (getattr(policy, "action", None) if policy else None)
+        ),
     }
 
 
@@ -100,6 +122,7 @@ def brain_bundle_to_initial_state(bundle: dict[str, Any] | None) -> dict[str, An
         "brain_state_version": int(state.get("state_version") or 0),
         "brain_active_question_id": active_question_id,
         "brain_asked_question_ids": [qid for qid in asked_question_ids if qid],
+        "initial_coverage": state.get("coverage") or {},
     }
     return restored
 
@@ -124,16 +147,39 @@ class BrainSessionBridge:
         self._started = time.monotonic()
         self._pending_answer_turn_ids: list[str] = []
 
-    async def on_agent_question(self, text: str, *, phase_index: int) -> str | None:
+    async def on_agent_question(
+        self,
+        text: str,
+        *,
+        phase_index: int,
+        competency_id: str | None = None,
+        intent: str | None = None,
+        depth: int | None = None,
+        source_claim_ids: list[str] | None = None,
+        prompt_version: str | None = None,
+        definition_id: str | None = None,
+        policy_action: str | None = None,
+        validator_ok: bool | None = None,
+        validator_reasons: list[str] | None = None,
+        raw_model_output: str | None = None,
+    ) -> str | None:
         question_id = f"q_{uuid.uuid4().hex[:16]}"
         try:
             await record_brain_question(
                 self.session_id,
                 question_id=question_id,
                 text=text,
-                intent="live_question",
-                depth=min(5, max(1, phase_index + 1)),
+                intent=(intent or "live_question"),
+                depth=min(5, max(1, int(depth if depth is not None else phase_index + 1))),
+                competency_id=competency_id,
+                source_claim_ids=list(source_claim_ids or []),
                 status="spoken",
+                prompt_version=prompt_version,
+                definition_id=definition_id or self.definition_id,
+                policy_action=policy_action,
+                validator_ok=validator_ok,
+                validator_reasons=list(validator_reasons or []),
+                raw_model_output=raw_model_output,
             )
         except ServiceUnavailableError:
             logger.warning(
@@ -145,10 +191,21 @@ class BrainSessionBridge:
         self.asked_question_ids.append(question_id)
         return question_id
 
-    async def on_candidate_answer(self, text: str, *, turn_id: str) -> None:
+    async def on_candidate_answer(
+        self,
+        text: str,
+        *,
+        turn_id: str,
+        usable: bool | None = None,
+        usability: str | None = None,
+    ) -> None:
         if not self.active_question_id:
             return
         answer_id = f"a_{uuid.uuid4().hex[:16]}"
+        resolved_usability = usability or "usable"
+        resolved_usable = True if usable is None else bool(usable)
+        if usability:
+            resolved_usable = usability == "usable"
         try:
             await record_brain_answer(
                 self.session_id,
@@ -156,8 +213,8 @@ class BrainSessionBridge:
                 question_id=self.active_question_id,
                 turn_ids=[turn_id],
                 final_transcript=text,
-                usable=True,
-                usability="usable",
+                usable=resolved_usable,
+                usability=resolved_usability,
             )
         except ServiceUnavailableError:
             logger.warning(

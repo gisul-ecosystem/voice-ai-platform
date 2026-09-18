@@ -204,6 +204,13 @@ async def record_brain_question(
     depth: int = 1,
     competency_id: str | None = None,
     status: str = "spoken",
+    source_claim_ids: list[str] | None = None,
+    prompt_version: str | None = None,
+    definition_id: str | None = None,
+    policy_action: str | None = None,
+    validator_ok: bool | None = None,
+    validator_reasons: list[str] | None = None,
+    raw_model_output: str | None = None,
 ) -> None:
     payload: dict = {
         "question_id": question_id,
@@ -215,6 +222,20 @@ async def record_brain_question(
     }
     if competency_id:
         payload["competency_id"] = competency_id
+    if source_claim_ids:
+        payload["source_claim_ids"] = list(source_claim_ids)
+    if prompt_version:
+        payload["prompt_version"] = prompt_version
+    if definition_id:
+        payload["definition_id"] = definition_id
+    if policy_action:
+        payload["policy_action"] = policy_action
+    if validator_ok is not None:
+        payload["validator_ok"] = validator_ok
+    if validator_reasons:
+        payload["validator_reasons"] = list(validator_reasons)[:20]
+    if raw_model_output:
+        payload["raw_model_output"] = raw_model_output[:2000]
     await request(
         "backend-api",
         "POST",

@@ -6,7 +6,10 @@ from pydantic import BaseModel, Field
 
 from brain.compiler import compile_blueprint
 from brain.documents import DocumentIngestError, extract_document_text
-from brain.extractors import extract_candidate_profile, extract_job_intelligence
+from brain.llm_extract import (
+    extract_candidate_profile_async,
+    extract_job_intelligence_async,
+)
 from brain.publish import publish_definition, validate_for_publication
 from db import definitions
 from models.brain import (
@@ -86,7 +89,7 @@ class PublishBlueprintRequest(BaseModel):
 )
 async def extract_jd(req: ExtractJobRequest) -> JobIntelligence:
     try:
-        return extract_job_intelligence(
+        return await extract_job_intelligence_async(
             req.job_description,
             target_level=req.target_level,
             domain=req.domain,
@@ -102,7 +105,7 @@ async def extract_jd(req: ExtractJobRequest) -> JobIntelligence:
 )
 async def extract_resume(req: ExtractResumeRequest) -> CandidateProfile:
     try:
-        return extract_candidate_profile(req.resume_text)
+        return await extract_candidate_profile_async(req.resume_text)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -138,13 +141,13 @@ async def ingest_document(
             level: SeniorityLevel | None = None
             if target_level in {"intern", "junior", "mid", "senior", "lead"}:
                 level = target_level  # type: ignore[assignment]
-            job_intelligence = extract_job_intelligence(
+            job_intelligence = await extract_job_intelligence_async(
                 extracted.text,
                 target_level=level,
                 domain=domain,
             )
         else:
-            candidate_profile = extract_candidate_profile(extracted.text)
+            candidate_profile = await extract_candidate_profile_async(extracted.text)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

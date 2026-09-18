@@ -12,6 +12,10 @@ from brain.defaults import (
     default_time_policy_for_duration,
 )
 from brain.extractors import extract_candidate_profile, extract_job_intelligence
+from brain.llm_extract import (
+    extract_candidate_profile_async,
+    extract_job_intelligence_async,
+)
 from brain.publish import publish_definition, validate_for_publication
 from brain import state_store
 
@@ -27,7 +31,9 @@ __all__ = [
     "default_question_ladder",
     "default_time_policy_for_duration",
     "extract_candidate_profile",
+    "extract_candidate_profile_async",
     "extract_job_intelligence",
+    "extract_job_intelligence_async",
     "publish_definition",
     "validate_for_publication",
     "state_store",

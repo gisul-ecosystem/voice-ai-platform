@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from brain import scoring_service
 from db import interviews
+from models.brain import ScorecardReviewRequest
 from models.schemas import SessionStatusRequest, SessionTurnRequest
 from security.auth import require_bff_service, require_worker_service
 
@@ -71,7 +72,8 @@ async def read_session_scorecard(session_id: str) -> dict:
             raise HTTPException(status_code=404, detail="Scorecard not found")
     payload = dict(stored)
     payload.pop("_id", None)
-    return payload
+    reviewed = await scorecards.get_scorecard_with_review(session_id)
+    return reviewed or payload
 
 
 @router.post(
@@ -89,6 +91,33 @@ async def generate_session_scorecard(session_id: str) -> dict:
             detail="Scorecard could not be generated (missing definition or evidence)",
         )
     return result
+
+
+@router.post(
+    "/{session_id}/scorecard/review",
+    dependencies=[Depends(require_bff_service)],
+)
+async def review_session_scorecard(session_id: str, req: ScorecardReviewRequest) -> dict:
+    session = await interviews.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    try:
+        return await scoring_service.apply_scorecard_review(session_id, req)
+    except ValueError as exc:
+        if str(exc) == "scorecard_not_found":
+            raise HTTPException(status_code=404, detail="Scorecard not found") from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{session_id}/quality-metrics",
+    dependencies=[Depends(require_bff_service)],
+)
+async def read_session_quality_metrics(session_id: str) -> dict:
+    metrics = await scoring_service.get_session_quality_metrics(session_id)
+    if metrics is None:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    return metrics
 
 
 @router.post(

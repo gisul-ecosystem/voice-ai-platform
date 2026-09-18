@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from products.interviewer.policy import (
     ASK_BASELINE,
+    CLARIFY_CURRENT_ANSWER,
     CLOSE_INTERVIEW,
     MAP_CANDIDATE_BACKGROUND,
     MOVE_TO_NEXT_COMPETENCY,
@@ -117,3 +118,29 @@ def test_answer_usability_classifier() -> None:
     assert classify_answer_usability("ok") == "too_short"
     assert classify_answer_usability("I don't know") == "explicit_unknown"
     assert classify_answer_usability("I owned the billing API retries.") == "usable"
+
+
+def test_non_answer_policy_thresholds_are_honored() -> None:
+    clarify = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=4,
+            candidate_turn_count=4,
+            phase_name="Problem solving",
+            consecutive_unusable=1,
+            clarify_after=1,
+            change_topic_after=4,
+        )
+    )
+    assert clarify.action == CLARIFY_CURRENT_ANSWER
+    moved = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=4,
+            candidate_turn_count=4,
+            phase_name="Problem solving",
+            consecutive_unusable=4,
+            clarify_after=1,
+            change_topic_after=4,
+            has_uncovered_competencies=True,
+        )
+    )
+    assert moved.action == MOVE_TO_NEXT_COMPETENCY
