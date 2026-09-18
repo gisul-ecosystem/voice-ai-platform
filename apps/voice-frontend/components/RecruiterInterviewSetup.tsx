@@ -115,7 +115,7 @@ export function RecruiterInterviewSetup() {
   }
 
   return (
-    <>
+    <div className="recruiter-setup-shell">
       {error ? <div className="alert" role="alert">{error}</div> : null}
       {saving ? (
         <div className="center-state" role="status">
@@ -129,6 +129,6 @@ export function RecruiterInterviewSetup() {
           onContinue={schedule}
         />
       )}
-    </>
+    </div>
   );
 }
