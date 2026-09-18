@@ -45,6 +45,19 @@ function ensureFutureStart(value: string): string {
   return value;
 }
 
+function itemTexts(items: unknown): string[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object" && "text" in item) {
+        return String((item as { text?: unknown }).text || "").trim();
+      }
+      return "";
+    })
+    .filter(Boolean);
+}
+
 function summarizeIngest(payload: Record<string, unknown>): IngestSummary {
   const kind = payload.kind === "resume" ? "resume" : "jd";
   const filename =
@@ -59,16 +72,19 @@ function summarizeIngest(payload: Record<string, unknown>): IngestSummary {
     const job = payload.jobIntelligence as {
       role?: { title?: string; target_level?: string };
       mandatory_requirements?: unknown[];
+      preferred_requirements?: unknown[];
       skills?: unknown[];
     };
     if (job.role?.title) highlights.push(`Role: ${job.role.title}`);
     if (job.role?.target_level) highlights.push(`Level: ${job.role.target_level}`);
-    highlights.push(
-      `${Array.isArray(job.mandatory_requirements) ? job.mandatory_requirements.length : 0} requirements`,
-    );
-    highlights.push(
-      `${Array.isArray(job.skills) ? job.skills.length : 0} skills`,
-    );
+    const mustHaves = itemTexts(job.mandatory_requirements);
+    const preferred = itemTexts(job.preferred_requirements);
+    const skills = itemTexts(job.skills);
+    highlights.push(`${mustHaves.length} must-haves`);
+    highlights.push(`${preferred.length} preferred`);
+    highlights.push(`${skills.length} skills`);
+    if (mustHaves[0]) highlights.push(`Must-have: ${mustHaves[0]}`);
+    if (preferred[0]) highlights.push(`Preferred: ${preferred[0]}`);
   }
   if (
     kind === "resume" &&
@@ -314,8 +330,22 @@ export function SetupForm({
         ) {
           const job = payload.jobIntelligence as {
             role?: { title?: string };
+            mandatory_requirements?: unknown[];
+            skills?: unknown[];
           };
           if (job.role?.title && !role.trim()) setRole(job.role.title);
+          const suggested = [
+            ...itemTexts(job.mandatory_requirements),
+            ...itemTexts(job.skills),
+          ]
+            .filter((item, index, all) => all.findIndex((other) => other.toLowerCase() === item.toLowerCase()) === index)
+            .slice(0, 6);
+          if (
+            suggested.length &&
+            competencies === "Problem solving, Role expertise, Communication"
+          ) {
+            setCompetencies(suggested.join(", "));
+          }
         }
       } else {
         setResumeText(payload.text);
@@ -589,7 +619,8 @@ export function SetupForm({
           <div className="field">
             <label htmlFor="competencies">Competencies (comma-separated)</label>
             <p className="field-help">
-              Focus the interview on three to six measurable areas.
+              Must-haves from the JD should stay required. Preferred skills can
+              be listed but do not lower the job bar.
             </p>
             <input id="competencies" required value={competencies}
               onChange={(event) => setCompetencies(event.target.value)}
