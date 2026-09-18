@@ -25,16 +25,13 @@ from products.interviewer.brain_runtime import (
     definition_id_for_session,
     load_brain_initial_state,
 )
-<<<<<<< HEAD
 from products.interviewer.flow import (
+    build_candidate_profile,
     extract_jd_requirements,
     extract_resume_projects,
     infer_phase_intent,
     order_job_topics,
 )
-=======
-from products.interviewer.flow import build_candidate_profile, extract_resume_projects
->>>>>>> dev
 from voice_platform.runtime import (
     attach_session_metrics,
     build_agent_session,

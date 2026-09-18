@@ -218,7 +218,6 @@ def extract_resume_projects(resume_text: str) -> list[str]:
     return unique
 
 
-<<<<<<< HEAD
 INTENT_VALUES = {"intro", "resume_project", "jd_requirement", "role_fit"}
 _JD_TOPIC_PATTERNS = (
     (
@@ -336,7 +335,6 @@ def resume_project_excerpt(resume_text: str, project_name: str, *, limit: int = 
                 chunks.append(text)
     excerpt = " ".join(chunks)
     return clip_source_text(excerpt, limit) if excerpt else clip_source_text(cleaned, limit)
-=======
 def build_candidate_profile(
     *,
     resume_text: str = "",
@@ -377,7 +375,6 @@ def build_candidate_profile(
     if not profile.get("experience_summary"):
         profile["experience_summary"] = {"profile_type": "unknown"}
     return profile
->>>>>>> dev
 
 
 def format_resume_brief(
@@ -531,13 +528,11 @@ class InterviewFlow:
             ]
             self.competencies = [name for name in names if name] or self.competencies
         self.resume_projects = extract_resume_projects(resume_text)
-<<<<<<< HEAD
         self.jd_requirements = extract_jd_requirements(
             job_description, self.competencies
         )
         self.focus_item = ""
         self._touched_topics: set[str] = set()
-=======
         self.candidate_profile = build_candidate_profile(
             resume_text=resume_text,
             interview_setup=None,
@@ -549,7 +544,6 @@ class InterviewFlow:
             if isinstance(initial_coverage, dict) and initial_coverage
             else init_coverage(self.interview_definition)
         )
->>>>>>> dev
         self.completed = False
         self.started_at = time.monotonic()
         self.phase_started_at = self.started_at
@@ -959,8 +953,6 @@ class InterviewFlow:
 
     def _should_leave_phase(self) -> bool:
         if self.policy_mode:
-<<<<<<< HEAD
-=======
             competency_id = self.current_phase().get("competency_id")
             if not competency_id:
                 return self.probe_count >= min(2, self.max_probes_per_phase)
@@ -969,7 +961,6 @@ class InterviewFlow:
                 return False
             if not missing and self.probe_count >= 1:
                 return True
->>>>>>> dev
             return self.probe_count >= self._phase_probe_limit()
         if self._is_warmup_phase():
             return self.probe_count >= 1
@@ -1017,7 +1008,6 @@ class InterviewFlow:
             return CLOSING_MESSAGE
         return None
 
-<<<<<<< HEAD
     def _resume_project_context(self) -> str:
         return resume_project_excerpt(self.resume_text, self.focus_item)
 
@@ -1041,7 +1031,7 @@ class InterviewFlow:
                 f"{self._resume_project_context()}"
             )
         return "\n\n".join(parts)
-=======
+
     def _record_answer_quality(self, last_candidate_turn: str, *, is_intro_reply: bool) -> None:
         competency_id = (
             str(self.current_phase().get("competency_id"))
@@ -1227,7 +1217,6 @@ class InterviewFlow:
             intent=policy.intent if policy else "live_question",
             depth=policy.current_depth if policy else 1,
         )
->>>>>>> dev
 
     def _prompt_for_turn(
         self, last_candidate_turn: str | None
@@ -1318,8 +1307,6 @@ class InterviewFlow:
         closing = self._closing_speech(last_candidate_turn)
         if closing:
             return closing
-<<<<<<< HEAD
-=======
         if last_candidate_turn is None:
             started = time.perf_counter()
             opening = FALLBACK_OPENING
@@ -1343,7 +1330,6 @@ class InterviewFlow:
             self._record_answer_quality(
                 last_candidate_turn, is_intro_reply=is_intro_reply
             )
->>>>>>> dev
         prompt, user_content = self._prompt_for_turn(last_candidate_turn)
 
         started = time.perf_counter()
