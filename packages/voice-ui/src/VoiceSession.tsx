@@ -330,52 +330,69 @@ export type VoiceTranscriptLine = {
   final: boolean;
 };
 
+function normalizeTranscriptText(text: string): string {
+  return text.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Merge growing STT fragments (e.g. "hello" → "hello world") into one line. */
+export function coalesceTranscriptLines(
+  lines: VoiceTranscriptLine[],
+): VoiceTranscriptLine[] {
+  const result: VoiceTranscriptLine[] = [];
+  for (const line of lines) {
+    if (!line.text) continue;
+    const last = result[result.length - 1];
+    if (!last || last.who !== line.who) {
+      result.push(line);
+      continue;
+    }
+    const prev = normalizeTranscriptText(last.text);
+    const next = normalizeTranscriptText(line.text);
+    if (
+      next === prev ||
+      next.startsWith(prev) ||
+      prev.startsWith(next) ||
+      next.includes(prev)
+    ) {
+      result[result.length - 1] = {
+        ...line,
+        id: last.id,
+        text: line.text.length >= last.text.length ? line.text : last.text,
+        final: last.final || line.final,
+      };
+      continue;
+    }
+    result.push(line);
+  }
+  return result;
+}
+
 export function useVoiceTranscriptLines(limit = 40): VoiceTranscriptLine[] {
   const streams = useTranscriptions();
-  const { agentTranscriptions } = useVoiceAssistant();
-  const [lines, setLines] = useState<VoiceTranscriptLine[]>([]);
+  const { agent, agentTranscriptions } = useVoiceAssistant();
+  const agentIdentity = agent?.identity?.trim() || "";
 
-  useEffect(() => {
-    const incoming: VoiceTranscriptLine[] = [
-      ...streams.map((item) => ({
-        id: item.streamInfo.id,
-        who: "candidate" as const,
-        text: item.text.trim(),
-        final: true,
-      })),
-      ...agentTranscriptions.map((segment) => ({
-        id: segment.id,
-        who: "agent" as const,
-        text: segment.text.trim(),
-        final: segment.final,
-      })),
-    ].filter((line) => line.text);
-    if (incoming.length === 0) return;
-    setLines((current) => {
-      const next = [...current];
-      let changed = false;
-      for (const line of incoming) {
-        const key = `${line.who}:${line.id}`;
-        const index = next.findIndex(
-          (existing) => `${existing.who}:${existing.id}` === key,
-        );
-        if (index >= 0) {
-          const existing = next[index];
-          if (existing.text !== line.text || existing.final !== line.final) {
-            next[index] = line;
-            changed = true;
-          }
-        } else {
-          next.push(line);
-          changed = true;
-        }
-      }
-      if (!changed) return current;
-      return next.slice(-limit);
-    });
-  }, [agentTranscriptions, limit, streams]);
-
-  return lines;
+  const fromStreams: VoiceTranscriptLine[] = streams.map((item) => {
+    const identity = String(item.participantInfo?.identity || "").trim();
+    const isAgent =
+      Boolean(agentIdentity) &&
+      identity.length > 0 &&
+      identity === agentIdentity;
+    return {
+      id: item.streamInfo.id,
+      who: isAgent ? ("agent" as const) : ("candidate" as const),
+      text: item.text.trim(),
+      final: true,
+    };
+  });
+  const fromAgent: VoiceTranscriptLine[] = agentTranscriptions.map((segment) => ({
+    id: segment.id,
+    who: "agent" as const,
+    text: segment.text.trim(),
+    final: segment.final,
+  }));
+  const incoming = [...fromStreams, ...fromAgent].filter((line) => line.text);
+  return coalesceTranscriptLines(incoming).slice(-limit);
 }
 
 export function VoiceTranscripts({

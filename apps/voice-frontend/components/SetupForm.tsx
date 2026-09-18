@@ -37,6 +37,14 @@ function defaultStartTime(): string {
   return local.toISOString().slice(0, 16);
 }
 
+function ensureFutureStart(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return defaultStartTime();
+  // Backend rejects starts more than 5 minutes in the past.
+  if (parsed.getTime() < Date.now() - 4 * 60_000) return defaultStartTime();
+  return value;
+}
+
 function itemTexts(items: unknown): string[] {
   if (!Array.isArray(items)) return [];
   return items
@@ -180,7 +188,7 @@ export function SetupForm({
         if (draft.startsAt) {
           const date = new Date(draft.startsAt);
           const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-          setStartsAt(local.toISOString().slice(0, 16));
+          setStartsAt(ensureFutureStart(local.toISOString().slice(0, 16)));
         }
         if (setup) {
           setTitle(setup.title);
@@ -254,13 +262,15 @@ export function SetupForm({
   ]);
 
   function buildValue(): PublicSessionRequest {
+    const safeStartsAt = ensureFutureStart(startsAt);
+    if (safeStartsAt !== startsAt) setStartsAt(safeStartsAt);
     return {
       productId: product.id,
       participantName: participantName.trim(),
       jobDescription: jobDescription.trim() || undefined,
       resumeText: resumeText.trim() || undefined,
       candidateEmail: candidateEmail.trim() || undefined,
-      startsAt: startsAt ? new Date(startsAt).toISOString() : undefined,
+      startsAt: safeStartsAt ? new Date(safeStartsAt).toISOString() : undefined,
       timezone,
       interviewSetup: {
         title: title.trim(),
@@ -362,10 +372,14 @@ export function SetupForm({
       }
     }
     if (step < 2) {
+      if (step === 1) {
+        setStartsAt((current) => ensureFutureStart(current));
+      }
       setStep((current) => current + 1);
       return;
     }
     if (!reviewing) {
+      setStartsAt((current) => ensureFutureStart(current));
       setReviewing(true);
       return;
     }

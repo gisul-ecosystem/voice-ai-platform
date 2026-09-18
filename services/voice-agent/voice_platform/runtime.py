@@ -49,20 +49,21 @@ def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients
 def build_agent_session(clients: InferenceClients) -> AgentSession:
     """Construct the shared STT → LLM → TTS LiveKit pipeline."""
     return AgentSession(
-        vad=silero.VAD.load(min_speech_duration=0.5, min_silence_duration=0.5),
+        # Slightly longer silence helps slow streaming STT settle before a turn ends.
+        vad=silero.VAD.load(min_speech_duration=0.5, min_silence_duration=0.7),
         stt=LaptopSTT(client=clients.stt),
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
-        use_tts_aligned_transcript=False,
-        # Yield instantly if the candidate talks over Aaptor, like a real interviewer,
-        # but require a deliberate interruption (not a stray word) before cutting off.
+        # Publish agent speech text so the live transcript can show interviewer lines.
+        use_tts_aligned_transcript=True,
+        # Allow barge-in, but ignore short speaker-echo bursts while the agent talks.
         allow_interruptions=True,
-        min_interruption_duration=2.0,
-        min_interruption_words=4,
-        min_endpointing_delay=0.5,
-        max_endpointing_delay=2.5,
+        min_interruption_duration=2.5,
+        min_interruption_words=6,
+        min_endpointing_delay=0.8,
+        max_endpointing_delay=3.0,
         resume_false_interruption=True,
-        false_interruption_timeout=1.5,
+        false_interruption_timeout=2.0,
         # Start drafting the reply as soon as speech looks finished, cutting dead air.
         preemptive_generation=True,
     )

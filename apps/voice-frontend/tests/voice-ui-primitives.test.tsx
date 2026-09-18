@@ -15,11 +15,26 @@ vi.mock("@livekit/components-react", () => ({
   VideoTrack: () => null,
   useConnectionState: () => "connected",
   useTracks: () => [],
+  useRoomContext: () => ({
+    remoteParticipants: new Map(),
+    on: () => undefined,
+    off: () => undefined,
+  }),
   useTranscriptions: () => [
     {
-      streamInfo: { id: "candidate-1" },
+      streamInfo: { id: "c1" },
       participantInfo: { identity: "candidate" },
-      text: "I designed the retry strategy.",
+      text: "And we are using VLLM",
+    },
+    {
+      streamInfo: { id: "c2" },
+      participantInfo: { identity: "candidate" },
+      text: "And we are using VLLM and KV",
+    },
+    {
+      streamInfo: { id: "a-stream" },
+      participantInfo: { identity: "agent" },
+      text: "Thanks for joining. I'm your interviewer.",
     },
   ],
   useVoiceAssistant: () => ({
@@ -38,20 +53,42 @@ vi.mock("@livekit/components-react", () => ({
 import {
   VoiceSessionControls,
   VoiceTranscripts,
+  coalesceTranscriptLines,
 } from "@gisul/voice-ui";
 
 describe("shared voice UI primitives", () => {
-  it("distinguishes partial transcript turns without announcing the entire log", async () => {
+  it("coalesces growing candidate STT fragments into one line", () => {
+    const lines = coalesceTranscriptLines([
+      {
+        id: "1",
+        who: "candidate",
+        text: "And we are using VLLM",
+        final: true,
+      },
+      {
+        id: "2",
+        who: "candidate",
+        text: "And we are using VLLM and KV",
+        final: true,
+      },
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.text).toBe("And we are using VLLM and KV");
+  });
+
+  it("distinguishes agent vs candidate and coalesces fragments in the panel", async () => {
     render(<VoiceTranscripts />);
 
     expect(
-      await screen.findByText("I designed the retry strategy."),
+      await screen.findByText("And we are using VLLM and KV"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("And we are using VLLM")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Thanks for joining. I'm your interviewer."),
     ).toBeInTheDocument();
     expect(screen.getByText("How did you validate it?")).toBeInTheDocument();
+    expect(screen.getAllByText("AI Interviewer").length).toBeGreaterThan(0);
     expect(screen.getByText("Speaking…")).toBeInTheDocument();
-    expect(
-      screen.getByRole("region", { name: "Live interview transcript" }),
-    ).toBeInTheDocument();
   });
 
   it("requires confirmation before ending an interview", () => {
