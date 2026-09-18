@@ -311,7 +311,8 @@ a {
 .candidate-preview {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: none;
+  align-content: start;
   gap: 14px;
 }
 
@@ -774,6 +775,10 @@ a {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.start-audio-button {
+  justify-self: center;
 }
 
 .video-placeholder,

@@ -39,8 +39,10 @@ type Stage =
 
 export function CandidateInterviewJourney({
   invitationToken,
+  onStageChange,
 }: {
   invitationToken: string;
+  onStageChange?: (stage: Stage) => void;
 }) {
   const product = getProduct("interviewer");
   const [stage, setStage] = useState<Stage>("loading");
@@ -54,6 +56,10 @@ export function CandidateInterviewJourney({
     monitoring: false,
     recording: false,
   });
+
+  useEffect(() => {
+    onStageChange?.(stage);
+  }, [stage, onStageChange]);
 
   useEffect(() => {
     let active = true;

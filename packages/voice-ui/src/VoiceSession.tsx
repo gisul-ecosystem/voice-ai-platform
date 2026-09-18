@@ -4,6 +4,7 @@ import {
   DisconnectButton,
   LiveKitRoom,
   RoomAudioRenderer,
+  StartAudio,
   TrackToggle,
   VideoTrack,
   useConnectionState,
@@ -260,6 +261,10 @@ export function DefaultVoiceSession({
 
       <VoiceTranscripts />
       <RoomAudioRenderer />
+      <StartAudio
+        className="button primary start-audio-button"
+        label="Click to enable interviewer audio"
+      />
       <footer className="session-footer">
         <p>Your audio and video remain in this secure LiveKit room.</p>
         <VoiceSessionControls cameraAllowed={labels.cameraAllowed} />
