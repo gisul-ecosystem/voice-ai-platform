@@ -12,9 +12,12 @@ frontend CI jobs pass.
 4. Docker Compose pulls the images and waits for service health checks.
 5. A failed update automatically attempts to restore the last successful tag.
 
-The stack contains MongoDB, the context engine, backend API, interviewer worker,
+The stack contains MongoDB, **Redis (hot interview brain)**, the context engine, backend API, interviewer worker,
 reference frontend, and Caddy gateway. Only ports 80 and 443 are externally
 bound. Backend and worker health ports bind to loopback.
+
+For the operator checklist (start order, Redis key proof, rollback, Azure 2092
+acceptance), see **`docs/staging_runbook_redis_brain.md`**.
 
 ## VM secret files
 
