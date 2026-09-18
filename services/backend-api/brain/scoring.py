@@ -1,7 +1,8 @@
-"""Deterministic evidence extraction and scorecard generation (Milestone 6).
+"""Evidence-linked scorecard generation (advisory; always requires human review).
 
-Scores are advisory and always require human review. Every numeric rating must
-cite evidence derived from stored transcript turns / Q-A pairs.
+Numeric ratings are only emitted when answers overlap expected evidence and
+meet min_evidence_per_competency. Heuristic fallback never invents a low
+score from English ownership idioms.
 """
 from __future__ import annotations
 
@@ -9,11 +10,13 @@ import re
 import uuid
 from typing import Any
 
+from brain.quality import compute_quality_metrics
 from models.brain import (
     CompetencyScore,
     EvidenceStrength,
     InterviewEvidenceRecord,
     InterviewScorecard,
+    ScorecardQualityMetrics,
     utc_now,
 )
 
@@ -29,15 +32,6 @@ _RESULT_MARKERS = (
     "revenue",
     "saved",
 )
-_OWNERSHIP_MARKERS = (
-    "i owned",
-    "i built",
-    "i implemented",
-    "i designed",
-    "my responsibility",
-    "i led",
-    "i fixed",
-)
 _TRADEOFF_MARKERS = (
     "tradeoff",
     "trade-off",
@@ -47,6 +41,14 @@ _TRADEOFF_MARKERS = (
     "next time",
     "because",
 )
+
+_INTENT_FOLLOWUPS = {
+    "establish_context": "Ask for a concrete work situation related to {name}.",
+    "establish_ownership": "Ask what the candidate personally handled for {name}.",
+    "applied_understanding": "Ask how the candidate approached the {name} work.",
+    "problem_or_complexity": "Ask what was difficult about the {name} work.",
+    "tradeoff_or_transfer": "Ask what they would change about the {name} work and why.",
+}
 
 
 def _tokens(text: str) -> set[str]:
@@ -70,16 +72,14 @@ def _strength_for_answer(text: str, expected: list[str]) -> EvidenceStrength:
             continue
         if needle in blob or any(token in _tokens(cleaned) for token in _tokens(needle)):
             hits += 1
-    has_ownership = _contains_any(cleaned, _OWNERSHIP_MARKERS)
     has_result = _contains_any(cleaned, _RESULT_MARKERS)
     has_tradeoff = _contains_any(cleaned, _TRADEOFF_MARKERS)
-    if hits >= 2 and has_ownership and has_result and has_tradeoff:
+    words = len(cleaned.split())
+    if hits >= 2 and has_result and has_tradeoff:
         return "strong"
-    if hits >= 1 and has_ownership and has_result:
+    if hits >= 2 and words >= 12 and has_result:
         return "sufficient"
-    if hits >= 1 or has_ownership:
-        return "partial"
-    if len(cleaned.split()) >= 20:
+    if hits >= 1 and words >= 8:
         return "partial"
     return "weak"
 
@@ -88,18 +88,16 @@ def _rating_from_strength(
     strength: EvidenceStrength,
     *,
     evidence_count: int,
+    min_evidence: int = 1,
 ) -> tuple[int | None, str]:
     if evidence_count <= 0:
         return None, "not_assessed"
-    if strength in {"none", "weak"} and evidence_count < 2:
+    if evidence_count < max(1, min_evidence) or strength in {"none", "weak", "contradictory"}:
         return None, "insufficient_evidence"
     mapping = {
-        "weak": 2,
         "partial": 3,
         "sufficient": 4,
         "strong": 5,
-        "contradictory": 2,
-        "none": None,
     }
     rating = mapping.get(strength)
     if rating is None:
@@ -130,17 +128,42 @@ def _anchor_for_rating(competency: dict[str, Any], rating: int | None) -> str | 
     return (chosen or None) and chosen[:500]
 
 
-def _recommendation(scores: list[CompetencyScore]) -> str:
+def _recommendation(
+    scores: list[CompetencyScore],
+    *,
+    weights: dict[str, float] | None = None,
+    importance: dict[str, str] | None = None,
+) -> str:
     if not scores:
         return "human_decision_required"
-    if any(item.outcome == "insufficient_evidence" for item in scores):
+    weight_map = weights or {}
+    importance_map = importance or {}
+    scored = [item for item in scores if item.rating is not None]
+    if not scored:
         return "insufficient_evidence"
-    rated = [item.rating for item in scores if item.rating is not None]
-    if not rated:
+
+    def _weight_for(item: CompetencyScore) -> float:
+        value = weight_map.get(item.competency_id)
+        if value is None:
+            return 1.0
+        return max(0.0, float(value))
+
+    scored_weight = sum(_weight_for(item) for item in scored)
+    total_weight = sum(_weight_for(item) for item in scores) or 1.0
+    if scored_weight < (total_weight * 0.5):
         return "insufficient_evidence"
-    if all(item.outcome == "not_assessed" for item in scores):
-        return "insufficient_evidence"
-    average = sum(rated) / len(rated)
+    high_missing = any(
+        importance_map.get(item.competency_id, "high") == "high"
+        and item.outcome in {"not_assessed", "insufficient_evidence"}
+        for item in scores
+    )
+    average = sum((item.rating or 0) * _weight_for(item) for item in scored) / max(
+        scored_weight, 0.01
+    )
+    if high_missing and average < 4.5:
+        if average >= 3.2:
+            return "mixed_evidence"
+        return "human_decision_required"
     if average >= 4.5:
         return "strong_evidence"
     if average >= 3.2:
@@ -148,6 +171,24 @@ def _recommendation(scores: list[CompetencyScore]) -> str:
     if average >= 2.5:
         return "mixed_evidence"
     return "human_decision_required"
+
+
+def _next_human_questions(
+    *,
+    name: str,
+    missing_evidence: list[str],
+    missing_intents: list[str],
+) -> list[str]:
+    questions: list[str] = []
+    for intent in missing_intents[:3]:
+        template = _INTENT_FOLLOWUPS.get(intent)
+        if template:
+            questions.append(template.format(name=name.lower())[:400])
+    for item in missing_evidence[:2]:
+        questions.append(
+            f"Ask for a concrete example that shows {item.lower()} for {name.lower()}."
+        )
+    return questions[:4]
 
 
 def build_transcript_document(
@@ -199,6 +240,7 @@ def build_scorecard_bundle(
     questions: list[dict[str, Any]],
     answers: list[dict[str, Any]],
     turns: list[dict[str, Any]] | None = None,
+    coverage: dict[str, Any] | None = None,
 ) -> tuple[InterviewScorecard, list[InterviewEvidenceRecord]]:
     definition_id = str(definition.get("definition_id") or "").strip()
     if not definition_id:
@@ -210,6 +252,8 @@ def build_scorecard_bundle(
     ]
     if not competencies:
         raise ValueError("definition has no competencies to score")
+    scoring_policy = definition.get("scoring_policy") if isinstance(definition.get("scoring_policy"), dict) else {}
+    min_evidence = int(scoring_policy.get("min_evidence_per_competency") or 1)
 
     answers_by_question = {
         str(item.get("question_id")): item
@@ -241,12 +285,23 @@ def build_scorecard_bundle(
 
     evidence_records: list[InterviewEvidenceRecord] = []
     scores: list[CompetencyScore] = []
+    followups: list[str] = []
+    weights: dict[str, float] = {}
+    importance: dict[str, str] = {}
 
     for competency in competencies:
         competency_id = str(competency["id"])
+        name = str(competency.get("name") or competency_id)
+        weights[competency_id] = float(competency.get("weight") or 0) or 1.0
+        importance[competency_id] = str(competency.get("importance") or "high")
         expected = [
             str(item).strip()
             for item in (competency.get("evidence_expected") or [])
+            if str(item).strip()
+        ]
+        required_intents = [
+            str(item).strip()
+            for item in (competency.get("min_assessment_intents") or [])
             if str(item).strip()
         ]
         related_questions = list(questions_by_competency.get(competency_id) or [])
@@ -274,6 +329,7 @@ def build_scorecard_bundle(
         competency_evidence_ids: list[str] = []
         best_strength: EvidenceStrength = "none"
         missing = list(expected)
+        excerpts: list[str] = []
         for answer in related_answers:
             text = str(answer.get("final_transcript") or "").strip()
             if not text:
@@ -334,9 +390,32 @@ def build_scorecard_bundle(
                 )
             )
             competency_evidence_ids.append(evidence_id)
+            if len(excerpts) < 3:
+                excerpts.append(text[:240])
+
+        asked_intents = {
+            str(item.get("intent") or "").strip()
+            for item in related_questions
+            if str(item.get("intent") or "").strip()
+        }
+        coverage_row = (coverage or {}).get(competency_id) if isinstance(coverage, dict) else None
+        covered_intents = set()
+        if isinstance(coverage_row, dict):
+            covered_intents = {
+                str(item).strip()
+                for item in (coverage_row.get("covered_intents") or [])
+                if str(item).strip()
+            }
+        missing_intents = [
+            intent
+            for intent in required_intents
+            if intent not in asked_intents and intent not in covered_intents
+        ]
 
         rating, outcome = _rating_from_strength(
-            best_strength, evidence_count=len(competency_evidence_ids)
+            best_strength,
+            evidence_count=len(competency_evidence_ids),
+            min_evidence=min_evidence,
         )
         scores.append(
             CompetencyScore(
@@ -347,6 +426,8 @@ def build_scorecard_bundle(
                 evidence_ids=competency_evidence_ids,
                 contradictory_evidence_ids=[],
                 missing_evidence=missing[:20],
+                missing_intents=missing_intents[:20],
+                excerpts=excerpts[:8],
                 confidence=(
                     0.0
                     if outcome != "scored"
@@ -358,13 +439,35 @@ def build_scorecard_bundle(
                 review_required=True,
             )
         )
+        followups.extend(
+            _next_human_questions(
+                name=name,
+                missing_evidence=missing,
+                missing_intents=missing_intents,
+            )
+        )
 
+    quality_metrics: ScorecardQualityMetrics = compute_quality_metrics(
+        questions=questions,
+        answers=answers,
+        coverage=coverage,
+        competency_outcomes=[item.outcome for item in scores],
+        validator_results=[
+            item.get("validator_ok")
+            for item in questions
+            if isinstance(item, dict) and "validator_ok" in item
+        ],
+    )
     scorecard = InterviewScorecard(
         session_id=session_id,
         definition_id=definition_id,
         competencies=scores,
-        overall_recommendation=_recommendation(scores),  # type: ignore[arg-type]
+        overall_recommendation=_recommendation(
+            scores, weights=weights, importance=importance
+        ),  # type: ignore[arg-type]
         human_review_status="pending",
         created_at=utc_now(),
+        next_human_questions=list(dict.fromkeys(followups))[:12],
+        quality_metrics=quality_metrics,
     )
     return scorecard, evidence_records

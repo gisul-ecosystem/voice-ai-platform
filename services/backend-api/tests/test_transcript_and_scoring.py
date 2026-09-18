@@ -133,6 +133,121 @@ def test_scorecard_requires_evidence_citations() -> None:
     assert scorecard.human_review_status == "pending"
 
 
+def test_heuristic_scoring_does_not_invent_low_ratings() -> None:
+    definition = {
+        "definition_id": "idef_score_test_03",
+        "scoring_policy": {"min_evidence_per_competency": 1},
+        "competencies": [
+            {
+                "id": "systems_design",
+                "name": "Systems design",
+                "importance": "high",
+                "weight": 100,
+                "evidence_expected": ["distributed consensus protocol"],
+                "min_assessment_intents": ["establish_context"],
+                "rubric": [
+                    {"rating": 1, "description": "No evidence"},
+                    {"rating": 3, "description": "Explains a relevant example"},
+                    {"rating": 5, "description": "Strong tradeoffs"},
+                ],
+            }
+        ],
+    }
+    scorecard, _evidence = build_scorecard_bundle(
+        session_id="ses_score_test_03",
+        definition=definition,
+        questions=[
+            {
+                "question_id": "q1",
+                "competency_id": "systems_design",
+                "intent": "establish_context",
+                "text": "Tell me about a systems design you owned.",
+            }
+        ],
+        answers=[
+            {
+                "answer_id": "a1",
+                "question_id": "q1",
+                "turn_ids": ["turn_candidate_1"],
+                "usable": True,
+                "final_transcript": (
+                    "I owned everything on the team and I built the system myself "
+                    "over several months with great results for users."
+                ),
+            }
+        ],
+    )
+    scored = scorecard.competencies[0]
+    assert scored.rating is None
+    assert scored.outcome in {"not_assessed", "insufficient_evidence"}
+    assert scorecard.next_human_questions
+
+
+def test_scorecard_uses_competency_weights() -> None:
+    definition = {
+        "definition_id": "idef_score_test_04",
+        "competencies": [
+            {
+                "id": "python",
+                "name": "Python",
+                "importance": "high",
+                "weight": 70,
+                "evidence_expected": ["context", "action", "result"],
+                "min_assessment_intents": ["applied_understanding"],
+                "rubric": [
+                    {"rating": 1, "description": "No evidence"},
+                    {"rating": 3, "description": "Explains python work"},
+                    {"rating": 5, "description": "Strong python impact"},
+                ],
+            },
+            {
+                "id": "kafka",
+                "name": "Kafka",
+                "importance": "medium",
+                "weight": 30,
+                "evidence_expected": ["context", "action", "result"],
+                "min_assessment_intents": ["applied_understanding"],
+                "rubric": [
+                    {"rating": 1, "description": "No evidence"},
+                    {"rating": 3, "description": "Explains kafka work"},
+                    {"rating": 5, "description": "Strong kafka impact"},
+                ],
+            },
+        ],
+    }
+    strong = (
+        "In that python service context I implemented retries and the result "
+        "was lower latency because the alternative queue added duplicates."
+    )
+    scorecard, _evidence = build_scorecard_bundle(
+        session_id="ses_score_test_04",
+        definition=definition,
+        questions=[
+            {
+                "question_id": "q1",
+                "competency_id": "python",
+                "intent": "applied_understanding",
+                "text": "How did you use Python here?",
+            }
+        ],
+        answers=[
+            {
+                "answer_id": "a1",
+                "question_id": "q1",
+                "turn_ids": ["turn_python"],
+                "usable": True,
+                "final_transcript": strong,
+            }
+        ],
+    )
+    by_id = {item.competency_id: item for item in scorecard.competencies}
+    assert by_id["python"].outcome == "scored"
+    assert by_id["kafka"].outcome == "not_assessed"
+    assert by_id["python"].excerpts
+    assert scorecard.quality_metrics is not None
+    assert scorecard.quality_metrics.not_assessed_rate == 0.5
+
+
 def test_missing_answers_are_not_assessed() -> None:
     definition = {
         "definition_id": "idef_score_test_02",
@@ -253,3 +368,83 @@ async def test_completed_session_persists_transcript_and_scorecard() -> None:
     again = await generate_and_store_scorecard(session_id)
     assert again is not None
     assert again["created_at"] == result["created_at"]
+
+
+@pytest.mark.asyncio
+async def test_scorecard_review_override_requires_reason() -> None:
+    published = await _published_definition()
+    context = await interviews.create_context(
+        "Build APIs and own production systems.",
+        "Built billing retries and owned on-call.",
+        _setup().model_dump(mode="python"),
+        definition_id=published.definition_id,
+    )
+    session_id = await interviews.create_live_session(
+        product_id="interviewer",
+        context_id=context["context_id"],
+        candidate_id="candidate_review",
+        room="room-review",
+        correlation_id="corr-review",
+        expires_at=datetime.now(timezone.utc),
+    )
+    await interviews.append_turn(
+        session_id,
+        {
+            "turn_id": "turn_agent_1",
+            "speaker": "agent",
+            "text": "What problem did you solve?",
+            "phase_index": 0,
+            "sequence_number": 1,
+            "is_final": True,
+        },
+    )
+    await interviews.append_turn(
+        session_id,
+        {
+            "turn_id": "turn_candidate_1",
+            "speaker": "candidate",
+            "text": (
+                "I owned the billing timeout context. I implemented retries "
+                "and the result was lower latency for checkout."
+            ),
+            "phase_index": 0,
+            "sequence_number": 2,
+            "is_final": True,
+        },
+    )
+    await interviews.transition_session(
+        session_id,
+        expected=("joining", "live", "completing"),
+        status="completed",
+        reason="test_review",
+    )
+    created = await generate_and_store_scorecard(session_id)
+    assert created is not None
+    from models.brain import ScorecardReviewRequest
+    from brain.scoring_service import apply_scorecard_review, get_session_quality_metrics
+
+    reviewed = await apply_scorecard_review(
+        session_id,
+        ScorecardReviewRequest(
+            status="overridden",
+            reviewer_id="reviewer@example.com",
+            override_reason="Human reviewed transcript and adjusted recommendation.",
+        ),
+    )
+    assert reviewed["human_review_status"] == "overridden"
+    assert reviewed["latest_review"]["reviewer_id"] == "reviewer@example.com"
+    stored = await scorecards.get_scorecard(session_id)
+    assert stored is not None
+    assert stored["human_review_status"] == "overridden"
+    metrics = await get_session_quality_metrics(session_id)
+    assert metrics is not None
+    assert set(metrics) <= {
+        "mandatory_coverage_pct",
+        "repeated_question_rate",
+        "not_assessed_rate",
+        "insufficient_evidence_rate",
+        "validator_failure_rate",
+        "question_count",
+        "answer_count",
+    }
+    assert all(isinstance(value, (int, float)) for value in metrics.values())
