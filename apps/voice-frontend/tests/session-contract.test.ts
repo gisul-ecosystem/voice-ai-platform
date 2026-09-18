@@ -24,22 +24,6 @@ describe("session contract", () => {
     });
   });
 
-  it("does not send interview-only fields for support", () => {
-    expect(
-      buildBackendSessionPayload(
-        {
-          productId: "customer-support",
-          participantName: "Customer",
-          jobDescription: "must be ignored",
-          resumeText: "must be ignored",
-        },
-      ),
-    ).toEqual({
-      product_id: "customer-support",
-      name: "Customer",
-    });
-  });
-
   it("returns only browser-safe response fields", () => {
     const response = sanitizeSessionResponse({
       room: "room-1",

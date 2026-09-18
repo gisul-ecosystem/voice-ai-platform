@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 
 from livekit.agents import Agent, ModelSettings, llm
 
+from products.interviewer.brain_runtime import BrainSessionBridge
 from products.interviewer.flow import FALLBACK_FOLLOWUP, FALLBACK_OPENING, InterviewFlow
 from voice_platform.chat import is_usable_candidate_turn, last_text
 
@@ -15,7 +16,7 @@ CLARIFY_TURN = (
 
 
 class AaptorAgent(Agent):
-    """Aaptor's LiveKit surface; interview state lives in InterviewFlow."""
+    """LiveKit surface; interview state lives in InterviewFlow + optional brain bridge."""
 
     def __init__(
         self,
@@ -31,6 +32,8 @@ class AaptorAgent(Agent):
         initial_state: dict | None = None,
         turn_sink: Callable[..., Awaitable[None]] | None = None,
         status_sink: Callable[..., Awaitable[None]] | None = None,
+        brain_bridge: BrainSessionBridge | None = None,
+        interview_definition: dict | None = None,
     ) -> None:
         super().__init__(
             instructions=(
@@ -52,26 +55,58 @@ class AaptorAgent(Agent):
             flow_kwargs["min_turns_before_close"] = min_turns_before_close
         if target_duration_minutes is not None:
             flow_kwargs["target_duration_minutes"] = target_duration_minutes
+        if interview_definition is not None:
+            flow_kwargs["interview_definition"] = interview_definition
         restored_state = dict(initial_state or {})
         self._sequence_number = int(restored_state.pop("initial_sequence_number", 0))
+        # Brain metadata is not InterviewFlow constructor input.
+        restored_state.pop("brain_state_version", None)
+        restored_state.pop("brain_active_question_id", None)
+        restored_state.pop("brain_asked_question_ids", None)
         flow_kwargs.update(restored_state)
         self.flow = InterviewFlow(outline, llm_client, **flow_kwargs)
         self._turn_sink = turn_sink
         self._status_sink = status_sink
+        self._brain = brain_bridge
         self._completion_reported = False
-        self._opened = bool(self.flow.candidate_turns)
-        self._last_agent_text = ""
+        # Mid-session restore: any prior turn means opening already happened.
+        self._opened = bool(self.flow.candidate_turns or self.flow.interviewer_turns)
+        self._last_agent_text = (
+            self.flow.interviewer_turns[-1] if self.flow.interviewer_turns else ""
+        )
 
-    async def _record(self, speaker: str, text: str) -> None:
-        if self._turn_sink and text.strip():
+    async def _record(self, speaker: str, text: str) -> str | None:
+        if not text.strip():
+            return None
+        turn_id = f"turn_{uuid.uuid4().hex}"
+        if self._turn_sink:
             self._sequence_number += 1
             await self._turn_sink(
-                turn_id=f"turn_{uuid.uuid4().hex}",
+                turn_id=turn_id,
                 speaker=speaker,
                 text=text.strip(),
                 phase_index=self.phase_index,
                 sequence_number=self._sequence_number,
             )
+        return turn_id
+
+    async def _persist_brain_after_exchange(
+        self,
+        *,
+        speaker: str,
+        text: str,
+        turn_id: str | None,
+    ) -> None:
+        if self._brain is None or not text.strip():
+            return
+        if speaker == "candidate" and turn_id:
+            await self._brain.on_candidate_answer(text.strip(), turn_id=turn_id)
+        elif speaker == "agent":
+            await self._brain.on_agent_question(
+                text.strip(),
+                phase_index=self.phase_index,
+            )
+        await self._brain.checkpoint(self.flow)
 
     @property
     def outline(self) -> dict:
@@ -110,6 +145,9 @@ class AaptorAgent(Agent):
         return await self.flow.generate_next_question(last_candidate_turn)
 
     async def on_enter(self) -> None:
+        if self._opened:
+            # Rejoin/restore: do not re-speak the opening or double-write brain.
+            return
         parts: list[str] = []
         async for chunk in self.flow.generate_next_question_stream(None):
             parts.append(chunk)
@@ -117,7 +155,12 @@ class AaptorAgent(Agent):
         await self.session.say(opening, allow_interruptions=False)
         self._opened = True
         self._last_agent_text = opening
-        await self._record("agent", opening)
+        turn_id = await self._record("agent", opening)
+        await self._persist_brain_after_exchange(
+            speaker="agent",
+            text=opening,
+            turn_id=turn_id,
+        )
 
     async def llm_node(
         self,
@@ -135,11 +178,25 @@ class AaptorAgent(Agent):
             self._last_agent_text,
             min_words=1 if not self.flow.candidate_turns else 3,
         ):
+            if candidate_turn and candidate_turn.strip():
+                # Keep partial/unusable speech in the durable transcript.
+                await self._record("candidate", candidate_turn.strip())
             yield CLARIFY_TURN
             self._last_agent_text = CLARIFY_TURN
+            turn_id = await self._record("agent", CLARIFY_TURN)
+            await self._persist_brain_after_exchange(
+                speaker="agent",
+                text=CLARIFY_TURN,
+                turn_id=turn_id,
+            )
             return
         elif candidate_turn:
-            await self._record("candidate", candidate_turn)
+            turn_id = await self._record("candidate", candidate_turn)
+            await self._persist_brain_after_exchange(
+                speaker="candidate",
+                text=candidate_turn,
+                turn_id=turn_id,
+            )
         parts: list[str] = []
         async for chunk in self.flow.generate_next_question_stream(candidate_turn):
             parts.append(chunk)
@@ -150,7 +207,12 @@ class AaptorAgent(Agent):
             yield question
         if question:
             self._last_agent_text = question
-            await self._record("agent", question)
+            turn_id = await self._record("agent", question)
+            await self._persist_brain_after_exchange(
+                speaker="agent",
+                text=question,
+                turn_id=turn_id,
+            )
         if (
             self.flow.completed
             and self._status_sink

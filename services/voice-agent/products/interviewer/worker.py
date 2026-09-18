@@ -8,18 +8,23 @@ from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
 
 from clients.backend_client import (
     fetch_interview_context,
+    fetch_interview_definition,
     fetch_interview_plan,
     fetch_session_state,
     record_session_turn,
     report_session_status,
 )
 from clients.errors import ServiceUnavailableError
-from clients.http_util import close_http_client
 from clients.inference import parse_room_metadata
 from clients.llm import get_llm_client
 from clients.stt import get_stt_client
 from clients.tts import get_tts_client
 from products.interviewer.agent import AaptorAgent
+from products.interviewer.brain_runtime import (
+    BrainSessionBridge,
+    definition_id_for_session,
+    load_brain_initial_state,
+)
 from products.interviewer.flow import (
     extract_jd_requirements,
     extract_resume_projects,
@@ -76,6 +81,15 @@ def normalize_duration_minutes(value: int | None) -> int:
     if minutes in ALLOWED_DURATIONS:
         return minutes
     return min(ALLOWED_DURATIONS, key=lambda option: abs(option - minutes))
+
+
+def normalize_probe_count(value: object, default: int = 2) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return max(0, min(int(value), 3))
+    except (TypeError, ValueError):
+        return default
 
 
 def _is_warmup_name(name: str) -> bool:
@@ -318,20 +332,27 @@ async def entrypoint(ctx: JobContext) -> None:
     if hasattr(ctx, "log_context_fields"):
         ctx.log_context_fields = {"room": ctx.room.name}
     logger.info("session_start", extra={"event": "session_start", "room": ctx.room.name})
-    if hasattr(ctx, "add_shutdown_callback"):
-        ctx.add_shutdown_callback(close_http_client)
     await ctx.connect()
 
     metadata = job_metadata(ctx)
     session_id = str(metadata.get("session_id") or "").strip()
-    if session_id:
+
+    async def shutdown_session() -> None:
         try:
-            await report_session_status(session_id, "live")
+            if session_id:
+                await report_session_status(
+                    session_id,
+                    "abandoned",
+                    reason="worker_shutdown",
+                )
         except ServiceUnavailableError:
-            logger.exception(
-                "session_live_status_failed",
-                extra={"event": "session_live_status_failed"},
+            logger.warning(
+                "session_shutdown_status_unavailable",
+                extra={"event": "session_shutdown_status_unavailable"},
             )
+
+    if hasattr(ctx, "add_shutdown_callback"):
+        ctx.add_shutdown_callback(shutdown_session)
 
     clients = load_inference_clients(ctx, logger)
     outline = await build_outline(ctx)
@@ -347,50 +368,125 @@ async def entrypoint(ctx: JobContext) -> None:
     session = build_agent_session(clients)
     attach_session_metrics(session, logger)
     initial_state: dict = {}
-    if session_id:
+    brain_bridge: BrainSessionBridge | None = None
+    context_id = context_id_from_job(ctx)
+    context: dict = {}
+    if context_id:
         try:
-            stored = await fetch_session_state(session_id)
-            turns = stored.get("turns") if isinstance(stored, dict) else []
-            if isinstance(turns, list) and turns:
-                phase_index = max(
-                    (
-                        int(turn.get("phase_index", 0))
-                        for turn in turns
-                        if isinstance(turn, dict)
-                    ),
-                    default=0,
-                )
-                candidate_turns = [
-                    str(turn.get("text") or "")
-                    for turn in turns
-                    if isinstance(turn, dict)
-                    and turn.get("speaker") == "candidate"
-                    and turn.get("text")
-                ]
-                probe_count = sum(
-                    1
-                    for turn in turns
-                    if isinstance(turn, dict)
-                    and turn.get("speaker") == "candidate"
-                    and int(turn.get("phase_index", 0)) == phase_index
-                )
-                initial_state = {
-                    "initial_phase_index": phase_index,
-                    "initial_probe_count": probe_count,
-                    "candidate_turns": candidate_turns,
-                    "initial_sequence_number": max(
+            context = await fetch_interview_context(context_id)
+        except ServiceUnavailableError:
+            logger.warning(
+                "interview_context_unavailable",
+                extra={"event": "interview_context_unavailable"},
+            )
+            context = {}
+    explicit_definition_id = None
+    if isinstance(context, dict):
+        raw_definition = context.get("definition_id")
+        if isinstance(raw_definition, str) and raw_definition.strip():
+            explicit_definition_id = raw_definition.strip()
+    if session_id:
+        brain_state = await load_brain_initial_state(session_id)
+        brain_has_turns = bool(
+            brain_state.get("candidate_turns") or brain_state.get("interviewer_turns")
+        )
+        if brain_has_turns:
+            initial_state = brain_state
+            logger.info(
+                "brain_state_restored",
+                extra={
+                    "event": "brain_state_restored",
+                    "session_id": session_id,
+                    "state_version": brain_state.get("brain_state_version"),
+                },
+            )
+        else:
+            try:
+                stored = await fetch_session_state(session_id)
+                turns = stored.get("turns") if isinstance(stored, dict) else []
+                if isinstance(turns, list) and turns:
+                    phase_index = max(
                         (
-                            int(turn.get("sequence_number", 0))
+                            int(turn.get("phase_index", 0))
                             for turn in turns
                             if isinstance(turn, dict)
                         ),
                         default=0,
+                    )
+                    candidate_turns = [
+                        str(turn.get("text") or "")
+                        for turn in turns
+                        if isinstance(turn, dict)
+                        and turn.get("speaker") == "candidate"
+                        and turn.get("text")
+                    ]
+                    interviewer_turns = [
+                        str(turn.get("text") or "")
+                        for turn in turns
+                        if isinstance(turn, dict)
+                        and turn.get("speaker") == "agent"
+                        and turn.get("text")
+                    ]
+                    probe_count = sum(
+                        1
+                        for turn in turns
+                        if isinstance(turn, dict)
+                        and turn.get("speaker") == "candidate"
+                        and int(turn.get("phase_index", 0)) == phase_index
+                    )
+                    initial_state = {
+                        "initial_phase_index": phase_index,
+                        "initial_probe_count": probe_count,
+                        "candidate_turns": candidate_turns,
+                        "interviewer_turns": interviewer_turns,
+                        "initial_sequence_number": max(
+                            (
+                                int(turn.get("sequence_number", 0))
+                                for turn in turns
+                                if isinstance(turn, dict)
+                            ),
+                            default=0,
+                        ),
+                    }
+            except ServiceUnavailableError:
+                logger.exception(
+                    "session_restore_failed",
+                    extra={"event": "session_restore_failed"},
+                )
+            # Keep brain version/ids even when turns came from transcript.
+            if brain_state:
+                initial_state = {
+                    **initial_state,
+                    "brain_state_version": brain_state.get("brain_state_version", 0),
+                    "brain_active_question_id": brain_state.get(
+                        "brain_active_question_id"
+                    ),
+                    "brain_asked_question_ids": list(
+                        brain_state.get("brain_asked_question_ids") or []
                     ),
                 }
-        except ServiceUnavailableError:
-            logger.exception(
-                "session_restore_failed",
-                extra={"event": "session_restore_failed"},
+        resolved_definition_id = definition_id_for_session(
+            session_id,
+            context_id,
+            explicit_definition_id=explicit_definition_id,
+        )
+        brain_bridge = BrainSessionBridge(
+            session_id=session_id,
+            definition_id=resolved_definition_id,
+            state_version=int(initial_state.get("brain_state_version") or 0),
+            active_question_id=initial_state.get("brain_active_question_id"),
+            asked_question_ids=list(
+                initial_state.get("brain_asked_question_ids") or []
+            ),
+        )
+        if explicit_definition_id:
+            logger.info(
+                "interview_definition_bound",
+                extra={
+                    "event": "interview_definition_bound",
+                    "session_id": session_id,
+                    "definition_id": explicit_definition_id,
+                },
             )
 
     async def turn_sink(**turn) -> None:
@@ -408,19 +504,21 @@ async def entrypoint(ctx: JobContext) -> None:
                 logger.warning("status_report_unavailable", extra={"event": "status_report_unavailable"})
 
     target_duration_minutes = 30
+    max_probes_per_phase = 2
     job_description = ""
     resume_text = ""
     competencies: list[str] = []
-    context_id = context_id_from_job(ctx)
-    if context_id:
+    if context_id and context:
         try:
-            context = await fetch_interview_context(context_id)
             job_description = str(context.get("job_description") or "").strip()
             resume_text = str(context.get("resume_text") or "").strip()
             setup = context.get("interview_setup")
             if isinstance(setup, dict):
                 target_duration_minutes = normalize_duration_minutes(
                     setup.get("durationMinutes")
+                )
+                max_probes_per_phase = normalize_probe_count(
+                    setup.get("maxProbesPerPhase")
                 )
                 raw_skills = setup.get("competencies") or []
                 if isinstance(raw_skills, list):
@@ -429,12 +527,12 @@ async def entrypoint(ctx: JobContext) -> None:
                         for item in raw_skills
                         if str(item).strip()
                     ]
-        except (ServiceUnavailableError, TypeError, ValueError):
+        except (TypeError, ValueError):
             logger.warning(
                 "interview_setup_unavailable",
                 extra={"event": "interview_setup_unavailable"},
             )
-    else:
+    elif not context_id:
         try:
             job_description, resume_text = await plan_inputs_from_job(ctx)
         except ServiceUnavailableError:
@@ -447,11 +545,30 @@ async def entrypoint(ctx: JobContext) -> None:
     outline = enrich_outline_with_jd(outline, job_description, competencies)
     outline = stamp_phase_intents(outline)
     outline = scale_outline_to_duration(outline, target_duration_minutes)
+    interview_definition: dict | None = None
+    if explicit_definition_id:
+        try:
+            loaded = await fetch_interview_definition(explicit_definition_id)
+            if isinstance(loaded, dict) and loaded.get("competencies"):
+                interview_definition = loaded
+                logger.info(
+                    "interview_definition_loaded",
+                    extra={
+                        "event": "interview_definition_loaded",
+                        "definition_id": explicit_definition_id,
+                        "competency_count": len(loaded.get("competencies") or []),
+                    },
+                )
+        except ServiceUnavailableError:
+            logger.warning(
+                "interview_definition_unavailable",
+                extra={"event": "interview_definition_unavailable"},
+            )
     await session.start(
         agent=AaptorAgent(
             outline,
             clients.llm,
-            max_probes_per_phase=max(8, target_duration_minutes // 3),
+            max_probes_per_phase=max_probes_per_phase,
             job_description=job_description,
             resume_text=resume_text,
             competencies=competencies,
@@ -459,9 +576,19 @@ async def entrypoint(ctx: JobContext) -> None:
             initial_state=initial_state,
             turn_sink=turn_sink,
             status_sink=status_sink,
+            brain_bridge=brain_bridge,
+            interview_definition=interview_definition,
         ),
         room=ctx.room,
     )
+    if session_id:
+        try:
+            await report_session_status(session_id, "live")
+        except ServiceUnavailableError:
+            logger.exception(
+                "session_live_status_failed",
+                extra={"event": "session_live_status_failed"},
+            )
 
 
 def run() -> None:

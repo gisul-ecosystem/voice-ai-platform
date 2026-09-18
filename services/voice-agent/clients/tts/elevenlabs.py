@@ -38,7 +38,12 @@ def normalize_speech_text(text: str) -> str:
     # Strip markdown bold/italic/code formatting
     cleaned = re.sub(r"[*_~`#]", "", text)
     # Normalize bullet points or numbered lists at start of lines
-    cleaned = re.sub(r"^\s*[-*•\d+.]\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(
+        r"^\s*(?:[*+•-]|\d+[.)])\s+",
+        "",
+        cleaned,
+        flags=re.MULTILINE,
+    )
     # Collapse multiple whitespaces/newlines into natural single spacing
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     # Collapse repeated punctuation the LLM sometimes emits ("??", "!!")

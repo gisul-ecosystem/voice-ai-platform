@@ -1,14 +1,20 @@
 # AI Interviewer Production Architecture
 
-Status: accepted target architecture  
+Status: accepted target architecture + as-built interviewer brain notes  
 Scope: Aaptor candidate interviews using OpenAI LLM, Sarvam STT, ElevenLabs TTS, and LiveKit
 
 ## Decision
 
 The backend is authoritative for interview identity, invitations, provider policy,
-context, lifecycle, persistence, and completion. LiveKit is the real-time media
+context, lifecycle, persistence, scoring, and completion. LiveKit is the real-time media
 plane. The voice worker performs latency-sensitive turn orchestration and emits
 durable events back to the backend.
+
+The interviewer **brain** (JD/resume intelligence, blueprint compiler, 3-layer
+memory, policy engine, transcript, advisory scorecard) lives inside
+`services/backend-api` + `services/voice-agent/products/interviewer`. Do not
+introduce a separate context-engine microservice for Aaptor unless measured
+scale or ownership requires it.
 
 The generic `apps/voice-frontend` remains an internal integration demo.
 The branded Aaptor product remains in its separate repository and consumes
@@ -24,7 +30,7 @@ versioned, product-neutral voice packages from this platform repository.
    environment-managed secrets. They are never accepted from browsers or stored
    in LiveKit metadata.
 5. LiveKit dispatch metadata contains opaque IDs only: interview session,
-   context, tenant, and correlation IDs.
+   context, definition, tenant, and correlation IDs.
 
 ## Interview lifecycle
 
@@ -32,21 +38,49 @@ versioned, product-neutral voice packages from this platform repository.
 
 Terminal alternatives are `expired`, `abandoned`, and `failed`. Every transition
 is validated by backend policy and recorded as an audit event. Model output may
-recommend a question decision, but it cannot directly mutate lifecycle state.
+phrase questions, but the **policy engine** (not the LLM alone) decides next
+action, depth, probe limits, and close. Lifecycle state mutations remain backend-owned.
+
+On `completed`, backend generates an advisory evidence-linked scorecard
+(`human_review_status=pending`). Hiring decisions remain human-owned; review and
+override APIs/UI are not shipped yet.
+
+## As-built data plane (interviewer brain)
+
+```text
+Creator demo UI / BFF
+  -> backend-api: ingest, extract, compile/publish, schedule
+  -> Mongo: interview_definitions (immutable) + context + invitation
+  -> candidate join -> live session (definition_id)
+  -> voice-agent: load definition, policy next-action, phrase via LLM
+  -> BrainSessionBridge: RAM checkpoint -> Redis hot snapshot -> Mongo durable
+  -> interview_turns (full transcript) + questions/answers/evidence/snapshots
+  -> completed -> interview_scorecards (insert-once AI card)
+```
+
+Collections in use:
+
+- `interview_contexts`, `interview_definitions`, `interview_sessions`,
+  `interview_turns`, `interview_invitations`
+- `interview_questions`, `interview_answers`, `interview_evidence`,
+  `interview_brain_snapshots`, `interview_scorecards`
+
+Redis (optional hot layer): key `interview:brain:{session_id}`;
+`REDIS_URL` + `INTERVIEW_BRAIN_REDIS_TTL_SECONDS` (default 6h). Never the only
+durable store — Mongo remains source of truth.
+
+Raw documents: text-layer PDF/DOCX/TXT ingest today (OCR pending). Long-term
+target remains encrypted object storage for originals.
 
 ## Data model
 
-- Interview: tenant, role, schedule, policy, context reference.
+- Interview: tenant, role, schedule, policy, context reference, definition_id.
 - Attempt: candidate, invitation digest, attempt number, status.
 - Live session: room, dispatch, correlation ID, timestamps, disconnect reason.
-- Turn: stable ID, speaker, final text, timing, phase and topic evidence.
-- Scorecard: asynchronous rubric results with model/prompt provenance.
+- Turn: stable ID, speaker (`candidate`|`agent`), final text, timing, phase/topic.
+- Brain records: question ledger, answer linkage, evidence, versioned snapshots.
+- Scorecard: asynchronous rubric results with evidence refs and model provenance.
 - Audit event: actor, action, object, timestamp and non-PII metadata.
-
-Raw documents live in encrypted object storage. Parsed context and durable
-interview records live in the application database. Redis may be used for
-idempotency, quotas, hot state, and distributed coordination, but never as the
-only durable record.
 
 ## Provider pipeline
 
@@ -60,6 +94,9 @@ only durable record.
 Connections are pooled, cancellation-aware, deadline-bound, and instrumented.
 Paid POST operations are not blindly replayed after ambiguous failures.
 
+Milestone 5 (not done): session-pinned voice, TTS preflight, and no silent
+voice switch on provider failure.
+
 ## Product applications
 
 The separate Aaptor candidate application contains invitation landing, organization identity,
@@ -70,6 +107,10 @@ invitations, and results belong to an admin application or API.
 `packages/voice-core` owns headless LiveKit connection, device, reconnect, token
 refresh, and event state. `packages/voice-ui` owns accessible shared controls and
 compositions. Product branding and copy remain in Aaptor.
+
+In this monorepo demo path, `apps/voice-frontend` covers schedule/setup, ingest,
+and candidate journey; transcript/scorecard BFF proxies exist without a full
+recruiter results console yet.
 
 ## Production gates
 
@@ -83,9 +124,13 @@ compositions. Product branding and copy remain in Aaptor.
   abandonment, provider cost, and retry amplification.
 - OpenTelemetry correlation spans browser, BFF, backend, LiveKit job, worker,
   and provider calls without names, documents, transcripts, tokens, or keys.
+- Brain gates: definition attached on schedule, policy mode active when
+  definition present, turns durable for every spoken utterance, scorecard cites
+  evidence or marks `not_assessed`.
 
 ## Source references
 
+- End-to-end brain plan (as-built §1A / §3): `docs/ai_interviewer_brain_end_to_end_plan.md`
 - [LiveKit explicit dispatch](https://docs.livekit.io/agents/server/agent-dispatch/)
 - [LiveKit custom deployment](https://docs.livekit.io/deploy/custom/deployments/)
 - [OpenAI production practices](https://developers.openai.com/api/docs/guides/production-best-practices)

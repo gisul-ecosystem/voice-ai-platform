@@ -109,7 +109,6 @@ class LaptopSTT(stt.STT):
                 "provider": self.provider,
                 "model": self.model,
                 "output_chars": len(transcript),
-                "transcript": transcript.encode("unicode_escape").decode("ascii"),
             },
         )
         return stt.SpeechEvent(
@@ -209,7 +208,6 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                             "model": self._stt.model,
                             "output_chars": len(text),
                             "streaming": True,
-                            "transcript": text.encode("unicode_escape").decode("ascii"),
                         },
                     )
                     self._event_ch.send_nowait(

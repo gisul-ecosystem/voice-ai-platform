@@ -7,6 +7,7 @@ models loaded locally.
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,8 @@ load_dotenv()
 configure_logging()
 
 from routers import (  # noqa: E402
+    brain_intelligence,
+    brain_state,
     health,
     interview_contexts,
     interviews,
@@ -61,52 +64,6 @@ def validate_startup_configuration() -> None:
         )
 
 
-app = FastAPI(title="Voice AI Platform - Backend API")
-test_frontend_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "TEST_FRONTEND_ORIGINS",
-        "http://127.0.0.1:8765,http://localhost:8765",
-    ).split(",")
-    if origin.strip()
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=test_frontend_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
-)
-app.include_router(health.router)
-app.include_router(interview_contexts.router)
-app.include_router(interviews.router)
-app.include_router(scheduled_interviews.router)
-app.include_router(session_events.router)
-app.include_router(sessions.router)
-app.include_router(tools.router)
-
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    correlation_id = set_correlation_id(request.headers.get("x-correlation-id"))
-    started = time.perf_counter()
-    response = await call_next(request)
-    response.headers["x-correlation-id"] = correlation_id
-    logger.info(
-        "http_request",
-        extra={
-            "event": "http_request",
-            "method": request.method,
-            "path": request.url.path,
-            "status": response.status_code,
-            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
-            "correlation_id": correlation_id,
-        },
-    )
-    return response
-
-
-@app.on_event("startup")
 async def startup():
     configure_logging()
     validate_startup_configuration()
@@ -130,9 +87,64 @@ async def startup():
         set_fallback_mode(True)
 
 
-@app.on_event("shutdown")
 async def shutdown():
     close_client()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await startup()
+    try:
+        yield
+    finally:
+        await shutdown()
+
+
+app = FastAPI(title="Voice AI Platform - Backend API", lifespan=lifespan)
+test_frontend_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "TEST_FRONTEND_ORIGINS",
+        "http://127.0.0.1:8765,http://localhost:8765",
+    ).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=test_frontend_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
+app.include_router(health.router)
+app.include_router(interview_contexts.router)
+app.include_router(interviews.router)
+app.include_router(scheduled_interviews.router)
+app.include_router(session_events.router)
+app.include_router(brain_intelligence.router)
+app.include_router(brain_state.router)
+app.include_router(sessions.router)
+app.include_router(tools.router)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    correlation_id = set_correlation_id(request.headers.get("x-correlation-id"))
+    started = time.perf_counter()
+    response = await call_next(request)
+    response.headers["x-correlation-id"] = correlation_id
+    logger.info(
+        "http_request",
+        extra={
+            "event": "http_request",
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+            "correlation_id": correlation_id,
+        },
+    )
+    return response
 
 
 if __name__ == "__main__":
