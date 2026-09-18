@@ -4,6 +4,7 @@ import {
   RoomAudioRenderer,
   useConnectionQualityIndicator,
   useConnectionState,
+  useLocalParticipant,
 } from "@livekit/components-react";
 import {
   VoiceAgentStatus,
@@ -24,7 +25,10 @@ export function CandidateLiveInterview({
   onEndRequested: () => void;
 }) {
   const connectionState = useConnectionState();
-  const { quality } = useConnectionQualityIndicator();
+  const { localParticipant } = useLocalParticipant();
+  const { quality } = useConnectionQualityIndicator({
+    participant: localParticipant,
+  });
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
