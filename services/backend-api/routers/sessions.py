@@ -193,14 +193,26 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
                         name=room_name,
                         metadata=metadata_json,
                         max_participants=max_participants,
+                        agents=[api.RoomAgentDispatch(agent_name=agent_name)],
                     )
                 )
-                await lk.agent_dispatch.create_dispatch(
+                dispatch = await lk.agent_dispatch.create_dispatch(
                     api.CreateAgentDispatchRequest(
                         room=room_name,
                         agent_name=agent_name,
                         metadata=metadata_json,
                     )
+                )
+                logger.info(
+                    "livekit_agent_dispatched",
+                    extra={
+                        "event": "livekit_agent_dispatched",
+                        "room": room_name,
+                        "agent_name": agent_name,
+                        "session_id": session_id,
+                        "dispatch_id": getattr(dispatch, "id", None),
+                        "correlation_id": correlation_id,
+                    },
                 )
                 if (
                     invitation_id
@@ -312,6 +324,11 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
                 can_publish=True,
                 can_subscribe=True,
                 can_publish_data=False,
+            )
+        )
+        .with_room_config(
+            api.RoomConfiguration(
+                agents=[api.RoomAgentDispatch(agent_name=agent_name)]
             )
         )
         .to_jwt()

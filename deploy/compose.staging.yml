@@ -69,6 +69,13 @@ services:
       # Hot interview-brain layer (override only if backend-api.env already sets REDIS_URL)
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       INTERVIEW_BRAIN_REDIS_TTL_SECONDS: ${INTERVIEW_BRAIN_REDIS_TTL_SECONDS:-21600}
+      # Isolate from local workers that also register as "aaptor" on the same LiveKit.
+      LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-aaptor-staging}
+      INTERVIEWER_AGENT_NAME: ${INTERVIEWER_AGENT_NAME:-aaptor-staging}
+      # Prefer real LiveKit API keys in /etc/voice-ai-platform/*.env — never leave "devkey" in staging.
+      # Temporary escape hatch until keys are rotated; remove after real keys are installed.
+      LIVEKIT_ALLOW_WEAK_API_KEY: ${LIVEKIT_ALLOW_WEAK_API_KEY:-true}
+      LIVEKIT_TOKEN_TTL_MINUTES: ${LIVEKIT_TOKEN_TTL_MINUTES:-45}
     depends_on:
       mongo:
         condition: service_healthy
@@ -102,6 +109,9 @@ services:
       BACKEND_API_URL: http://backend-api:5554
       CONTEXT_ENGINE_URL: http://context-engine:5555
       AAPTOR_WORKER_PORT: "8081"
+      # Must match backend LIVEKIT_AGENT_NAME so dispatches hit this worker.
+      LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-aaptor-staging}
+      LIVEKIT_ALLOW_WEAK_API_KEY: ${LIVEKIT_ALLOW_WEAK_API_KEY:-true}
     depends_on:
       backend-api:
         condition: service_healthy

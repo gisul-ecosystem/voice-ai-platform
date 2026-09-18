@@ -19,6 +19,24 @@ bound. Backend and worker health ports bind to loopback.
 For the operator checklist (start order, Redis key proof, rollback, Azure 2092
 acceptance), see **`docs/staging_runbook_redis_brain.md`**.
 
+## LiveKit worker isolation
+
+Staging Compose sets `LIVEKIT_AGENT_NAME=aaptor-staging` on **backend-api** and
+**voice-agent**. Local workers usually register as `aaptor`. If both use the same
+LiveKit project (`LIVEKIT_URL` / API key), a local worker can steal staging jobs
+and the staging agent stays silent.
+
+Rules:
+
+1. Stop local `voice-agent` when testing staging, **or** keep staging on
+   `aaptor-staging`.
+2. Do **not** use LiveKit `devkey` on staging. Put real API key/secret in
+   `/etc/voice-ai-platform/backend-api.env` and `voice-agent.env`. Until then,
+   Compose may set `LIVEKIT_ALLOW_WEAK_API_KEY=true` so services can start;
+   remove that flag after rotating keys.
+3. After changing agent name or keys: redeploy / recreate those two containers
+   and confirm logs show `registered worker` with `agent_name=aaptor-staging`.
+
 ## VM secret files
 
 Secrets are installed outside the checkout:
