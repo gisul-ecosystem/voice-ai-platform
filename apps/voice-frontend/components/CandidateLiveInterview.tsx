@@ -76,7 +76,7 @@ export function CandidateLiveInterview({
           />
           <div className="candidate-speaking-note">
             <span className="candidate-initial" aria-hidden="true">
-              {candidateName.slice(0, 1).toUpperCase()}
+              {(candidateName || "?").slice(0, 1).toUpperCase()}
             </span>
             <div>
               <strong>{candidateName}</strong>

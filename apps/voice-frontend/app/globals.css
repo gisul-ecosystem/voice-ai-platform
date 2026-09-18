@@ -257,9 +257,27 @@ a {
 
 .candidate-preview {
   height: 100%;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+}
+
+.candidate-preview-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: auto;
+}
+
+.candidate-preview .setup-actions {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .candidate-summary {
@@ -586,6 +604,49 @@ a {
   align-items: center;
   justify-content: center;
   text-align: center;
+}
+
+.attend-error-page {
+  width: calc(100% - 32px);
+  max-width: 720px;
+  min-height: 100dvh;
+  margin: 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 24px 0;
+}
+
+.attend-error-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: clamp(28px, 5vw, 48px);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.attend-error-card h1 {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  letter-spacing: -0.03em;
+}
+
+.attend-error-card > p {
+  max-width: 42ch;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.attend-error-card .button-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 .spinner {
@@ -1332,11 +1393,24 @@ select:focus-visible,
   to { transform: scaleY(0.6); }
 }
 
-.demo-stage-candidate:has(.candidate-live-room) {
+.demo-stage-candidate {
+  width: calc(100% - 32px);
+  max-width: none;
+  min-height: 100dvh;
   height: 100dvh;
-  grid-template-rows: 58px minmax(0, 1fr);
-  padding-bottom: 16px;
+  grid-template-rows: 44px auto minmax(0, 1fr);
+  padding-bottom: 12px;
   overflow: hidden;
+}
+
+.demo-stage-candidate .demo-card {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+}
+
+.demo-stage-candidate:has(.candidate-live-room) {
+  grid-template-rows: 44px minmax(0, 1fr);
 }
 
 .demo-stage-candidate:has(.candidate-live-room) .demo-intro {
@@ -1345,7 +1419,7 @@ select:focus-visible,
 
 .demo-stage-candidate:has(.candidate-live-room) .demo-card {
   min-height: 0;
-  margin-top: 16px;
+  margin-top: 0;
   padding: 0;
   overflow: hidden;
 }
