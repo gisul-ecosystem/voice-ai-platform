@@ -19,6 +19,7 @@ from brain.defaults import (
     default_question_ladder,
     default_time_policy_for_duration,
 )
+from brain.safety import contains_prohibited_content, contains_prompt_injection
 from models.brain import (
     CompetencyDefinition,
     DurationMinutes,
@@ -33,6 +34,28 @@ from models.brain import (
 _SLUG = re.compile(r"[^a-z0-9]+")
 _MAX_COMPETENCIES = 6
 _MIN_COMPETENCIES = 3
+_MIN_SEED_CONFIDENCE = 0.5
+_REQUIRED_WEIGHT_MASS = 70.0
+_PREFERRED_WEIGHT_MASS = 30.0
+
+_SKILL_ALIASES: dict[str, str] = {
+    "js": "javascript",
+    "javascript": "javascript",
+    "node": "node.js",
+    "nodejs": "node.js",
+    "node.js": "node.js",
+    "py": "python",
+    "python3": "python",
+    "k8s": "kubernetes",
+    "postgres": "postgresql",
+    "postgresql": "postgresql",
+    "golang": "go",
+    "react.js": "react",
+    "reactjs": "react",
+    "tf": "tensorflow",
+    "communication skills": "communication",
+    "ms excel": "excel",
+}
 
 _CORE_FALLBACKS: list[tuple[str, str, str]] = [
     (
@@ -81,27 +104,47 @@ def _unique_id(base: str, used: set[str]) -> str:
     return candidate
 
 
-def _default_rubric(name: str) -> list[RubricAnchor]:
+def _role_rubric(
+    name: str,
+    level: SeniorityLevel,
+    hints: list[str],
+) -> list[RubricAnchor]:
+    hint = (hints[0] if hints else name).strip()[:80] or name
     return [
         RubricAnchor(
             rating=1,
-            description=f"Little or no relevant evidence for {name.lower()}",
+            description=(
+                f"Little or no observable evidence of {name.lower()} at the "
+                f"{level} level (no concrete {hint.lower()} example)"
+            )[:500],
         ),
         RubricAnchor(
             rating=3,
             description=(
-                f"Explains a relevant example for {name.lower()} with clear "
-                "personal contribution and outcome"
-            ),
+                f"Describes a relevant {name.lower()} example for a {level} "
+                f"role, including personal contribution and a clear outcome "
+                f"related to {hint.lower()}"
+            )[:500],
         ),
         RubricAnchor(
             rating=5,
             description=(
-                f"Shows strong {name.lower()} with trade-offs, alternatives, "
-                "and measurable impact"
-            ),
+                f"Shows strong {name.lower()} for a {level} role, including "
+                f"trade-offs, alternatives, and measurable impact related to "
+                f"{hint.lower()}"
+            )[:500],
         ),
     ]
+
+
+def normalize_skill_label(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (value or "")).strip(" -•:")
+    if not cleaned:
+        return cleaned
+    alias = _SKILL_ALIASES.get(cleaned.lower())
+    if alias:
+        return alias
+    return cleaned
 
 
 def _evidence_for(name: str, jd_hints: list[str]) -> list[str]:
@@ -140,46 +183,65 @@ def _texts(items: Iterable[ExtractedItem]) -> list[str]:
 def _candidate_competency_seeds(
     job: JobIntelligence,
     creator_competencies: list[str] | None,
-) -> list[tuple[str, str, list[str]]]:
-    """Return (id_base, display_name, jd_hint_texts)."""
-    seeds: list[tuple[str, str, list[str]]] = []
+) -> list[tuple[str, str, list[str], bool]]:
+    """Return (id_base, display_name, jd_hint_texts, required)."""
+    seeds: list[tuple[str, str, list[str], bool]] = []
     seen_names: set[str] = set()
 
-    def add(name: str, hints: list[str]) -> None:
-        cleaned = re.sub(r"\s+", " ", name).strip(" -•:")
+    def add(name: str, hints: list[str], *, required: bool) -> None:
+        cleaned = normalize_skill_label(name)
         if len(cleaned) < 2:
+            return
+        if contains_prohibited_content(cleaned) or contains_prompt_injection(cleaned):
             return
         key = cleaned.lower()
         if key in seen_names:
             return
         seen_names.add(key)
-        seeds.append((_slugify(cleaned, fallback="competency"), cleaned[:120], hints))
+        seeds.append(
+            (_slugify(cleaned, fallback="competency"), cleaned[:120], hints, required)
+        )
 
     for name in creator_competencies or []:
-        add(name, [])
+        add(name, [], required=True)
+
+    def _usable(item: ExtractedItem, *, max_len: int = 60) -> bool:
+        text = item.text.strip()
+        if "," in text or len(text) > max_len:
+            return False
+        if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
+            return False
+        return True
 
     for item in job.skills + job.mandatory_requirements:
-        # Prefer short skill-like phrases.
-        text = item.text.strip()
-        if "," in text or len(text) > 60:
-            continue
-        add(text, [text])
+        if _usable(item):
+            add(item.text, [item.text], required=True)
 
     for item in job.responsibilities[:4]:
-        # Turn a duty into a competency-style label when short enough.
         text = item.text.strip()
-        if 8 <= len(text) <= 48:
-            add(text, [text])
+        if 8 <= len(text) <= 48 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
+            add(text, [text], required=True)
 
-    if len(seeds) < _MIN_COMPETENCIES:
+    preferred_pool = (
+        list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
+    )
+    for item in preferred_pool:
+        if _usable(item, max_len=48):
+            add(item.text, [item.text], required=False)
+
+    required_seeds = [seed for seed in seeds if seed[3]]
+    preferred_seeds = [seed for seed in seeds if not seed[3]]
+    combined = required_seeds + preferred_seeds
+
+    if len(combined) < _MIN_COMPETENCIES:
         for competency_id, name, _definition in _CORE_FALLBACKS:
             if name.lower() not in seen_names:
-                seeds.append((competency_id, name, []))
+                combined.append((competency_id, name, [], True))
                 seen_names.add(name.lower())
-            if len(seeds) >= _MIN_COMPETENCIES:
+            if len(combined) >= _MIN_COMPETENCIES:
                 break
 
-    return seeds[:_MAX_COMPETENCIES]
+    return combined[:_MAX_COMPETENCIES]
 
 
 def _build_competency(
@@ -189,6 +251,7 @@ def _build_competency(
     hints: list[str],
     level: SeniorityLevel,
     weight: float,
+    required: bool = True,
     definition: str | None = None,
 ) -> CompetencyDefinition:
     return CompetencyDefinition(
@@ -201,13 +264,13 @@ def _build_competency(
                 f"relevant to the {level} role using concrete work examples"
             )
         )[:1000],
-        importance="high" if weight >= (100.0 / _MAX_COMPETENCIES) else "medium",
+        importance="high" if required else "medium",
         required_level=_LEVEL_TO_REQUIRED.get(level, 3),
         evidence_expected=_evidence_for(name, hints),
         min_assessment_intents=_intents_for_level(level),
         max_depth=min(5, max(3, _LEVEL_TO_REQUIRED.get(level, 3) + 1)),
         max_probes=3 if level in {"intern", "junior"} else 4,
-        rubric=_default_rubric(name),
+        rubric=_role_rubric(name, level, hints),
         weight=round(weight, 2),
     )
 
@@ -221,6 +284,41 @@ def _equal_weights(count: int) -> list[float]:
     return weights
 
 
+def _importance_weights(required_flags: list[bool]) -> list[float]:
+    if not required_flags:
+        return []
+    n_req = sum(1 for flag in required_flags if flag)
+    n_pref = len(required_flags) - n_req
+    if n_req == 0 or n_pref == 0:
+        return _equal_weights(len(required_flags))
+    weights: list[float] = []
+    req_each = round(_REQUIRED_WEIGHT_MASS / n_req, 2)
+    pref_each = round(_PREFERRED_WEIGHT_MASS / n_pref, 2)
+    req_assigned = 0.0
+    pref_assigned = 0.0
+    req_seen = 0
+    pref_seen = 0
+    for flag in required_flags:
+        if flag:
+            req_seen += 1
+            if req_seen == n_req:
+                weights.append(round(_REQUIRED_WEIGHT_MASS - req_assigned, 2))
+            else:
+                weights.append(req_each)
+                req_assigned += req_each
+        else:
+            pref_seen += 1
+            if pref_seen == n_pref:
+                weights.append(round(_PREFERRED_WEIGHT_MASS - pref_assigned, 2))
+            else:
+                weights.append(pref_each)
+                pref_assigned += pref_each
+    drift = round(100.0 - sum(weights), 2)
+    if weights:
+        weights[-1] = round(weights[-1] + drift, 2)
+    return weights
+
+
 def _scenario_bank(
     job: JobIntelligence,
     competencies: list[CompetencyDefinition],
@@ -230,6 +328,8 @@ def _scenario_bank(
     primary = competencies[0]
     scenarios: list[ScenarioDefinition] = []
     for index, item in enumerate(job.work_scenarios[:2], start=1):
+        if contains_prohibited_content(item.text) or contains_prompt_injection(item.text):
+            continue
         scenarios.append(
             ScenarioDefinition(
                 id=f"scen_{index}_{primary.id}"[:64],
@@ -278,12 +378,12 @@ def compile_blueprint(
 
     level = job_intelligence.role.target_level
     seeds = _candidate_competency_seeds(job_intelligence, creator_competencies)
-    weights = _equal_weights(len(seeds))
+    weights = _importance_weights([seed[3] for seed in seeds])
     used_ids: set[str] = set()
     competencies: list[CompetencyDefinition] = []
 
     core_defs = {item[0]: item[2] for item in _CORE_FALLBACKS}
-    for (id_base, name, hints), weight in zip(seeds, weights, strict=True):
+    for (id_base, name, hints, required), weight in zip(seeds, weights, strict=True):
         competency_id = _unique_id(id_base, used_ids)
         competencies.append(
             _build_competency(
@@ -292,6 +392,7 @@ def compile_blueprint(
                 hints=hints,
                 level=level,
                 weight=weight,
+                required=required,
                 definition=core_defs.get(id_base),
             )
         )

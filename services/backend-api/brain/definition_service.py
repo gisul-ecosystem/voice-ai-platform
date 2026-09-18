@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from brain.compiler import compile_blueprint
-from brain.extractors import extract_job_intelligence
+from brain.llm_extract import extract_job_intelligence_async
 from brain.publish import publish_definition
 from db import definitions, interviews
 from models.brain import DurationMinutes, InterviewDefinitionVersion, SeniorityLevel
@@ -27,13 +27,18 @@ async def publish_and_store(
             raise ValueError("definition_id not found")
         return stored
 
+    if not interview_setup.competencies:
+        raise ValueError("creator competencies are required to publish a definition")
+
     level: SeniorityLevel = interview_setup.seniority
     duration: DurationMinutes = interview_setup.durationMinutes
-    job = extract_job_intelligence(
+    job = await extract_job_intelligence_async(
         job_description,
         target_level=level,
         domain=None,
     )
+    # Recruiter-named competencies are the review payload. Extract APIs never
+    # stamp approved=True; schedule/publish only does so after this explicit list.
     job = job.model_copy(
         update={
             "approved": True,
@@ -45,6 +50,14 @@ async def publish_and_store(
                 }
             ),
         }
+    )
+    logger.info(
+        "job_intelligence_approved_for_publish",
+        extra={
+            "event": "job_intelligence_approved_for_publish",
+            "source": "creator_competencies",
+            "competency_count": len(interview_setup.competencies),
+        },
     )
     draft = compile_blueprint(
         job_intelligence=job,

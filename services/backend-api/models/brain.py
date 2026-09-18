@@ -380,6 +380,12 @@ class InterviewQuestionRecord(BaseModel):
     source_claim_ids: list[str] = Field(default_factory=list, max_length=20)
     status: QuestionStatus = "planned"
     asked_at: datetime | None = None
+    prompt_version: str | None = Field(default=None, max_length=64)
+    definition_id: str | None = Field(default=None, max_length=64)
+    policy_action: str | None = Field(default=None, max_length=64)
+    validator_ok: bool | None = None
+    validator_reasons: list[str] = Field(default_factory=list, max_length=20)
+    raw_model_output: str | None = Field(default=None, max_length=2_000)
 
 
 class InterviewAnswerRecord(BaseModel):
@@ -452,8 +458,62 @@ class CompetencyScore(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list, max_length=100)
     contradictory_evidence_ids: list[str] = Field(default_factory=list, max_length=50)
     missing_evidence: list[str] = Field(default_factory=list, max_length=20)
+    missing_intents: list[str] = Field(default_factory=list, max_length=20)
+    excerpts: list[str] = Field(default_factory=list, max_length=8)
     confidence: float = Field(ge=0, le=1, default=0)
     review_required: bool = True
+
+
+class ScorecardQualityMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mandatory_coverage_pct: float = Field(ge=0, le=100, default=0)
+    repeated_question_rate: float = Field(ge=0, le=1, default=0)
+    not_assessed_rate: float = Field(ge=0, le=1, default=0)
+    insufficient_evidence_rate: float = Field(ge=0, le=1, default=0)
+    validator_failure_rate: float = Field(ge=0, le=1, default=0)
+    question_count: int = Field(ge=0, default=0)
+    answer_count: int = Field(ge=0, default=0)
+
+
+class CompetencyOverride(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    competency_id: str = Field(min_length=2, max_length=64)
+    rating: int | None = Field(default=None, ge=1, le=5)
+    outcome: Literal["scored", "not_assessed", "insufficient_evidence"] | None = None
+    reason: str = Field(min_length=2, max_length=500)
+
+
+class ScorecardReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["approved", "overridden"]
+    reviewer_id: str = Field(min_length=1, max_length=128)
+    override_reason: str | None = Field(default=None, max_length=2_000)
+    competency_overrides: list[CompetencyOverride] = Field(
+        default_factory=list, max_length=12
+    )
+
+    @model_validator(mode="after")
+    def _override_requires_reason(self) -> ScorecardReviewRequest:
+        if self.status == "overridden" and not (self.override_reason or "").strip():
+            raise ValueError("override_reason is required when status is overridden")
+        return self
+
+
+class ScorecardReviewEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_id: str = Field(min_length=4, max_length=64)
+    session_id: str = Field(min_length=8, max_length=64)
+    status: Literal["approved", "overridden"]
+    reviewer_id: str = Field(min_length=1, max_length=128)
+    override_reason: str | None = Field(default=None, max_length=2_000)
+    competency_overrides: list[CompetencyOverride] = Field(
+        default_factory=list, max_length=12
+    )
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class InterviewScorecard(BaseModel):
@@ -474,6 +534,8 @@ class InterviewScorecard(BaseModel):
     reviewed_at: datetime | None = None
     reviewer_id: str | None = Field(default=None, max_length=128)
     override_reason: str | None = Field(default=None, max_length=2_000)
+    next_human_questions: list[str] = Field(default_factory=list, max_length=12)
+    quality_metrics: ScorecardQualityMetrics | None = None
 
 
 class PolicyDecision(BaseModel):
