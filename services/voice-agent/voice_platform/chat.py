@@ -43,7 +43,11 @@ def is_usable_candidate_turn(
     words = [word for word in words if word]
     if len(words) < max(1, min_words):
         return False
-    if len(words) >= 8 and len(set(words)) <= 3:
+    if len(words) >= 6 and len(set(words)) <= 3:
+        return False
+    joined = " ".join(words)
+    # Common Sarvam mis-hears of TTS while speakers are open.
+    if joined.startswith("there are") and len(words) <= 12:
         return False
     agent_words = [
         token.strip(".,!?;:\"'").lower()
@@ -52,7 +56,12 @@ def is_usable_candidate_turn(
     ]
     agent_words = [word for word in agent_words if word]
     if agent_words:
-        overlap = sum(1 for word in words if word in set(agent_words)) / len(words)
-        if overlap >= 0.7:
+        agent_set = set(agent_words)
+        overlap = sum(1 for word in words if word in agent_set) / len(words)
+        if overlap >= 0.55:
+            return False
+        # Long substring overlap with the last agent utterance.
+        agent_joined = " ".join(agent_words)
+        if len(joined) >= 18 and (joined in agent_joined or agent_joined in joined):
             return False
     return True
