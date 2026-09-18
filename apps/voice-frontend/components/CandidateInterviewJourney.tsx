@@ -1,19 +1,65 @@
 "use client";
 
 import {
-  VoiceRoom,
+  Component,
+  type ComponentType,
+  type ErrorInfo,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import dynamic from "next/dynamic";
+import Link from "next/link";
+import {
   createVoiceSession,
   type VoiceSessionCredentials,
-} from "@gisul/voice-ui";
-import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+} from "@gisul/voice-ui/session";
 
-import {
-  DevicePreJoin,
-  type DeviceChoices,
-} from "@/components/DevicePreJoin";
-import { CandidateLiveInterview } from "@/components/CandidateLiveInterview";
+import type { DeviceChoices } from "@/components/DevicePreJoin";
 import { getProduct } from "@/lib/products";
+
+type LiveInterviewRoomProps = {
+  credentials: VoiceSessionCredentials;
+  choices: DeviceChoices;
+  title: string;
+  candidateName: string;
+  cameraAllowed: boolean;
+  onConnected: () => void;
+  onDisconnected: () => void;
+  onError: (error: Error) => void;
+  onEndRequested: () => void;
+};
+
+const DevicePreJoin = dynamic(
+  () =>
+    import("@/components/DevicePreJoin").then((module) => module.DevicePreJoin),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="center-state" role="status">
+        <span className="spinner" aria-hidden="true" />
+        <h2 tabIndex={-1}>Loading device check</h2>
+      </div>
+    ),
+  },
+);
+
+const LiveInterviewRoom = dynamic(
+  () =>
+    import("@/components/LiveInterviewRoom").then(
+      (module) => module.LiveInterviewRoom,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="center-state" role="status">
+        <span className="spinner" aria-hidden="true" />
+        <h2 tabIndex={-1}>Opening interview room</h2>
+      </div>
+    ),
+  },
+) as ComponentType<LiveInterviewRoomProps>;
 
 type Preview = {
   interview_id: string;
@@ -39,16 +85,67 @@ type Stage =
   | "completed"
   | "failed";
 
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parsePreview(data: Record<string, unknown>): Preview | undefined {
+  const interview_id = asString(data.interview_id);
+  const candidate_name = asString(data.candidate_name);
+  const title = asString(data.title);
+  const role = asString(data.role);
+  const starts_at = asString(data.starts_at);
+  const timezone = asString(data.timezone) || "UTC";
+  const join_not_before = asString(data.join_not_before);
+  const join_closes_at = asString(data.join_closes_at);
+  const status = asString(data.status) || "unavailable";
+  const duration_minutes = Number(data.duration_minutes);
+  if (
+    !interview_id ||
+    !candidate_name ||
+    !title ||
+    !role ||
+    !starts_at ||
+    !join_not_before ||
+    !join_closes_at ||
+    !Number.isFinite(duration_minutes)
+  ) {
+    return undefined;
+  }
+  return {
+    interview_id,
+    candidate_name,
+    title,
+    role,
+    starts_at,
+    timezone,
+    duration_minutes,
+    join_not_before,
+    join_closes_at,
+    monitoring_enabled: data.monitoring_enabled === true,
+    recording_enabled: data.recording_enabled === true,
+    status,
+  };
+}
+
 function formatDateTime(value: string, timezone: string): string {
+  const zone = timezone === "Asia/Calcutta" ? "Asia/Kolkata" : timezone;
   try {
     return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone: timezone,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: zone,
       timeZoneName: "short",
     }).format(new Date(value));
   } catch {
-    return new Date(value).toLocaleString();
+    try {
+      return new Date(value).toLocaleString();
+    } catch {
+      return value;
+    }
   }
 }
 
@@ -74,10 +171,58 @@ function newIdempotencyKey(): string {
   return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-export function CandidateInterviewJourney({
+class JourneyErrorBoundary extends Component<
+  { children: ReactNode; onRetry: () => void },
+  { message?: string }
+> {
+  state: { message?: string } = {};
+
+  static getDerivedStateFromError(error: Error) {
+    return {
+      message:
+        error.message || "The interview page hit an unexpected browser error.",
+    };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("candidate_journey_crash", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.message) return this.props.children;
+    return (
+      <div className="center-state" role="alert" data-candidate-stage="failed">
+        <span className="completion-mark" aria-hidden="true">
+          !
+        </span>
+        <h2 tabIndex={-1}>The interview page could not continue</h2>
+        <p>{this.state.message}</p>
+        <div className="button-row">
+          <button
+            className="button primary"
+            type="button"
+            onClick={() => {
+              this.setState({ message: undefined });
+              this.props.onRetry();
+            }}
+          >
+            Retry interview
+          </button>
+          <Link className="button secondary" href="/interviewer">
+            Return home
+          </Link>
+        </div>
+      </div>
+    );
+  }
+}
+
+function CandidateInterviewJourneyInner({
   invitationToken,
+  resetToken,
 }: {
   invitationToken: string;
+  resetToken: number;
 }) {
   const product = getProduct("interviewer");
   const [stage, setStage] = useState<Stage>("loading");
@@ -95,13 +240,29 @@ export function CandidateInterviewJourney({
   });
 
   useEffect(() => {
-    document
-      .querySelector<HTMLElement>("[data-candidate-stage] h2")
-      ?.focus({ preventScroll: true });
+    try {
+      document
+        .querySelector<HTMLElement>("[data-candidate-stage] h2")
+        ?.focus({ preventScroll: true });
+    } catch {
+      // Focus is progressive enhancement only.
+    }
   }, [stage]);
 
   useEffect(() => {
     let active = true;
+    setStage("loading");
+    setPreview(undefined);
+    setError(undefined);
+    setChoices(undefined);
+    setCredentials(undefined);
+    setConsents({
+      ai_interview: false,
+      transcription: false,
+      monitoring: false,
+      recording: false,
+    });
+
     async function load() {
       try {
         const response = await fetch("/api/invitations", {
@@ -109,17 +270,26 @@ export function CandidateInterviewJourney({
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ invitationToken }),
         });
-        const data = (await response.json().catch(() => ({}))) as Preview & {
-          error?: string;
-        };
-        if (!response.ok) throw new Error(data.error || "Invitation is invalid.");
+        const data = (await response.json().catch(() => ({}))) as Record<
+          string,
+          unknown
+        > & { error?: string };
+        if (!response.ok) {
+          throw new Error(data.error || "Invitation is invalid.");
+        }
+        const parsed = parsePreview(data);
+        if (!parsed) {
+          throw new Error("Invitation details were incomplete.");
+        }
         if (active) {
-          setPreview(data);
+          setPreview(parsed);
           setStage("preview");
         }
       } catch (reason) {
         if (active) {
-          setError(reason instanceof Error ? reason.message : "Invitation is invalid.");
+          setError(
+            reason instanceof Error ? reason.message : "Invitation is invalid.",
+          );
           setStage("preview");
         }
       }
@@ -128,7 +298,7 @@ export function CandidateInterviewJourney({
     return () => {
       active = false;
     };
-  }, [invitationToken]);
+  }, [invitationToken, resetToken]);
 
   const readyForConsent =
     consents.ai_interview &&
@@ -233,73 +403,117 @@ export function CandidateInterviewJourney({
           <h2 tabIndex={-1}>{preview.title}</h2>
           <p>Review the interview details and required disclosures.</p>
         </div>
-        {error ? <div className="alert" role="alert">{error}</div> : null}
-        {statusMessage ? (
-          <div className="invitation-status" role="status">
-            <strong>{preview.status === "upcoming" ? "Scheduled" : "Unavailable"}</strong>
-            <p>{statusMessage}</p>
-          </div>
-        ) : null}
-        <div className="candidate-summary">
-          <dl>
-            <div><dt>Candidate</dt><dd>{preview.candidate_name}</dd></div>
-            <div><dt>Role</dt><dd>{preview.role}</dd></div>
-            <div><dt>Duration</dt><dd>{preview.duration_minutes} minutes</dd></div>
-            <div>
-              <dt>Scheduled</dt>
-              <dd>{formatDateTime(preview.starts_at, preview.timezone)}</dd>
+        <div className="candidate-preview-body">
+          {error ? <div className="alert" role="alert">{error}</div> : null}
+          {statusMessage ? (
+            <div className="invitation-status" role="status">
+              <strong>
+                {preview.status === "upcoming" ? "Scheduled" : "Unavailable"}
+              </strong>
+              <p>{statusMessage}</p>
             </div>
+          ) : null}
+          <div className="candidate-summary">
+            <dl>
+              <div>
+                <dt>Candidate</dt>
+                <dd>{preview.candidate_name}</dd>
+              </div>
+              <div>
+                <dt>Role</dt>
+                <dd>{preview.role}</dd>
+              </div>
+              <div>
+                <dt>Duration</dt>
+                <dd>{preview.duration_minutes} minutes</dd>
+              </div>
+              <div>
+                <dt>Scheduled</dt>
+                <dd>{formatDateTime(preview.starts_at, preview.timezone)}</dd>
+              </div>
+              <div>
+                <dt>Join window</dt>
+                <dd>
+                  {formatDateTime(preview.join_not_before, preview.timezone)}
+                  {" – "}
+                  {formatDateTime(preview.join_closes_at, preview.timezone)}
+                </dd>
+              </div>
+            </dl>
             <div>
-              <dt>Join window</dt>
-              <dd>
-                {formatDateTime(preview.join_not_before, preview.timezone)}
-                {" – "}
-                {formatDateTime(preview.join_closes_at, preview.timezone)}
-              </dd>
+              <h3>What to expect</h3>
+              <p>
+                An AI interviewer asks structured, job-related questions. Only
+                finalized transcript evidence should be used for evaluation.
+              </p>
+              <p>
+                For accommodations or an alternative format, contact the inviting
+                organization before starting.
+              </p>
+              <ul className="disclosure-list">
+                <li>Live transcription: required</li>
+                <li>
+                  Silent human monitoring:{" "}
+                  {preview.monitoring_enabled ? "enabled" : "not enabled"}
+                </li>
+                <li>
+                  Recording:{" "}
+                  {preview.recording_enabled
+                    ? "enabled with consent"
+                    : "not enabled"}
+                </li>
+              </ul>
             </div>
-          </dl>
-          <div>
-            <h3>What to expect</h3>
-            <p>
-              An AI interviewer asks structured, job-related questions. Only
-              finalized transcript evidence should be used for evaluation.
-            </p>
-            <p>
-              For accommodations or an alternative format, contact the inviting
-              organization before starting.
-            </p>
-            <ul className="disclosure-list">
-              <li>Live transcription: required</li>
-              <li>Silent human monitoring: {preview.monitoring_enabled ? "enabled" : "not enabled"}</li>
-              <li>Recording: {preview.recording_enabled ? "enabled with consent" : "not enabled"}</li>
-            </ul>
           </div>
+          <fieldset className="consent-list">
+            <legend>Consent</legend>
+            <ConsentCheck
+              label="I understand this interview is conducted by AI."
+              checked={consents.ai_interview}
+              onChange={(value) =>
+                setConsents({ ...consents, ai_interview: value })
+              }
+            />
+            <ConsentCheck
+              label="I agree to transcription for evaluation."
+              checked={consents.transcription}
+              onChange={(value) =>
+                setConsents({ ...consents, transcription: value })
+              }
+            />
+            {preview.monitoring_enabled ? (
+              <ConsentCheck
+                label="I understand an authorized human may listen silently."
+                checked={consents.monitoring}
+                onChange={(value) =>
+                  setConsents({ ...consents, monitoring: value })
+                }
+              />
+            ) : null}
+            {preview.recording_enabled ? (
+              <ConsentCheck
+                label="I explicitly agree to interview recording."
+                checked={consents.recording}
+                onChange={(value) =>
+                  setConsents({ ...consents, recording: value })
+                }
+              />
+            ) : null}
+          </fieldset>
         </div>
-        <fieldset className="consent-list">
-          <legend>Consent</legend>
-          <ConsentCheck label="I understand this interview is conducted by AI."
-            checked={consents.ai_interview}
-            onChange={(value) => setConsents({ ...consents, ai_interview: value })} />
-          <ConsentCheck label="I agree to transcription for evaluation."
-            checked={consents.transcription}
-            onChange={(value) => setConsents({ ...consents, transcription: value })} />
-          {preview.monitoring_enabled ? (
-            <ConsentCheck label="I understand an authorized human may listen silently."
-              checked={consents.monitoring}
-              onChange={(value) => setConsents({ ...consents, monitoring: value })} />
-          ) : null}
-          {preview.recording_enabled ? (
-            <ConsentCheck label="I explicitly agree to interview recording."
-              checked={consents.recording}
-              onChange={(value) => setConsents({ ...consents, recording: value })} />
-          ) : null}
-        </fieldset>
         <div className="setup-actions">
-          <Link className="button secondary" href="/interviewer">Exit</Link>
-          <button className="button primary" type="button"
+          <Link className="button secondary" href="/interviewer">
+            Exit
+          </Link>
+          <button
+            className="button primary"
+            type="button"
             disabled={!readyForConsent || preview.status !== "ready"}
-            onClick={confirmConsent}>
-            {preview.status === "ready" ? "Continue to audio check" : "Joining unavailable"}
+            onClick={() => void confirmConsent()}
+          >
+            {preview.status === "ready"
+              ? "Continue to audio check"
+              : "Joining unavailable"}
           </button>
         </div>
       </div>
@@ -314,7 +528,7 @@ export function CandidateInterviewJourney({
           product={product}
           participantName={preview.candidate_name}
           onBack={() => setStage("preview")}
-          onSubmit={join}
+          onSubmit={(values) => void join(values)}
           onError={(reason) => setError(reason.message)}
         />
       </div>
@@ -333,10 +547,12 @@ export function CandidateInterviewJourney({
 
   if ((stage === "connecting" || stage === "live") && credentials && choices) {
     return (
-      <VoiceRoom
+      <LiveInterviewRoom
         credentials={credentials}
         choices={choices}
-        className="candidate-live-room"
+        title={preview.title}
+        candidateName={preview.candidate_name}
+        cameraAllowed={product.cameraAllowed}
         onConnected={() => {
           intentionalDisconnect.current = false;
           setStage("live");
@@ -355,24 +571,22 @@ export function CandidateInterviewJourney({
           setError(reason.message);
           setStage("failed");
         }}
-      >
-        <CandidateLiveInterview
-          title={preview.title}
-          candidateName={preview.candidate_name}
-          cameraAllowed={product.cameraAllowed}
-          onEndRequested={() => {
-            intentionalDisconnect.current = true;
-          }}
-        />
-      </VoiceRoom>
+        onEndRequested={() => {
+          intentionalDisconnect.current = true;
+        }}
+      />
     );
   }
 
   const failed = stage === "failed";
   return (
     <div className="center-state completion" data-candidate-stage={stage}>
-      <span className="completion-mark" aria-hidden="true">{failed ? "!" : "✓"}</span>
-      <h2 tabIndex={-1}>{failed ? "Interview disconnected" : "Interview complete"}</h2>
+      <span className="completion-mark" aria-hidden="true">
+        {failed ? "!" : "✓"}
+      </span>
+      <h2 tabIndex={-1}>
+        {failed ? "Interview disconnected" : "Interview complete"}
+      </h2>
       <p>
         {failed
           ? "The room closed unexpectedly. Contact the inviting organization before retrying."
@@ -397,9 +611,28 @@ function ConsentCheck({
 }) {
   return (
     <label>
-      <input type="checkbox" checked={checked}
-        onChange={(event) => onChange(event.target.checked)} />
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
       {label}
     </label>
+  );
+}
+
+export function CandidateInterviewJourney({
+  invitationToken,
+}: {
+  invitationToken: string;
+}) {
+  const [resetToken, setResetToken] = useState(0);
+  return (
+    <JourneyErrorBoundary onRetry={() => setResetToken((value) => value + 1)}>
+      <CandidateInterviewJourneyInner
+        invitationToken={invitationToken}
+        resetToken={resetToken}
+      />
+    </JourneyErrorBoundary>
   );
 }

@@ -1,30 +1,51 @@
+import React, { type ComponentType, type ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const createVoiceSession = vi.hoisted(() => vi.fn());
 
-vi.mock("@livekit/components-react", () => ({
-  RoomAudioRenderer: () => null,
-  useConnectionQualityIndicator: () => ({ quality: "excellent" }),
-  useConnectionState: () => "connected",
+vi.mock("next/dynamic", () => ({
+  default: (loader: () => Promise<unknown>) => {
+    let resolved: ComponentType<any> | null = null;
+    const pending = loader().then((mod) => {
+      if (typeof mod === "function") {
+        resolved = mod as ComponentType<any>;
+      } else {
+        const record = mod as Record<string, ComponentType<any>>;
+        resolved =
+          record.default ||
+          record.DevicePreJoin ||
+          record.LiveInterviewRoom ||
+          (Object.values(record)[0] as ComponentType<any>);
+      }
+      return resolved;
+    });
+    return function DynamicTestComponent(props: Record<string, unknown>) {
+      const [Comp, setComp] = React.useState<ComponentType<any> | null>(
+        () => resolved,
+      );
+      React.useEffect(() => {
+        void pending.then((component) => {
+          if (component) setComp(() => component);
+        });
+      }, []);
+      if (!Comp) return <div data-testid="dynamic-loading" />;
+      return <Comp {...props} />;
+    };
+  },
 }));
 
-vi.mock("@gisul/voice-ui", () => ({
-  createVoiceSession,
-  VoiceAgentStatus: () => null,
-  VoiceSessionControls: () => null,
-  VoiceTranscripts: () => null,
-  VoicePreJoin: ({
+vi.mock("@/components/DevicePreJoin", () => ({
+  DevicePreJoin: ({
     onSubmit,
-    joinLabel,
+    product,
   }: {
     onSubmit: (choices: {
       username: string;
       audioEnabled: boolean;
       videoEnabled: boolean;
     }) => void;
-    joinLabel: string;
+    product: { joinLabel: string };
   }) => (
     <button
       type="button"
@@ -36,9 +57,24 @@ vi.mock("@gisul/voice-ui", () => ({
         })
       }
     >
-      {joinLabel}
+      {`I am ready — ${product.joinLabel}`}
     </button>
   ),
+}));
+
+vi.mock("@/components/LiveInterviewRoom", () => ({
+  LiveInterviewRoom: () => <div data-testid="voice-room" />,
+}));
+
+vi.mock("@gisul/voice-ui/session", () => ({
+  createVoiceSession,
+}));
+
+vi.mock("@gisul/voice-ui", () => ({
+  VoiceAgentStatus: () => null,
+  VoiceSessionControls: () => null,
+  VoiceTranscripts: () => null,
+  VoicePreJoin: () => null,
   VoiceRoom: ({ children }: { children: ReactNode }) => (
     <div data-testid="voice-room">{children}</div>
   ),
@@ -184,5 +220,25 @@ describe("scheduled candidate journey", () => {
         invitationToken: "signed-token",
       }),
     );
+  });
+
+  it("shows a recoverable message when invitation details are incomplete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ interview_id: "int_bad" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    render(<CandidateInterviewJourney invitationToken="bad-token" />);
+    expect(
+      await screen.findByRole("heading", { name: "Invitation unavailable" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Invitation details were incomplete/i),
+    ).toBeInTheDocument();
   });
 });
