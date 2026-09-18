@@ -5,7 +5,7 @@ and closing. It cannot be overridden for hard limits.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -32,6 +32,14 @@ _DEPTH_ACTIONS = {
     3: PROBE_FOR_METHOD,
     4: PROBE_FOR_REASONING,
     5: PROBE_FOR_REFLECTION,
+}
+
+_INTENT_ACTIONS = {
+    "establish_context": PROBE_FOR_CONTEXT,
+    "establish_ownership": PROBE_FOR_OWNERSHIP,
+    "applied_understanding": PROBE_FOR_METHOD,
+    "problem_or_complexity": PROBE_FOR_REASONING,
+    "tradeoff_or_transfer": PROBE_FOR_REFLECTION,
 }
 
 
@@ -66,6 +74,13 @@ class PolicyState:
     hard_end_seconds: int = 35 * 60
     at_last_competency: bool = False
     has_uncovered_competencies: bool = False
+    missing_intents: list[str] = field(default_factory=list)
+    coverage_complete: bool = False
+    has_coverage_gaps: bool = False
+    gap_competency_id: str | None = None
+    clarify_after: int = 1
+    rephrase_after: int = 2
+    change_topic_after: int = 3
 
 
 def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -124,6 +139,25 @@ def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any]
         }
     )
     return {"phases": phases, "policy_mode": True}
+
+
+def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict[str, int]:
+    defaults = {"clarify_after": 1, "rephrase_after": 2, "change_topic_after": 3}
+    if not isinstance(definition, dict):
+        return defaults
+    policy = (
+        definition.get("non_answer_policy")
+        if isinstance(definition.get("non_answer_policy"), dict)
+        else {}
+    )
+    clarify = max(1, int(policy.get("clarify_after") or defaults["clarify_after"]))
+    rephrase = max(clarify, int(policy.get("rephrase_after") or defaults["rephrase_after"]))
+    change = max(rephrase, int(policy.get("change_topic_after") or defaults["change_topic_after"]))
+    return {
+        "clarify_after": clarify,
+        "rephrase_after": rephrase,
+        "change_topic_after": change,
+    }
 
 
 def time_bounds_from_definition(definition: dict[str, Any] | None) -> dict[str, int]:
@@ -186,7 +220,15 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="closing",
         )
 
-    if state.consecutive_unusable >= 1 and state.consecutive_unusable < 3:
+    if (
+        state.consecutive_unusable >= state.clarify_after
+        and state.consecutive_unusable < state.change_topic_after
+    ):
+        intent = (
+            "rephrase"
+            if state.consecutive_unusable >= state.rephrase_after
+            else "clarify"
+        )
         return PolicyDecision(
             action=CLARIFY_CURRENT_ANSWER,
             forced_flow_decision="probe",
@@ -194,12 +236,12 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             current_depth=max(1, min(state.probe_count + 1, state.max_depth)),
             max_depth=state.max_depth,
             competency_id=state.competency_id,
-            intent="clarify",
+            intent=intent,
             reason="unusable answer requires clarification",
             section=_section_for_phase(state.phase_name),
         )
 
-    if state.consecutive_unusable >= 3:
+    if state.consecutive_unusable >= state.change_topic_after:
         return PolicyDecision(
             action=MOVE_TO_NEXT_COMPETENCY
             if state.has_uncovered_competencies
@@ -300,7 +342,24 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         )
 
     depth = max(1, min(state.probe_count + 1, state.max_depth))
-    if state.probe_count >= state.max_probes or depth >= state.max_depth:
+    probes_exhausted = state.probe_count >= state.max_probes or depth >= state.max_depth
+    if state.missing_intents and not probes_exhausted:
+        next_intent = state.missing_intents[0]
+        intent_depth = min(state.max_depth, max(depth, len(state.missing_intents)))
+        action = _INTENT_ACTIONS.get(next_intent, _DEPTH_ACTIONS.get(depth, PROBE_FOR_CONTEXT))
+        return PolicyDecision(
+            action=action,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=max(1, min(intent_depth, state.max_depth)),
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent=next_intent,
+            reason="required assessment intent still missing",
+            section="competency_assessment",
+        )
+
+    if state.coverage_complete or probes_exhausted:
         if state.has_uncovered_competencies:
             return PolicyDecision(
                 action=MOVE_TO_NEXT_COMPETENCY,
@@ -310,17 +369,17 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
                 max_depth=state.max_depth,
                 competency_id=state.competency_id,
                 intent="coverage",
-                reason="max probes or depth reached for competency",
+                reason="competency complete or probe budget exhausted",
                 section="competency_assessment",
             )
-        if state.elapsed_seconds >= state.soft_end_seconds:
+        if state.has_coverage_gaps or state.elapsed_seconds >= state.soft_end_seconds:
             return PolicyDecision(
                 action=CHECK_REMAINING_GAP,
                 forced_flow_decision="probe",
                 allow_llm_decision=False,
                 current_depth=1,
                 max_depth=2,
-                competency_id=state.competency_id,
+                competency_id=state.gap_competency_id or state.competency_id,
                 intent="gap_check",
                 reason="final coverage check before close",
                 section="coverage_check",
@@ -340,6 +399,9 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
     # Early competency turns: never allow multi-level jumps; LLM may only probe.
     if depth <= 2:
         action = ASK_BASELINE if depth == 1 else PROBE_FOR_OWNERSHIP
+        intent = state.missing_intents[0] if state.missing_intents else _DEPTH_ACTIONS.get(
+            depth, PROBE_FOR_CONTEXT
+        )
         return PolicyDecision(
             action=action,
             forced_flow_decision="probe",
@@ -347,7 +409,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             current_depth=depth,
             max_depth=state.max_depth,
             competency_id=state.competency_id,
-            intent=_DEPTH_ACTIONS.get(depth, PROBE_FOR_CONTEXT),
+            intent=intent,
             reason="progressive depth — establish context/ownership first",
             section="competency_assessment",
         )

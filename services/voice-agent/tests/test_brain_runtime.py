@@ -12,6 +12,11 @@ class FakeFlow:
         self.candidate_turns = ["I built a payments service."]
         self.probe_count = 2
         self.completed = False
+        self.consecutive_unusable = 0
+        self.last_question_depth = 2
+
+    def current_phase(self) -> dict:
+        return {"competency_id": "problem_solving"}
 
 
 def test_definition_id_is_session_scoped() -> None:
@@ -75,3 +80,5 @@ def test_flow_to_brain_state_is_session_isolated() -> None:
     assert payload["session_id"] == "ses_alpha01"
     assert payload["state_version"] == 2
     assert payload["active_question_id"] == "q_1"
+    assert payload["coverage"] == {}
+    assert payload["consecutive_unusable_answers"] == 0
