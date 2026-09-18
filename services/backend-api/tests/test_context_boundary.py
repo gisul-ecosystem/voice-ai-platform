@@ -11,12 +11,13 @@ from routers import interview_contexts
 
 @pytest.mark.asyncio
 async def test_context_creation_returns_only_opaque_reference(monkeypatch) -> None:
-    async def fake_create(job_description: str, resume_text: str) -> dict:
+    async def fake_create(job_description: str, resume_text: str, *args, **kwargs) -> dict:
         assert job_description == "Backend engineer"
         assert resume_text == "Python experience"
         return {
             "context_id": "ctx_1234567890123456",
             "expires_at": datetime.now(timezone.utc),
+            "definition_id": None,
         }
 
     monkeypatch.setattr(interview_contexts.interviews, "create_context", fake_create)

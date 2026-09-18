@@ -126,6 +126,13 @@ async def ensure_indexes() -> None:
     await db.scheduled_interviews.create_index(
         [("starts_at", 1), ("status", 1)]
     )
+    from db.brain import ensure_brain_indexes
+    from db.definitions import ensure_definition_indexes
+    from db.scorecards import ensure_scorecard_indexes
+
+    await ensure_brain_indexes()
+    await ensure_definition_indexes()
+    await ensure_scorecard_indexes()
 
 
 async def create_context(
@@ -133,6 +140,7 @@ async def create_context(
     resume_text: str,
     interview_setup: dict[str, Any] | None = None,
     *,
+    definition_id: str | None = None,
     expires_at_override: datetime | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
@@ -148,11 +156,26 @@ async def create_context(
         "job_description": job_description,
         "resume_text": resume_text,
         "interview_setup": interview_setup,
+        "definition_id": (definition_id or "").strip() or None,
         "created_at": now,
         "expires_at": expires_at,
     }
     await get_db().interview_contexts.insert_one(document)
-    return {"context_id": context_id, "expires_at": expires_at}
+    return {
+        "context_id": context_id,
+        "expires_at": expires_at,
+        "definition_id": document["definition_id"],
+    }
+
+
+async def attach_definition_to_context(
+    context_id: str, definition_id: str
+) -> bool:
+    result = await get_db().interview_contexts.update_one(
+        {"_id": context_id},
+        {"$set": {"definition_id": definition_id.strip()}},
+    )
+    return result.modified_count > 0 or result.matched_count > 0
 
 
 async def get_context(context_id: str) -> dict[str, Any] | None:
@@ -302,11 +325,17 @@ async def create_live_session(
 ) -> str:
     session_id = session_id or f"ses_{uuid.uuid4().hex}"
     now = utc_now()
+    definition_id = None
+    if context_id:
+        context = await get_context(context_id)
+        if context:
+            definition_id = context.get("definition_id")
     await get_db().interview_sessions.insert_one(
         {
             "_id": session_id,
             "product_id": product_id,
             "context_id": context_id,
+            "definition_id": definition_id,
             "candidate_id": candidate_id,
             "room": room,
             "correlation_id": correlation_id,

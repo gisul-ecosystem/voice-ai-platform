@@ -5,7 +5,17 @@ import logging
 import os
 import re
 import time
-from typing import Protocol
+from typing import Any, Protocol
+
+from products.interviewer.policy import (
+    classify_answer_usability,
+    decide_next_action,
+    outline_from_definition,
+    policy_prompt_block,
+    time_bounds_from_definition,
+    PolicyDecision,
+    PolicyState,
+)
 
 logger = logging.getLogger("voice-agent.aaptor")
 
@@ -312,11 +322,18 @@ class InterviewFlow:
         min_turns_before_close: int | None = None,
         interviewer_turns: list[str] | None = None,
         target_duration_minutes: int | None = None,
+        interview_definition: dict[str, Any] | None = None,
     ) -> None:
-        self.outline = outline
+        policy_outline = outline_from_definition(interview_definition)
+        self.interview_definition = (
+            interview_definition if isinstance(interview_definition, dict) else None
+        )
+        self.policy_mode = bool(policy_outline)
+        effective_outline = policy_outline or outline
+        self.outline = effective_outline
         self.llm_client = llm_client
         self.max_probes_per_phase = max_probes_per_phase
-        self.phases: list[dict] = list(outline.get("phases") or [])
+        self.phases: list[dict] = list(effective_outline.get("phases") or [])
         self.phase_index = max(0, min(initial_phase_index, max(len(self.phases) - 1, 0)))
         self.probe_count = max(0, initial_probe_count)
         self.candidate_turns = list(candidate_turns or [])
@@ -324,10 +341,20 @@ class InterviewFlow:
         self.job_description = job_description
         self.resume_text = resume_text
         self.competencies = list(competencies or [])
+        if self.policy_mode and self.interview_definition:
+            names = [
+                str(item.get("name") or item.get("id") or "").strip()
+                for item in (self.interview_definition.get("competencies") or [])
+                if isinstance(item, dict)
+            ]
+            self.competencies = [name for name in names if name] or self.competencies
         self.resume_projects = extract_resume_projects(resume_text)
         self.completed = False
         self.started_at = time.monotonic()
         self.phase_started_at = self.started_at
+        self.consecutive_unusable = 0
+        self.last_policy_decision: PolicyDecision | None = None
+        bounds = time_bounds_from_definition(self.interview_definition)
         phase_minutes = sum(
             max(int(phase.get("duration_minutes", 0)), 0) for phase in self.phases
         )
@@ -336,15 +363,34 @@ class InterviewFlow:
             int(
                 target_duration_minutes
                 if target_duration_minutes is not None
+                else bounds["duration_minutes"]
+                if self.policy_mode
                 else (phase_minutes or 30)
             ),
         )
-        self.max_duration_seconds = self.target_duration_minutes * 60
+        self.max_duration_seconds = (
+            bounds["hard_end_seconds"]
+            if self.policy_mode
+            else self.target_duration_minutes * 60
+        )
+        self.soft_end_seconds = bounds["soft_end_seconds"]
+        self.target_end_seconds = bounds["target_end_seconds"]
         self.min_turns_before_close = (
             min_turns_before_close
             if min_turns_before_close is not None
+            else max(8, self.target_duration_minutes // 3)
+            if self.policy_mode
             else max(12, self.target_duration_minutes // 2)
         )
+        if self.policy_mode:
+            # Competency phases carry their own probe ceilings.
+            phase_caps = [
+                int(phase.get("max_probes") or max_probes_per_phase)
+                for phase in self.phases
+                if phase.get("competency_id")
+            ]
+            if phase_caps:
+                self.max_probes_per_phase = min(self.max_probes_per_phase, max(phase_caps))
 
     def current_phase(self) -> dict:
         if not self.phases:
@@ -410,12 +456,65 @@ class InterviewFlow:
         return max(int(self.current_phase().get("duration_minutes") or 5), 1)
 
     def _phase_probe_limit(self) -> int:
+        if self.policy_mode:
+            phase_cap = int(self.current_phase().get("max_probes") or self.max_probes_per_phase)
+            return max(1, min(self.max_probes_per_phase, phase_cap))
         flow_limit = max(3, self._phase_minutes() // 2)
         return min(self.max_probes_per_phase, flow_limit)
 
+    def _policy_state(self, *, pending_candidate_turn: bool = False) -> PolicyState:
+        phase = self.current_phase()
+        competency_phases = [
+            index
+            for index, item in enumerate(self.phases)
+            if item.get("competency_id")
+        ]
+        at_last = (
+            not competency_phases
+            or self.phase_index >= competency_phases[-1]
+        )
+        has_uncovered = any(
+            index > self.phase_index and item.get("competency_id")
+            for index, item in enumerate(self.phases)
+        )
+        return PolicyState(
+            candidate_turn_count=len(self.candidate_turns)
+            + (1 if pending_candidate_turn else 0),
+            interviewer_turn_count=len(self.interviewer_turns),
+            phase_index=self.phase_index,
+            probe_count=self.probe_count,
+            elapsed_seconds=max(0, int(time.monotonic() - self.started_at)),
+            consecutive_unusable=self.consecutive_unusable,
+            completed=self.completed,
+            phase_name=str(phase.get("name") or ""),
+            competency_id=(
+                str(phase.get("competency_id"))
+                if phase.get("competency_id")
+                else None
+            ),
+            max_depth=int(phase.get("max_depth") or 4),
+            max_probes=self._phase_probe_limit(),
+            soft_end_seconds=self.soft_end_seconds,
+            target_end_seconds=self.target_end_seconds,
+            hard_end_seconds=self.max_duration_seconds,
+            at_last_competency=at_last,
+            has_uncovered_competencies=has_uncovered,
+        )
+
+    def _current_policy_decision(
+        self, *, pending_candidate_turn: bool = False
+    ) -> PolicyDecision | None:
+        if not self.policy_mode:
+            return None
+        decision = decide_next_action(
+            self._policy_state(pending_candidate_turn=pending_candidate_turn)
+        )
+        self.last_policy_decision = decision
+        return decision
+
     def _is_warmup_phase(self) -> bool:
         name = str(self.current_phase().get("name") or "").lower()
-        return any(token in name for token in ("warm", "intro", "opening"))
+        return any(token in name for token in ("warm", "intro", "opening", "map", "candidate"))
 
     @staticmethod
     def _is_soft_phase_name(name: str) -> bool:
@@ -446,6 +545,17 @@ class InterviewFlow:
     def _time_remaining_minutes(self) -> int:
         return max(0, self.target_duration_minutes - self._elapsed_minutes())
 
+    def _elapsed_minutes(self) -> int:
+        return max(0, int((time.monotonic() - self.started_at) / 60))
+
+    def _remember_question(self, question: str) -> None:
+        text = (question or "").strip()
+        if text and text != CLOSING_MESSAGE:
+            self.interviewer_turns.append(text)
+
+    def _ready_to_close(self) -> bool:
+        return self._time_up() and len(self.candidate_turns) >= self.min_turns_before_close
+
     def _phase_pacing(self) -> str:
         uncovered = ", ".join(self._uncovered_projects()) or "none"
         if self._is_warmup_phase():
@@ -472,6 +582,20 @@ class InterviewFlow:
         return self.probe_count < 3
 
     def _normalize_decision(self, decision: str, *, is_intro_reply: bool) -> str:
+        if self.policy_mode:
+            policy = self._current_policy_decision()
+            if policy is not None:
+                if policy.forced_flow_decision == "close":
+                    self.completed = True
+                    return "advance"
+                if not policy.allow_llm_decision:
+                    return policy.forced_flow_decision
+                # LLM may choose probe/advance, but never skip forced advance.
+                if policy.forced_flow_decision == "advance":
+                    return "advance"
+                if self._should_leave_phase():
+                    return "advance"
+                return decision if decision in {"probe", "advance"} else "probe"
         if is_intro_reply:
             return "probe"
         if self._too_early_to_advance():
@@ -481,7 +605,7 @@ class InterviewFlow:
         return decision
 
     def _apply_turn_decision(self, decision: str, *, is_intro_reply: bool) -> None:
-        if is_intro_reply:
+        if is_intro_reply and not self.policy_mode:
             self.probe_count += 1
             return
         self.apply_decision(decision)
@@ -505,20 +629,24 @@ class InterviewFlow:
     def _time_up(self) -> bool:
         return time.monotonic() - self.started_at >= self.max_duration_seconds
 
-    def _elapsed_minutes(self) -> int:
-        return max(0, int((time.monotonic() - self.started_at) / 60))
-
-    def _remember_question(self, question: str) -> None:
-        text = (question or "").strip()
-        if text and text != CLOSING_MESSAGE:
-            self.interviewer_turns.append(text)
-
-    def _ready_to_close(self) -> bool:
-        return self._time_up() and len(self.candidate_turns) >= self.min_turns_before_close
+    def _soft_time_reached(self) -> bool:
+        return time.monotonic() - self.started_at >= self.soft_end_seconds
 
     def _closing_speech(self, last_candidate_turn: str | None) -> str | None:
         if self.completed:
             return CLOSING_MESSAGE
+        if self.policy_mode:
+            policy = self._current_policy_decision()
+            if policy and policy.forced_flow_decision == "close":
+                if last_candidate_turn:
+                    usability = classify_answer_usability(last_candidate_turn)
+                    if usability == "usable":
+                        self.consecutive_unusable = 0
+                    elif usability not in {"silence", "stt_failure", "network_failure"}:
+                        self.consecutive_unusable += 1
+                    self.candidate_turns.append(last_candidate_turn.strip())
+                self.completed = True
+                return CLOSING_MESSAGE
         if self._time_up():
             if last_candidate_turn:
                 self.candidate_turns.append(last_candidate_turn.strip())
@@ -549,6 +677,14 @@ class InterviewFlow:
             or "(none left)",
             "covered_projects": ", ".join(self._covered_projects()) or "(none yet)",
         }
+        policy = (
+            self._current_policy_decision(
+                pending_candidate_turn=bool(last_candidate_turn)
+            )
+            if self.policy_mode
+            else None
+        )
+        policy_block = f"\n{policy_prompt_block(policy)}\n" if policy else ""
         if last_candidate_turn:
             if not self.candidate_turns:
                 prompt = INTRO_FOLLOWUP_SYSTEM.format(
@@ -556,7 +692,7 @@ class InterviewFlow:
                     **briefing,
                     **coverage,
                 )
-                return prompt, last_candidate_turn
+                return policy_block + prompt, last_candidate_turn
             prompt = STAGE2_SYSTEM.format(
                 phase_name=phase.get("name", "unnamed"),
                 duration_minutes=phase.get("duration_minutes", 0),
@@ -578,13 +714,13 @@ class InterviewFlow:
                 **briefing,
                 **coverage,
             )
-            return prompt, last_candidate_turn
+            return policy_block + prompt, last_candidate_turn
         prompt = OPENING_SYSTEM.format(
             phase_name=phase.get("name", "unnamed"),
             topics=phase_topics(phase),
             **briefing,
         )
-        return prompt, (
+        return policy_block + prompt, (
             "Open the interview in your own words and invite them to "
             "introduce themselves."
         )
@@ -638,6 +774,14 @@ class InterviewFlow:
         decision, question = parse_stage2(raw)
         if last_candidate_turn:
             is_intro_reply = not self.candidate_turns
+            usability = classify_answer_usability(
+                last_candidate_turn,
+                min_words=1 if is_intro_reply else 3,
+            )
+            if usability == "usable":
+                self.consecutive_unusable = 0
+            elif usability not in {"silence", "stt_failure", "network_failure"}:
+                self.consecutive_unusable += 1
             self.candidate_turns.append(last_candidate_turn)
             decision = self._normalize_decision(
                 decision, is_intro_reply=is_intro_reply
@@ -653,6 +797,11 @@ class InterviewFlow:
                 "stage": "llm",
                 "latency_ms": round((time.perf_counter() - started) * 1000, 1),
                 "decision": decision,
+                "policy_action": (
+                    self.last_policy_decision.action
+                    if self.last_policy_decision
+                    else None
+                ),
                 "phase": self.current_phase().get("name"),
                 "phase_index": self.phase_index,
                 "probe_count": self.probe_count,
@@ -672,6 +821,14 @@ class InterviewFlow:
     ) -> None:
         if last_candidate_turn:
             is_intro_reply = not self.candidate_turns
+            usability = classify_answer_usability(
+                last_candidate_turn,
+                min_words=1 if is_intro_reply else 3,
+            )
+            if usability == "usable":
+                self.consecutive_unusable = 0
+            elif usability not in {"silence", "stt_failure", "network_failure"}:
+                self.consecutive_unusable += 1
             self.candidate_turns.append(last_candidate_turn)
             decision = self._normalize_decision(
                 decision, is_intro_reply=is_intro_reply
@@ -685,6 +842,11 @@ class InterviewFlow:
                 "stage": "llm",
                 "latency_ms": round((time.perf_counter() - started) * 1000, 1),
                 "decision": decision,
+                "policy_action": (
+                    self.last_policy_decision.action
+                    if self.last_policy_decision
+                    else None
+                ),
                 "phase": self.current_phase().get("name"),
                 "phase_index": self.phase_index,
                 "probe_count": self.probe_count,

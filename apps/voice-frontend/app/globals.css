@@ -2021,6 +2021,41 @@ select:focus-visible,
   line-height: 1.35;
 }
 
+.document-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.document-upload-row input[type="file"] {
+  max-width: 100%;
+  font-size: 0.78rem;
+}
+
+.extract-review {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.extract-review .extract-warning,
+.form-error {
+  color: #9a3412;
+  margin: 0;
+}
+
+.extract-review .policy-option {
+  align-items: center;
+}
+
 .setup-fields .field input,
 .setup-fields .field select,
 .setup-fields .field textarea {
