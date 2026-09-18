@@ -722,7 +722,7 @@ export function SetupForm({
           </button>
         ) : <span />}
         <button className="button primary" type="submit">
-          {reviewing ? "Schedule interview" : step < 2 ? "Save and continue" : "Review interview"}
+          {reviewing ? "Schedule interview" : step < 2 ? "Next" : "Review interview"}
         </button>
       </div>
       </section>

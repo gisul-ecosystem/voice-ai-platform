@@ -1169,7 +1169,7 @@ select:focus-visible,
 }
 
 .recruiter-page .demo-card {
-  margin-bottom: 24px;
+  margin-bottom: 0;
 }
 
 .setup-progress span {
@@ -1597,7 +1597,7 @@ select:focus-visible,
   }
 
   .recruiter-page .demo-card {
-    overflow-y: auto;
+    overflow: hidden;
   }
 }
 
@@ -1736,36 +1736,62 @@ select:focus-visible,
 
 /* Recruiter setup workspace */
 .recruiter-page {
-  width: min(1240px, calc(100% - 40px));
+  width: calc(100% - 32px);
+  max-width: none;
 }
 
 .recruiter-page .demo-intro {
-  padding-bottom: 20px;
+  padding-bottom: 12px;
 }
 
 .recruiter-page .demo-intro h1 {
-  font-size: clamp(2rem, 3.5vw, 3rem);
+  font-size: clamp(1.85rem, 3vw, 2.5rem);
 }
 
 .recruiter-page .demo-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
   padding: 0;
   overflow: hidden;
   border-radius: 22px;
 }
 
+.recruiter-setup-shell {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.recruiter-setup-shell > .alert {
+  flex: 0 0 auto;
+  margin: 14px 16px 0;
+}
+
+.recruiter-setup-shell > .center-state {
+  flex: 1 1 auto;
+}
+
 .interview-setup-form {
   width: 100%;
   max-width: none;
-  min-height: 570px;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-columns: 275px minmax(0, 1fr);
-  grid-template-rows: 1fr;
+  grid-template-rows: minmax(0, 1fr);
   align-content: stretch;
   gap: 0;
 }
 
 .setup-rail {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   padding: 30px 24px 24px;
@@ -1952,13 +1978,16 @@ select:focus-visible,
 
 .setup-panel {
   min-width: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
   padding: 30px 34px 22px;
   background: var(--surface);
 }
 
 .setup-panel-heading {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1990,12 +2019,15 @@ select:focus-visible,
 }
 
 .setup-fields {
+  flex: 1 1 auto;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-content: start;
   gap: 18px 20px;
   padding: 22px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .setup-fields .field-wide,
@@ -2122,8 +2154,11 @@ select:focus-visible,
 }
 
 .setup-panel .setup-actions {
+  flex: 0 0 auto;
+  margin-top: auto;
   padding-top: 18px;
   border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .setup-panel .setup-actions .button {
@@ -2181,7 +2216,7 @@ select:focus-visible,
 
 @media (max-width: 620px) {
   .recruiter-page {
-    width: min(100% - 20px, 1240px);
+    width: calc(100% - 20px);
   }
 
   .setup-progress li strong {
@@ -2216,10 +2251,11 @@ select:focus-visible,
 
 @media (min-width: 901px) {
   .recruiter-page {
+    width: calc(100% - 32px);
     height: 100dvh;
     min-height: 0;
     grid-template-rows: 44px auto minmax(0, 1fr);
-    padding-bottom: 10px;
+    padding-bottom: 12px;
     overflow: hidden;
   }
 
@@ -2228,7 +2264,7 @@ select:focus-visible,
   }
 
   .recruiter-page .demo-intro {
-    padding: 9px 0 13px;
+    padding: 9px 0 10px;
   }
 
   .recruiter-page .demo-intro .eyebrow {
@@ -2248,6 +2284,7 @@ select:focus-visible,
 
   .recruiter-page .demo-card {
     min-height: 0;
+    height: 100%;
     margin-bottom: 0;
     overflow: hidden;
   }

@@ -20,14 +20,14 @@ describe("setup to prejoin flow", () => {
     fireEvent.change(screen.getByLabelText("Interview length"), {
       target: { value: "15" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.change(screen.getByLabelText("Job description"), {
       target: { value: "Backend engineer" },
     });
     fireEvent.change(screen.getByLabelText("Candidate resume"), {
       target: { value: "Five years in Python" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.change(screen.getByLabelText("Candidate name"), {
       target: { value: "Priya" },
     });
