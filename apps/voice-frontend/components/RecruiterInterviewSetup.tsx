@@ -115,7 +115,12 @@ export function RecruiterInterviewSetup() {
   }
 
   return (
-    <div className="recruiter-setup-shell">
+    <div
+      className="recruiter-setup-shell"
+      onClick={() => {
+        if (error) setError(undefined);
+      }}
+    >
       {error ? <div className="alert" role="alert">{error}</div> : null}
       {saving ? (
         <div className="center-state" role="status">

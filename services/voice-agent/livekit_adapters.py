@@ -178,9 +178,52 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
         }
         speaking = False
         closing = False
+        last_text = ""
+
+        def _emit_interim(text: str) -> None:
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(text=text, language=self._lang())],
+                )
+            )
+
+        def _emit_final(text: str) -> None:
+            logger.info(
+                "stt_transcript",
+                extra={
+                    "event": "stt_transcript",
+                    "stage": "stt",
+                    "provider": self._stt.provider,
+                    "model": self._stt.model,
+                    "output_chars": len(text),
+                    "streaming": True,
+                },
+            )
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(text=text, language=self._lang())],
+                )
+            )
+
+        def _end_speech() -> None:
+            nonlocal speaking, last_text
+            if speaking:
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                )
+                speaking = False
+            last_text = ""
 
         def emit_transcript(kind: str, text: str) -> None:
-            nonlocal speaking
+            """Map Sarvam events to LiveKit STT events.
+
+            Sarvam "fast" mode often emits growing transcript.final frames for one
+            utterance. Commit only on speech_end or a repeated stable final.
+            """
+            nonlocal speaking, last_text
+            text = (text or "").strip()
             if kind == "speech_start" or (text and not speaking):
                 if not speaking:
                     self._event_ch.send_nowait(
@@ -190,39 +233,23 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                 if kind == "speech_start":
                     return
             if kind == "partial" and text:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                        alternatives=[stt.SpeechData(text=text, language=self._lang())],
-                    )
-                )
+                last_text = text
+                _emit_interim(text)
                 return
-            if kind in {"final", "speech_end"}:
-                if text:
-                    logger.info(
-                        "stt_transcript",
-                        extra={
-                            "event": "stt_transcript",
-                            "stage": "stt",
-                            "provider": self._stt.provider,
-                            "model": self._stt.model,
-                            "output_chars": len(text),
-                            "streaming": True,
-                        },
-                    )
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[
-                                stt.SpeechData(text=text, language=self._lang())
-                            ],
-                        )
-                    )
-                if speaking:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    )
-                    speaking = False
+            if kind == "final" and text:
+                # Identical final twice → utterance settled; otherwise keep interim.
+                if speaking and text == last_text:
+                    _emit_final(text)
+                    _end_speech()
+                    return
+                last_text = text
+                _emit_interim(text)
+                return
+            if kind == "speech_end":
+                final_text = text or last_text
+                if final_text:
+                    _emit_final(final_text)
+                _end_speech()
 
         try:
             connect_options = {_WEBSOCKET_HEADERS_ARG: headers}

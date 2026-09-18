@@ -2,7 +2,6 @@
 
 import {
   RoomAudioRenderer,
-  useConnectionQualityIndicator,
   useConnectionState,
 } from "@livekit/components-react";
 import {
@@ -24,7 +23,6 @@ export function CandidateLiveInterview({
   onEndRequested: () => void;
 }) {
   const connectionState = useConnectionState();
-  const { quality } = useConnectionQualityIndicator();
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
@@ -40,13 +38,14 @@ export function CandidateLiveInterview({
     .padStart(2, "0");
   const seconds = (elapsedSeconds % 60).toString().padStart(2, "0");
   const connectionLabel =
-    connectionState === "connected"
-      ? `${String(quality) === "unknown" ? "Connected" : String(quality)} signal`
-      : "Reconnecting";
+    connectionState === "connected" ? "Connected" : "Reconnecting";
 
   return (
-    <div className="interview-room" data-connection={connectionState}
-      data-candidate-stage="live">
+    <div
+      className="interview-room"
+      data-connection={connectionState}
+      data-candidate-stage="live"
+    >
       <header className="interview-room-header">
         <div>
           <p className="session-live-label">
@@ -56,7 +55,9 @@ export function CandidateLiveInterview({
           <h2 tabIndex={-1}>{title}</h2>
         </div>
         <div className="interview-meta" aria-live="polite">
-          <span>{minutes}:{seconds}</span>
+          <span>
+            {minutes}:{seconds}
+          </span>
           <span className="connection-label">{connectionLabel}</span>
         </div>
       </header>

@@ -192,6 +192,8 @@ class ElevenLabsTts:
                 "input_chars": len(text),
                 "audio_bytes": len(audio),
                 "provider": "elevenlabs",
+                "voice_id": self.voice_id,
+                "model_id": self.model_id,
             },
         )
         return audio

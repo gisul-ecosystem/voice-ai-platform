@@ -2,10 +2,17 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-function publicScheduleError(status: number): string {
+function publicScheduleError(status: number, detail?: unknown): string {
   if (status === 409) return "This interview has already been scheduled.";
-  if (status === 422) return "Review the interview details and schedule time.";
   if (status === 429) return "Too many requests. Wait a moment and try again.";
+  if (status === 422) {
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+    if (Array.isArray(detail) && detail[0] && typeof detail[0] === "object") {
+      const first = detail[0] as { msg?: unknown };
+      if (typeof first.msg === "string" && first.msg.trim()) return first.msg.trim();
+    }
+    return "Review the interview details and schedule time.";
+  }
   return "The interview could not be scheduled.";
 }
 
@@ -63,7 +70,7 @@ export async function POST(request: Request) {
     if (!upstream.ok || typeof data.invitation_token !== "string") {
       return NextResponse.json(
         {
-          error: publicScheduleError(upstream.status),
+          error: publicScheduleError(upstream.status, data.detail),
         },
         { status: upstream.ok ? 502 : upstream.status },
       );

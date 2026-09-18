@@ -10,15 +10,11 @@ frontend CI jobs pass.
 3. The repository-scoped `voice-ai-staging` runner executes only the deployment
    job on the VM.
 4. Docker Compose pulls the images and waits for service health checks.
-5. Health validation checks frontend-to-backend authentication, MongoDB, and
-   the public HTTPS route through Caddy.
-6. A failed update automatically attempts to restore the last successful tag.
+5. A failed update automatically attempts to restore the last successful tag.
 
-The stack contains MongoDB, the backend API, interviewer worker, reference
-frontend, and Caddy gateway. The context engine is used by the separate
-customer-support product and is intentionally not deployed in this
-interviewer-only stack. Only ports 80 and 443 are externally bound. Backend
-and worker health ports bind to loopback.
+The stack contains MongoDB, the context engine, backend API, interviewer worker,
+reference frontend, and Caddy gateway. Only ports 80 and 443 are externally
+bound. Backend and worker health ports bind to loopback.
 
 ## VM secret files
 
