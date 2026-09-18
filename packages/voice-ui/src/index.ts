@@ -6,6 +6,7 @@ export {
   VoiceSession,
   VoiceSessionControls,
   VoiceTranscripts,
+  coalesceTranscriptLines,
   useVoiceTranscriptLines,
   type VoiceRoomProps,
   type VoiceSessionProps,
