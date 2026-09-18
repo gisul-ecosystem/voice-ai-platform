@@ -72,6 +72,58 @@ async def test_aaptor_forces_advance_after_probe_limit() -> None:
     ]
 
 
+def test_restored_agent_skips_opening_marker() -> None:
+    agent = aaptor_agent.AaptorAgent(
+        {
+            "phases": [
+                {
+                    "name": "experience",
+                    "duration_minutes": 5,
+                    "topics": ["ownership"],
+                    "source": "resume",
+                }
+            ]
+        },
+        FakeLlm(),
+        initial_state={
+            "candidate_turns": ["I built APIs."],
+            "interviewer_turns": ["Tell me about a project."],
+        },
+    )
+    assert agent._opened is True
+    assert agent._last_agent_text == "Tell me about a project."
+
+
+@pytest.mark.asyncio
+async def test_restored_agent_on_enter_does_not_respeak() -> None:
+    agent = aaptor_agent.AaptorAgent(
+        {
+            "phases": [
+                {
+                    "name": "experience",
+                    "duration_minutes": 5,
+                    "topics": ["ownership"],
+                    "source": "resume",
+                }
+            ]
+        },
+        FakeLlm(),
+        initial_state={
+            "candidate_turns": ["I built APIs."],
+            "interviewer_turns": ["Tell me about a project."],
+        },
+    )
+    spoken: list[str] = []
+
+    class _Session:
+        async def say(self, text: str, **_kwargs) -> None:
+            spoken.append(text)
+
+    agent.__dict__["session"] = _Session()
+    await agent.on_enter()
+    assert spoken == []
+
+
 @pytest.mark.asyncio
 async def test_aaptor_closes_after_last_phase_probe_limit() -> None:
     llm = FakeLlm(

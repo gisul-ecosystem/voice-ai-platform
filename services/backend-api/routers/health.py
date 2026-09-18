@@ -12,10 +12,11 @@ import os
 import time
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from dotenv import load_dotenv
 
 from db.mongo import get_db
+from security.auth import require_bff_service
 
 load_dotenv()
 
@@ -105,6 +106,14 @@ async def health():
         mongo_ok = False
         logger.warning("mongo_ping_failed", extra={"event": "mongo_ping_failed"})
     return {"status": "ok" if mongo_ok else "degraded", "mongo_connected": mongo_ok}
+
+
+@router.get(
+    "/internal/bff/health",
+    dependencies=[Depends(require_bff_service)],
+)
+async def bff_health():
+    return await health()
 
 
 @router.get("/health/all")

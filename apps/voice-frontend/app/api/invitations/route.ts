@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function publicInvitationError(status: number): string {
+  if (status === 404) return "This invitation is invalid or no longer available.";
+  if (status === 409) return "This invitation has already been used.";
+  if (status === 410) return "This invitation has expired.";
+  if (status === 422) return "The required consent could not be recorded.";
+  if (status === 429) return "Too many requests. Wait a moment and try again.";
+  return "Invitation could not be verified.";
+}
+
 export async function POST(request: Request) {
   const backendUrl = process.env.BACKEND_API_URL?.replace(/\/+$/, "");
   if (!backendUrl) {
@@ -26,14 +35,25 @@ export async function POST(request: Request) {
     );
   }
   const consent = body.consent;
-  const isConsent = consent && typeof consent === "object";
+  const isConsent =
+    consent !== null && typeof consent === "object" && !Array.isArray(consent);
   const path = isConsent
     ? "/v1/candidate/invitations/consent"
     : "/v1/candidate/invitations/preview";
-  const payload = isConsent
+  const consentValues = isConsent
+    ? (consent as Record<string, unknown>)
+    : undefined;
+  const payload = consentValues
     ? {
+        ai_interview: consentValues.ai_interview === true,
+        transcription: consentValues.transcription === true,
+        monitoring: consentValues.monitoring === true,
+        recording: consentValues.recording === true,
+        policy_version:
+          typeof consentValues.policy_version === "string"
+            ? consentValues.policy_version
+            : undefined,
         invitation_token: body.invitationToken,
-        ...(consent as Record<string, unknown>),
       }
     : { invitation_token: body.invitationToken };
   try {
@@ -48,12 +68,7 @@ export async function POST(request: Request) {
     const data = await upstream.json().catch(() => ({}));
     if (!upstream.ok) {
       return NextResponse.json(
-        {
-          error:
-            typeof data.detail === "string"
-              ? data.detail
-              : "Invitation could not be verified.",
-        },
+        { error: publicInvitationError(upstream.status) },
         { status: upstream.status },
       );
     }

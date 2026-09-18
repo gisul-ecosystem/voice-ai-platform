@@ -129,6 +129,17 @@ async def fetch_interview_context(context_id: str) -> dict:
     return resp.json()
 
 
+async def fetch_interview_definition(definition_id: str) -> dict:
+    resp = await request(
+        "backend-api",
+        "GET",
+        f"{BACKEND_API_URL}/interview-brain/definitions/{definition_id}",
+        timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
+        headers=_service_headers(),
+    )
+    return resp.json()
+
+
 async def report_session_status(
     session_id: str,
     status: str,
@@ -145,6 +156,7 @@ async def report_session_status(
         timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
         headers=_service_headers(),
         json=payload,
+        retry_safe=True,
     )
 
 
@@ -157,6 +169,91 @@ async def fetch_session_state(session_id: str) -> dict:
         headers=_service_headers(),
     )
     return resp.json()
+
+
+async def fetch_brain_state(session_id: str) -> dict:
+    resp = await request(
+        "backend-api",
+        "GET",
+        f"{BACKEND_API_URL}/internal/interview-sessions/{session_id}/brain",
+        timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
+        headers=_service_headers(),
+    )
+    return resp.json()
+
+
+async def put_brain_state(session_id: str, state: dict) -> dict:
+    resp = await request(
+        "backend-api",
+        "PUT",
+        f"{BACKEND_API_URL}/internal/interview-sessions/{session_id}/brain",
+        timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
+        headers=_service_headers(),
+        json=state,
+        retry_safe=True,
+    )
+    return resp.json()
+
+
+async def record_brain_question(
+    session_id: str,
+    *,
+    question_id: str,
+    text: str,
+    intent: str = "live_question",
+    depth: int = 1,
+    competency_id: str | None = None,
+    status: str = "spoken",
+) -> None:
+    payload: dict = {
+        "question_id": question_id,
+        "session_id": session_id,
+        "intent": intent,
+        "depth": depth,
+        "text": text,
+        "status": status,
+    }
+    if competency_id:
+        payload["competency_id"] = competency_id
+    await request(
+        "backend-api",
+        "POST",
+        f"{BACKEND_API_URL}/internal/interview-sessions/{session_id}/brain/questions",
+        timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
+        headers=_service_headers(),
+        json=payload,
+        retry_safe=True,
+    )
+
+
+async def record_brain_answer(
+    session_id: str,
+    *,
+    answer_id: str,
+    question_id: str,
+    turn_ids: list[str],
+    final_transcript: str,
+    usable: bool = True,
+    usability: str = "usable",
+) -> None:
+    await request(
+        "backend-api",
+        "POST",
+        f"{BACKEND_API_URL}/internal/interview-sessions/{session_id}/brain/answers",
+        timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
+        headers=_service_headers(),
+        json={
+            "answer_id": answer_id,
+            "question_id": question_id,
+            "session_id": session_id,
+            "turn_ids": turn_ids,
+            "final_transcript": final_transcript,
+            "usable": usable,
+            "usability": usability,
+            "status": "answered",
+        },
+        retry_safe=True,
+    )
 
 
 async def record_session_turn(
@@ -182,4 +279,5 @@ async def record_session_turn(
             "sequence_number": sequence_number,
             "is_final": True,
         },
+        retry_safe=True,
     )

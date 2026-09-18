@@ -1,17 +1,20 @@
 """Worker-authenticated durable interview lifecycle events."""
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+import logging
 
+from fastapi import APIRouter, Depends, HTTPException, Response
+
+from brain import scoring_service
 from db import interviews
 from models.schemas import SessionStatusRequest, SessionTurnRequest
-from security.auth import require_worker_service
+from security.auth import require_bff_service, require_worker_service
 
 router = APIRouter(
     prefix="/internal/interview-sessions",
     tags=["interview-session-events"],
-    dependencies=[Depends(require_worker_service)],
 )
+logger = logging.getLogger("backend-api.sessions")
 
 _EXPECTED = {
     "live": ("joining", "live"),
@@ -22,7 +25,10 @@ _EXPECTED = {
 }
 
 
-@router.get("/{session_id}")
+@router.get(
+    "/{session_id}",
+    dependencies=[Depends(require_worker_service)],
+)
 async def read_session_state(session_id: str) -> dict:
     stored = await interviews.get_session(session_id)
     if stored is None:
@@ -30,20 +36,69 @@ async def read_session_state(session_id: str) -> dict:
     return {
         "session_id": session_id,
         "status": stored.get("status"),
+        "definition_id": stored.get("definition_id"),
         "turns": stored.get("turns") or [],
     }
 
 
-import logging
+@router.get(
+    "/{session_id}/transcript",
+    dependencies=[Depends(require_bff_service)],
+)
+async def read_session_transcript(session_id: str) -> dict:
+    transcript = await scoring_service.get_full_transcript(session_id)
+    if transcript is None:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    return transcript
 
-logger = logging.getLogger("backend-api.sessions")
+
+@router.get(
+    "/{session_id}/scorecard",
+    dependencies=[Depends(require_bff_service)],
+)
+async def read_session_scorecard(session_id: str) -> dict:
+    from db import scorecards
+
+    stored = await scorecards.get_scorecard(session_id)
+    if stored is None:
+        # Build on demand if interview already completed.
+        session = await interviews.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Interview session not found")
+        if session.get("status") == "completed":
+            stored = await scoring_service.generate_and_store_scorecard(session_id)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="Scorecard not found")
+    payload = dict(stored)
+    payload.pop("_id", None)
+    return payload
 
 
-@router.post("/{session_id}/status", status_code=204)
+@router.post(
+    "/{session_id}/scorecard/generate",
+    dependencies=[Depends(require_bff_service)],
+)
+async def generate_session_scorecard(session_id: str) -> dict:
+    session = await interviews.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    result = await scoring_service.generate_and_store_scorecard(session_id)
+    if result is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Scorecard could not be generated (missing definition or evidence)",
+        )
+    return result
+
+
+@router.post(
+    "/{session_id}/status",
+    status_code=204,
+    dependencies=[Depends(require_worker_service)],
+)
 async def update_session_status(
     session_id: str,
     req: SessionStatusRequest,
-    background_tasks: BackgroundTasks,
 ) -> Response:
     try:
         changed = await interviews.transition_session(
@@ -52,18 +107,42 @@ async def update_session_status(
             status=req.status,
             reason=req.reason,
         )
-        if not changed and await interviews.get_session(session_id) is None:
-            raise HTTPException(status_code=404, detail="Interview session not found")
+        if not changed:
+            stored = await interviews.get_session(session_id)
+            if stored is None:
+                raise HTTPException(status_code=404, detail="Interview session not found")
+            if stored.get("status") != req.status:
+                raise HTTPException(status_code=409, detail="Invalid session status transition")
         if req.status == "completed":
-            background_tasks.add_task(interviews.enqueue_scorecard, session_id)
+            try:
+                await scoring_service.generate_and_store_scorecard(session_id)
+            except Exception:
+                logger.exception(
+                    "scorecard_generation_failed",
+                    extra={
+                        "event": "scorecard_generation_failed",
+                        "session_id": session_id,
+                    },
+                )
     except HTTPException:
         raise
     except Exception as exc:
-        logger.warning("session_status_db_failed", extra={"event": "session_status_db_failed", "error": str(exc)})
+        logger.exception(
+            "session_status_db_failed",
+            extra={"event": "session_status_db_failed", "error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Interview persistence is temporarily unavailable",
+        ) from exc
     return Response(status_code=204)
 
 
-@router.post("/{session_id}/turns", status_code=204)
+@router.post(
+    "/{session_id}/turns",
+    status_code=204,
+    dependencies=[Depends(require_worker_service)],
+)
 async def record_session_turn(
     session_id: str,
     req: SessionTurnRequest,
@@ -77,6 +156,12 @@ async def record_session_turn(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.warning("record_turn_db_failed", extra={"event": "record_turn_db_failed", "error": str(exc)})
+        logger.exception(
+            "record_turn_db_failed",
+            extra={"event": "record_turn_db_failed", "error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Interview persistence is temporarily unavailable",
+        ) from exc
     return Response(status_code=204)
-

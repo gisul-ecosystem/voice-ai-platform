@@ -21,6 +21,7 @@ export type VoicePreJoinProps = {
   cameraEnabledByDefault?: boolean;
   joinLabel?: string;
   persistUserChoices?: boolean;
+  allowNameEditing?: boolean;
   className?: string;
   onSubmit: (choices: VoiceDeviceChoices) => void;
   onError?: (error: Error) => void;
@@ -32,6 +33,7 @@ export function VoicePreJoin({
   cameraEnabledByDefault = false,
   joinLabel = "Join session",
   persistUserChoices = true,
+  allowNameEditing = true,
   className,
   onSubmit,
   onError,
@@ -53,7 +55,9 @@ export function VoicePreJoin({
     preventLoad: !persistUserChoices,
   });
   const [username, setUsername] = useState(
-    initialChoices.username || participantName,
+    allowNameEditing
+      ? initialChoices.username || participantName
+      : participantName,
   );
   const [audioEnabled, setAudioEnabled] = useState(
     initialChoices.audioEnabled,
@@ -101,8 +105,8 @@ export function VoicePreJoin({
   }, [videoTrack]);
 
   useEffect(() => {
-    saveUsername(username);
-  }, [saveUsername, username]);
+    if (allowNameEditing) saveUsername(username);
+  }, [allowNameEditing, saveUsername, username]);
   useEffect(() => {
     saveAudioInputEnabled(audioEnabled);
   }, [audioEnabled, saveAudioInputEnabled]);
@@ -134,16 +138,36 @@ export function VoicePreJoin({
       className={["voice-device-check", className].filter(Boolean).join(" ")}
       onSubmit={submit}
     >
-      <div className="voice-device-preview">
-        {videoEnabled && videoTrack ? (
-          <video ref={videoElement} autoPlay muted playsInline />
-        ) : (
-          <div className="voice-device-placeholder">
-            <span>Camera preview is off</span>
+      {cameraAllowed ? (
+        <div className="voice-device-preview">
+          {videoEnabled && videoTrack ? (
+            <video ref={videoElement} autoPlay muted playsInline />
+          ) : (
+            <div className="voice-device-placeholder">
+              <span>Camera preview is off</span>
+            </div>
+          )}
+          <span className="voice-preview-label">Preview</span>
+        </div>
+      ) : (
+        <div className="voice-audio-preview" aria-live="polite">
+          <div className="audio-preview-mark" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
           </div>
-        )}
-        <span className="voice-preview-label">Preview</span>
-      </div>
+          <strong>
+            {!audioEnabled
+              ? "Microphone is muted"
+              : audioTrack
+                ? "Microphone is ready"
+                : "Waiting for microphone permission"}
+          </strong>
+          <p>Speak naturally and confirm that your browser shows microphone access.</p>
+        </div>
+      )}
 
       <div className="voice-device-settings">
         <label className="voice-device-name">
@@ -154,6 +178,7 @@ export function VoicePreJoin({
             onChange={(event) => setUsername(event.target.value)}
             autoComplete="name"
             required
+            readOnly={!allowNameEditing}
           />
         </label>
 
@@ -212,7 +237,7 @@ export function VoicePreJoin({
         <button
           className="lk-button voice-join-button"
           type="submit"
-          disabled={!username.trim()}
+          disabled={!username.trim() || !audioEnabled || !audioTrack}
         >
           {joinLabel}
         </button>

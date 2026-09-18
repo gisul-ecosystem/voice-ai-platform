@@ -17,6 +17,7 @@ SCHEDULE_EXTERNAL_KEYS = [
     ("external_interview_id", 1),
 ]
 SCHEDULE_EXTERNAL_FILTER = {"external_interview_id": {"$type": "string"}}
+SESSION_CORRELATION_INDEX = "correlation_id_1"
 
 
 class ExternalInterviewConflictError(Exception):
@@ -76,6 +77,25 @@ async def ensure_scheduled_external_index(collection: Any) -> None:
         )
 
 
+async def ensure_session_correlation_index(collection: Any) -> None:
+    try:
+        indexes = {item["name"]: item async for item in collection.list_indexes()}
+    except OperationFailure as exc:
+        if exc.code != 26:
+            raise
+        indexes = {}
+
+    current = indexes.get(SESSION_CORRELATION_INDEX)
+    if current is not None and current.get("unique") is True:
+        await _drop_index_if_present(collection, SESSION_CORRELATION_INDEX)
+        current = None
+    if current is None:
+        await collection.create_index(
+            "correlation_id",
+            name=SESSION_CORRELATION_INDEX,
+        )
+
+
 async def ensure_indexes() -> None:
     db = get_db()
     await db.interview_contexts.create_index("expires_at", expireAfterSeconds=0)
@@ -85,7 +105,7 @@ async def ensure_indexes() -> None:
     await db.interview_sessions.create_index(
         [("candidate_id", 1), ("created_at", -1)]
     )
-    await db.interview_sessions.create_index("correlation_id", unique=True)
+    await ensure_session_correlation_index(db.interview_sessions)
     await db.interview_sessions.create_index(
         [("invitation_id", 1), ("idempotency_key", 1)],
         unique=True,
@@ -94,7 +114,6 @@ async def ensure_indexes() -> None:
             "idempotency_key": {"$type": "string"},
         },
     )
-    await db.scorecard_jobs.create_index("session_id", unique=True)
     await db.interview_invitations.create_index("expires_at", expireAfterSeconds=0)
     await db.interview_turns.create_index(
         [("session_id", 1), ("turn_id", 1)], unique=True
@@ -107,6 +126,13 @@ async def ensure_indexes() -> None:
     await db.scheduled_interviews.create_index(
         [("starts_at", 1), ("status", 1)]
     )
+    from db.brain import ensure_brain_indexes
+    from db.definitions import ensure_definition_indexes
+    from db.scorecards import ensure_scorecard_indexes
+
+    await ensure_brain_indexes()
+    await ensure_definition_indexes()
+    await ensure_scorecard_indexes()
 
 
 async def create_context(
@@ -114,6 +140,7 @@ async def create_context(
     resume_text: str,
     interview_setup: dict[str, Any] | None = None,
     *,
+    definition_id: str | None = None,
     expires_at_override: datetime | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
@@ -129,11 +156,26 @@ async def create_context(
         "job_description": job_description,
         "resume_text": resume_text,
         "interview_setup": interview_setup,
+        "definition_id": (definition_id or "").strip() or None,
         "created_at": now,
         "expires_at": expires_at,
     }
     await get_db().interview_contexts.insert_one(document)
-    return {"context_id": context_id, "expires_at": expires_at}
+    return {
+        "context_id": context_id,
+        "expires_at": expires_at,
+        "definition_id": document["definition_id"],
+    }
+
+
+async def attach_definition_to_context(
+    context_id: str, definition_id: str
+) -> bool:
+    result = await get_db().interview_contexts.update_one(
+        {"_id": context_id},
+        {"$set": {"definition_id": definition_id.strip()}},
+    )
+    return result.modified_count > 0 or result.matched_count > 0
 
 
 async def get_context(context_id: str) -> dict[str, Any] | None:
@@ -158,19 +200,6 @@ async def store_invitation(
             "used_at": None,
         }
     )
-
-
-async def consume_invitation(invitation_id: str) -> bool:
-    now = utc_now()
-    result = await get_db().interview_invitations.update_one(
-        {
-            "_id": invitation_id,
-            "used_at": None,
-            "expires_at": {"$gt": now},
-        },
-        {"$set": {"used_at": now}},
-    )
-    return bool(result.modified_count)
 
 
 async def reserve_invitation(invitation_id: str, reservation_id: str) -> bool:
@@ -296,11 +325,17 @@ async def create_live_session(
 ) -> str:
     session_id = session_id or f"ses_{uuid.uuid4().hex}"
     now = utc_now()
+    definition_id = None
+    if context_id:
+        context = await get_context(context_id)
+        if context:
+            definition_id = context.get("definition_id")
     await get_db().interview_sessions.insert_one(
         {
             "_id": session_id,
             "product_id": product_id,
             "context_id": context_id,
+            "definition_id": definition_id,
             "candidate_id": candidate_id,
             "room": room,
             "correlation_id": correlation_id,
@@ -356,7 +391,17 @@ async def append_turn(session_id: str, turn: dict[str, Any]) -> str:
             if all(existing.get(key) == turn.get(key) for key in comparable)
             else "conflict"
         )
-    await db.interview_turns.insert_one({**turn, "session_id": session_id})
+    try:
+        await db.interview_turns.insert_one({**turn, "session_id": session_id})
+    except DuplicateKeyError:
+        existing = await db.interview_turns.find_one(
+            {"session_id": session_id, "turn_id": turn["turn_id"]}
+        )
+        if existing and all(
+            existing.get(key) == turn.get(key) for key in comparable
+        ):
+            return "duplicate"
+        return "conflict"
     await db.interview_sessions.update_one(
         {"_id": session_id}, {"$set": {"updated_at": utc_now()}}
     )
@@ -382,19 +427,4 @@ async def get_session_for_join(
             "idempotency_key": idempotency_key,
             "status": {"$in": ["joining", "live"]},
         }
-    )
-
-
-async def enqueue_scorecard(session_id: str) -> None:
-    now = utc_now()
-    await get_db().scorecard_jobs.update_one(
-        {"session_id": session_id},
-        {
-            "$setOnInsert": {
-                "session_id": session_id,
-                "status": "pending",
-                "created_at": now,
-            }
-        },
-        upsert=True,
     )

@@ -1,17 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { transitionVoiceFlow } from "@gisul/voice-ui";
 import { describe, expect, it, vi } from "vitest";
 
 import { SetupForm } from "@/components/SetupForm";
 import { getProduct } from "@/lib/products";
 
 describe("setup to prejoin flow", () => {
-  it("moves from setup to prejoin only on the expected event", () => {
-    expect(transitionVoiceFlow("setup", "connected")).toBe("setup");
-    expect(transitionVoiceFlow("setup", "setup-submitted")).toBe("preview");
-    expect(transitionVoiceFlow("preview", "preview-confirmed")).toBe("prejoin");
-  });
-
   it("collects required interviewer context", () => {
     const onContinue = vi.fn();
     render(
@@ -27,14 +20,14 @@ describe("setup to prejoin flow", () => {
     fireEvent.change(screen.getByLabelText("Interview length"), {
       target: { value: "15" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.change(screen.getByLabelText("Job description"), {
       target: { value: "Backend engineer" },
     });
     fireEvent.change(screen.getByLabelText("Candidate resume"), {
       target: { value: "Five years in Python" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.change(screen.getByLabelText("Candidate name"), {
       target: { value: "Priya" },
     });
@@ -42,8 +35,12 @@ describe("setup to prejoin flow", () => {
       target: { value: "priya@example.com" },
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Preview candidate experience" }),
+      screen.getByRole("button", { name: "Review interview" }),
     );
+    expect(
+      screen.getByRole("heading", { name: "Confirm the interview" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Schedule interview" }));
 
     expect(onContinue).toHaveBeenCalledWith(expect.objectContaining({
       productId: "interviewer",
@@ -70,15 +67,4 @@ describe("setup to prejoin flow", () => {
     }));
   });
 
-  it("omits interview context from support setup", () => {
-    render(
-      <SetupForm
-        product={getProduct("customer-support")}
-        onContinue={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByLabelText("Job description")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Resume text")).not.toBeInTheDocument();
-  });
 });

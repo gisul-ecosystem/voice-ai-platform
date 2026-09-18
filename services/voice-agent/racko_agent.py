@@ -8,9 +8,9 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
-from logging_config import configure_logging
+from logging_config import configure_logging  # noqa: E402
 
 load_dotenv()
 configure_logging()

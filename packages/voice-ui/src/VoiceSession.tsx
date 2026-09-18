@@ -3,6 +3,7 @@
 import {
   DisconnectButton,
   LiveKitRoom,
+  MediaDeviceMenu,
   RoomAudioRenderer,
   StartAudio,
   TrackToggle,
@@ -14,7 +15,7 @@ import {
   useRoomContext,
 } from "@livekit/components-react";
 import { Track, RoomEvent } from "livekit-client";
-import { type ReactNode, useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   VoiceDeviceChoices,
@@ -167,7 +168,7 @@ export function VoiceAgentStatus({
 
   return (
     <section
-      className="video-panel agent-panel"
+      className="agent-presence agent-panel"
       data-voice-ui="agent-status"
       data-agent-state={liveState}
     >
@@ -192,27 +193,76 @@ export function VoiceAgentStatus({
 
 export function VoiceSessionControls({
   cameraAllowed = true,
+  confirmEnd = true,
+  onEndRequested,
 }: {
   cameraAllowed?: boolean;
+  confirmEnd?: boolean;
+  onEndRequested?: () => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  const continueButton = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (confirming) continueButton.current?.focus();
+  }, [confirming]);
+
   return (
-    <div
-      className="session-controls"
-      aria-label="Call controls"
-      data-voice-ui="controls"
-    >
-      <TrackToggle source={Track.Source.Microphone}>
-        <span>Microphone</span>
-      </TrackToggle>
-      {cameraAllowed ? (
-        <TrackToggle source={Track.Source.Camera}>
-          <span>Camera</span>
-        </TrackToggle>
+    <>
+      <div
+        className="session-controls"
+        aria-label="Interview controls"
+        data-voice-ui="controls"
+      >
+        <div className="lk-button-group">
+          <TrackToggle source={Track.Source.Microphone}>
+            <span>Microphone</span>
+          </TrackToggle>
+          <div className="lk-button-group-menu">
+            <MediaDeviceMenu kind="audioinput" />
+          </div>
+        </div>
+        {cameraAllowed ? (
+          <TrackToggle source={Track.Source.Camera}>
+            <span>Camera</span>
+          </TrackToggle>
+        ) : null}
+        {confirmEnd ? (
+          <button
+            className="lk-button lk-disconnect-button"
+            type="button"
+            onClick={() => setConfirming(true)}
+          >
+            End interview
+          </button>
+        ) : (
+          <DisconnectButton onClick={onEndRequested}>
+            <span>End interview</span>
+          </DisconnectButton>
+        )}
+      </div>
+      {confirming ? (
+        <div className="end-confirmation" role="dialog" aria-modal="true"
+          aria-labelledby="end-confirmation-title"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setConfirming(false);
+          }}>
+          <div>
+            <strong id="end-confirmation-title">End this interview?</strong>
+            <p>You will leave the room and cannot continue this attempt.</p>
+            <div className="button-row">
+              <button ref={continueButton} className="button secondary" type="button"
+                onClick={() => setConfirming(false)}>
+                Continue interview
+              </button>
+              <DisconnectButton onClick={onEndRequested}>
+                <span>End interview</span>
+              </DisconnectButton>
+            </div>
+          </div>
+        </div>
       ) : null}
-      <DisconnectButton>
-        <span>End session</span>
-      </DisconnectButton>
-    </div>
+    </>
   );
 }
 
@@ -273,65 +323,103 @@ export function DefaultVoiceSession({
   );
 }
 
-function isFinalTranscriptFlag(attributes?: Record<string, string>) {
-  const value = attributes?.["lk.transcription_final"];
-  return value === "true" || value === "1";
+export type VoiceTranscriptLine = {
+  id: string;
+  who: "candidate" | "agent";
+  text: string;
+  final: boolean;
+};
+
+export function useVoiceTranscriptLines(limit = 40): VoiceTranscriptLine[] {
+  const streams = useTranscriptions();
+  const { agentTranscriptions } = useVoiceAssistant();
+  const [lines, setLines] = useState<VoiceTranscriptLine[]>([]);
+
+  useEffect(() => {
+    const incoming: VoiceTranscriptLine[] = [
+      ...streams.map((item) => ({
+        id: item.streamInfo.id,
+        who: "candidate" as const,
+        text: item.text.trim(),
+        final: true,
+      })),
+      ...agentTranscriptions.map((segment) => ({
+        id: segment.id,
+        who: "agent" as const,
+        text: segment.text.trim(),
+        final: segment.final,
+      })),
+    ].filter((line) => line.text);
+    if (incoming.length === 0) return;
+    setLines((current) => {
+      const next = [...current];
+      let changed = false;
+      for (const line of incoming) {
+        const key = `${line.who}:${line.id}`;
+        const index = next.findIndex(
+          (existing) => `${existing.who}:${existing.id}` === key,
+        );
+        if (index >= 0) {
+          const existing = next[index];
+          if (existing.text !== line.text || existing.final !== line.final) {
+            next[index] = line;
+            changed = true;
+          }
+        } else {
+          next.push(line);
+          changed = true;
+        }
+      }
+      if (!changed) return current;
+      return next.slice(-limit);
+    });
+  }, [agentTranscriptions, limit, streams]);
+
+  return lines;
 }
 
-export function VoiceTranscripts() {
-  const streams = useTranscriptions();
-  const { agent, agentTranscriptions } = useVoiceAssistant();
-  const agentId = agent?.identity;
-  const byId = new Map<
-    string,
-    { id: string; who: string; text: string; at: number }
-  >();
-
-  for (const item of streams) {
-    if (!isFinalTranscriptFlag(item.streamInfo.attributes)) continue;
-    const text = item.text.trim();
-    if (!text) continue;
-    const isAgent = Boolean(agentId && item.participantInfo.identity === agentId);
-    byId.set(item.streamInfo.id, {
-      id: item.streamInfo.id,
-      who: isAgent ? "agent" : item.participantInfo.identity || "you",
-      text,
-      at: item.streamInfo.timestamp,
-    });
-  }
-
-  for (const segment of agentTranscriptions) {
-    if (!segment.final) continue;
-    const text = segment.text.trim();
-    if (!text) continue;
-    byId.set(segment.id, {
-      id: segment.id,
-      who: "agent",
-      text,
-      at: segment.firstReceivedTime,
-    });
-  }
-
-  const lines = [...byId.values()].sort((left, right) => left.at - right.at);
+export function VoiceTranscripts({
+  candidateLabel = "You",
+  agentLabel = "AI Interviewer",
+  maxLines = 40,
+}: {
+  candidateLabel?: string;
+  agentLabel?: string;
+  maxLines?: number;
+}) {
+  const lines = useVoiceTranscriptLines(maxLines);
+  const latestFinal = [...lines].reverse().find((line) => line.final);
 
   return (
     <section className="transcript-panel" data-voice-ui="transcripts"
-      aria-live="polite">
-      <p className="step-label">Live captions</p>
+      aria-label="Live interview transcript">
+      <div className="transcript-heading">
+        <div>
+          <p className="step-label">Live transcript</p>
+          <h3>Conversation</h3>
+        </div>
+        <span className="transcript-status">Live</span>
+      </div>
       {lines.length === 0 ? (
         <p className="transcript-empty">
-          Speak a full sentence, then pause. Short noise clips are ignored.
+          The conversation will appear here when the interview begins.
         </p>
       ) : (
         <ol className="transcript-list">
           {lines.map((line) => (
-            <li key={line.id}>
-              <span>{line.who}</span>
+            <li key={`${line.who}:${line.id}`} data-final={line.final}>
+              <span>{line.who === "agent" ? agentLabel : candidateLabel}</span>
               <p>{line.text}</p>
+              {!line.final ? <small>Speaking…</small> : null}
             </li>
           ))}
         </ol>
       )}
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {latestFinal
+          ? `${latestFinal.who === "agent" ? agentLabel : candidateLabel}: ${latestFinal.text}`
+          : ""}
+      </p>
     </section>
   );
 }
