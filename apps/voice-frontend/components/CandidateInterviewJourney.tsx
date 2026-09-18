@@ -219,10 +219,8 @@ class JourneyErrorBoundary extends Component<
 
 function CandidateInterviewJourneyInner({
   invitationToken,
-  resetToken,
 }: {
   invitationToken: string;
-  resetToken: number;
 }) {
   const product = getProduct("interviewer");
   const [stage, setStage] = useState<Stage>("loading");
@@ -251,17 +249,6 @@ function CandidateInterviewJourneyInner({
 
   useEffect(() => {
     let active = true;
-    setStage("loading");
-    setPreview(undefined);
-    setError(undefined);
-    setChoices(undefined);
-    setCredentials(undefined);
-    setConsents({
-      ai_interview: false,
-      transcription: false,
-      monitoring: false,
-      recording: false,
-    });
 
     async function load() {
       try {
@@ -298,7 +285,7 @@ function CandidateInterviewJourneyInner({
     return () => {
       active = false;
     };
-  }, [invitationToken, resetToken]);
+  }, [invitationToken]);
 
   const readyForConsent =
     consents.ai_interview &&
@@ -630,8 +617,8 @@ export function CandidateInterviewJourney({
   return (
     <JourneyErrorBoundary onRetry={() => setResetToken((value) => value + 1)}>
       <CandidateInterviewJourneyInner
+        key={`${invitationToken}:${resetToken}`}
         invitationToken={invitationToken}
-        resetToken={resetToken}
       />
     </JourneyErrorBoundary>
   );

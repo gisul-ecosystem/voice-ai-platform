@@ -6,22 +6,25 @@ const createVoiceSession = vi.hoisted(() => vi.fn());
 
 vi.mock("next/dynamic", () => ({
   default: (loader: () => Promise<unknown>) => {
-    let resolved: ComponentType<any> | null = null;
+    type AnyProps = Record<string, unknown>;
+    type AnyComponent = ComponentType<AnyProps>;
+    let resolved: AnyComponent | null = null;
     const pending = loader().then((mod) => {
       if (typeof mod === "function") {
-        resolved = mod as ComponentType<any>;
+        resolved = mod as AnyComponent;
       } else {
-        const record = mod as Record<string, ComponentType<any>>;
+        const record = mod as Record<string, AnyComponent>;
         resolved =
           record.default ||
           record.DevicePreJoin ||
           record.LiveInterviewRoom ||
-          (Object.values(record)[0] as ComponentType<any>);
+          (Object.values(record)[0] as AnyComponent | undefined) ||
+          null;
       }
       return resolved;
     });
-    return function DynamicTestComponent(props: Record<string, unknown>) {
-      const [Comp, setComp] = React.useState<ComponentType<any> | null>(
+    return function DynamicTestComponent(props: AnyProps) {
+      const [Comp, setComp] = React.useState<AnyComponent | null>(
         () => resolved,
       );
       React.useEffect(() => {
