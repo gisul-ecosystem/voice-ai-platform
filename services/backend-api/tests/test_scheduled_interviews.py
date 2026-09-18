@@ -51,13 +51,23 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
     captured: dict = {}
 
     async def create_context(*_args, **_kwargs):
-        return {"context_id": "ctx_1234567890123456", "expires_at": now}
+        return {
+            "context_id": "ctx_1234567890123456",
+            "expires_at": now,
+            "definition_id": "idef_scheduled_test01",
+        }
 
     async def store_invitation(**_kwargs):
         return None
 
     async def create_schedule(document):
         captured.update(document)
+
+    class _Published:
+        definition_id = "idef_scheduled_test01"
+
+    async def publish_and_store(**_kwargs):
+        return _Published()
 
     monkeypatch.setenv("INTERVIEW_INVITATION_SECRET", "test-secret")
     monkeypatch.setattr(
@@ -70,6 +80,9 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
         scheduled_interviews.interviews,
         "create_scheduled_interview",
         create_schedule,
+    )
+    monkeypatch.setattr(
+        scheduled_interviews, "publish_and_store", publish_and_store
     )
 
     created = await scheduled_interviews.create_scheduled_interview(
@@ -85,6 +98,8 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
         )
     )
     assert created.status == "scheduled"
+    assert created.definition_id == "idef_scheduled_test01"
+    assert captured["definition_id"] == "idef_scheduled_test01"
     assert captured["candidate_email"] == "priya@example.com"
     assert captured["external_interview_id"].startswith("ext_")
     assert captured["join_not_before"] <= now
@@ -121,6 +136,12 @@ async def test_schedule_rolls_back_context_when_invitation_write_fails(
     async def rollback(**kwargs):
         rolled_back.update(kwargs)
 
+    class _Published:
+        definition_id = "idef_scheduled_test01"
+
+    async def publish_and_store(**_kwargs):
+        return _Published()
+
     monkeypatch.setenv("INTERVIEW_INVITATION_SECRET", "test-secret")
     monkeypatch.setattr(
         scheduled_interviews.interviews, "create_context", create_context
@@ -130,6 +151,9 @@ async def test_schedule_rolls_back_context_when_invitation_write_fails(
     )
     monkeypatch.setattr(
         scheduled_interviews.interviews, "rollback_schedule_artifacts", rollback
+    )
+    monkeypatch.setattr(
+        scheduled_interviews, "publish_and_store", publish_and_store
     )
 
     with pytest.raises(RuntimeError):
@@ -239,6 +263,12 @@ async def test_duplicate_external_id_returns_conflict_and_rolls_back(
     async def rollback(**kwargs):
         rolled_back.update(kwargs)
 
+    class _Published:
+        definition_id = "idef_scheduled_test01"
+
+    async def publish_and_store(**_kwargs):
+        return _Published()
+
     monkeypatch.setenv("INTERVIEW_INVITATION_SECRET", "test-secret")
     monkeypatch.setattr(
         scheduled_interviews.interviews, "create_context", create_context
@@ -253,6 +283,9 @@ async def test_duplicate_external_id_returns_conflict_and_rolls_back(
     )
     monkeypatch.setattr(
         scheduled_interviews.interviews, "rollback_schedule_artifacts", rollback
+    )
+    monkeypatch.setattr(
+        scheduled_interviews, "publish_and_store", publish_and_store
     )
 
     with pytest.raises(HTTPException) as raised:

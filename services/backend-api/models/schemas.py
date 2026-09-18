@@ -62,11 +62,13 @@ class CreateInterviewContextRequest(BaseModel):
     job_description: str = Field(min_length=1, max_length=100_000)
     resume_text: str = Field(min_length=1, max_length=100_000)
     interview_setup: InterviewSetupConfig | None = None
+    definition_id: str | None = Field(default=None, min_length=8, max_length=64)
 
 
 class CreateInterviewContextResponse(BaseModel):
     context_id: str
     expires_at: datetime
+    definition_id: str | None = None
 
 
 class InterviewContextResponse(BaseModel):
@@ -74,6 +76,7 @@ class InterviewContextResponse(BaseModel):
     job_description: str
     resume_text: str
     interview_setup: InterviewSetupConfig | None = None
+    definition_id: str | None = None
 
 
 class CreateInvitationRequest(BaseModel):
@@ -111,6 +114,7 @@ class CreateScheduledInterviewRequest(BaseModel):
     job_description: str = Field(min_length=1, max_length=100_000)
     resume_text: str = Field(min_length=1, max_length=100_000)
     interview_setup: InterviewSetupConfig
+    definition_id: str | None = Field(default=None, min_length=8, max_length=64)
 
 
 class CreateScheduledInterviewResponse(BaseModel):
@@ -118,6 +122,7 @@ class CreateScheduledInterviewResponse(BaseModel):
     invitation_token: str
     status: Literal["scheduled"]
     starts_at: datetime
+    definition_id: str | None = None
 
 
 class InvitationPreviewRequest(BaseModel):

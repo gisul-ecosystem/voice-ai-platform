@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 
 import type { ProductConfig } from "@/lib/products";
 import {
@@ -13,6 +13,13 @@ type SetupFormProps = {
   product: ProductConfig;
   initialValue?: PublicSessionRequest;
   onContinue: (value: PublicSessionRequest) => void;
+};
+
+type IngestSummary = {
+  filename: string;
+  kind: "jd" | "resume";
+  highlights: string[];
+  warnings: string[];
 };
 
 const DRAFT_KEY = "ai-interviewer:setup-draft";
@@ -28,6 +35,58 @@ function defaultStartTime(): string {
   date.setSeconds(0, 0);
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
+}
+
+function summarizeIngest(payload: Record<string, unknown>): IngestSummary {
+  const kind = payload.kind === "resume" ? "resume" : "jd";
+  const filename =
+    typeof payload.filename === "string" && payload.filename.trim()
+      ? payload.filename
+      : "upload";
+  const warnings = Array.isArray(payload.warnings)
+    ? payload.warnings.map(String).filter(Boolean)
+    : [];
+  const highlights: string[] = [];
+  if (kind === "jd" && payload.jobIntelligence && typeof payload.jobIntelligence === "object") {
+    const job = payload.jobIntelligence as {
+      role?: { title?: string; target_level?: string };
+      mandatory_requirements?: unknown[];
+      skills?: unknown[];
+    };
+    if (job.role?.title) highlights.push(`Role: ${job.role.title}`);
+    if (job.role?.target_level) highlights.push(`Level: ${job.role.target_level}`);
+    highlights.push(
+      `${Array.isArray(job.mandatory_requirements) ? job.mandatory_requirements.length : 0} requirements`,
+    );
+    highlights.push(
+      `${Array.isArray(job.skills) ? job.skills.length : 0} skills`,
+    );
+  }
+  if (
+    kind === "resume" &&
+    payload.candidateProfile &&
+    typeof payload.candidateProfile === "object"
+  ) {
+    const profile = payload.candidateProfile as {
+      projects?: unknown[];
+      skills_claimed?: unknown[];
+      claims?: unknown[];
+      experience_summary?: { profile_type?: string };
+    };
+    if (profile.experience_summary?.profile_type) {
+      highlights.push(`Profile: ${profile.experience_summary.profile_type}`);
+    }
+    highlights.push(
+      `${Array.isArray(profile.projects) ? profile.projects.length : 0} projects`,
+    );
+    highlights.push(
+      `${Array.isArray(profile.skills_claimed) ? profile.skills_claimed.length : 0} skills`,
+    );
+    highlights.push(
+      `${Array.isArray(profile.claims) ? profile.claims.length : 0} claims`,
+    );
+  }
+  return { filename, kind, highlights, warnings };
 }
 
 export function SetupForm({
@@ -79,6 +138,12 @@ export function SetupForm({
       ? new Date(initialValue.startsAt).toISOString().slice(0, 16)
       : defaultStartTime(),
   );
+  const [ingestBusy, setIngestBusy] = useState<"jd" | "resume" | null>(null);
+  const [ingestError, setIngestError] = useState("");
+  const [jdSummary, setJdSummary] = useState<IngestSummary | null>(null);
+  const [resumeSummary, setResumeSummary] = useState<IngestSummary | null>(null);
+  const [jdReviewed, setJdReviewed] = useState(false);
+  const [resumeReviewed, setResumeReviewed] = useState(false);
   const timezone =
     initialValue?.timezone ??
     Intl.DateTimeFormat().resolvedOptions().timeZone ??
@@ -199,8 +264,73 @@ export function SetupForm({
     };
   }
 
+  async function ingestDocument(
+    kind: "jd" | "resume",
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setIngestError("");
+    setIngestBusy(kind);
+    try {
+      const body = new FormData();
+      body.set("kind", kind);
+      body.set("file", file, file.name);
+      if (kind === "jd") body.set("target_level", seniority);
+      const response = await fetch("/api/brain/ingest", {
+        method: "POST",
+        body,
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
+      if (!response.ok || typeof payload.text !== "string") {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Document could not be processed.",
+        );
+      }
+      const summary = summarizeIngest(payload);
+      if (kind === "jd") {
+        setJobDescription(payload.text);
+        setJdSummary(summary);
+        setJdReviewed(false);
+        if (
+          payload.jobIntelligence &&
+          typeof payload.jobIntelligence === "object"
+        ) {
+          const job = payload.jobIntelligence as {
+            role?: { title?: string };
+          };
+          if (job.role?.title && !role.trim()) setRole(job.role.title);
+        }
+      } else {
+        setResumeText(payload.text);
+        setResumeSummary(summary);
+        setResumeReviewed(false);
+      }
+    } catch (error) {
+      setIngestError(
+        error instanceof Error ? error.message : "Document could not be processed.",
+      );
+    } finally {
+      setIngestBusy(null);
+    }
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (step === 1) {
+      if ((jdSummary && !jdReviewed) || (resumeSummary && !resumeReviewed)) {
+        setIngestError(
+          "Review the extracted JD and resume facts before continuing.",
+        );
+        return;
+      }
+    }
     if (step < 2) {
       setStep((current) => current + 1);
       return;
@@ -352,23 +482,96 @@ export function SetupForm({
           <div className="field field-document">
             <label htmlFor="job-description">Job description</label>
             <p className="field-help">
-              Paste responsibilities, required skills and success criteria.
+              Paste responsibilities, required skills and success criteria, or upload a PDF/DOCX.
             </p>
+            <div className="document-upload-row">
+              <input
+                id="job-file"
+                type="file"
+                accept=".pdf,.docx,.txt,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                disabled={ingestBusy !== null}
+                onChange={(event) => void ingestDocument("jd", event)}
+              />
+              <span className="field-help">
+                {ingestBusy === "jd" ? "Extracting…" : "PDF, DOCX, or text · max 2MB"}
+              </span>
+            </div>
             <textarea id="job-description" required rows={5}
               value={jobDescription}
-              onChange={(event) => setJobDescription(event.target.value)}
+              onChange={(event) => {
+                setJobDescription(event.target.value);
+                setJdReviewed(false);
+              }}
               placeholder="Paste role responsibilities and requirements" />
+            {jdSummary ? (
+              <div className="extract-review">
+                <p>
+                  Extracted from <strong>{jdSummary.filename}</strong>
+                  {jdSummary.highlights.length
+                    ? ` · ${jdSummary.highlights.join(" · ")}`
+                    : ""}
+                </p>
+                {jdSummary.warnings.map((warning) => (
+                  <p key={warning} className="extract-warning">{warning}</p>
+                ))}
+                <label className="policy-option">
+                  <input
+                    type="checkbox"
+                    checked={jdReviewed}
+                    onChange={(event) => setJdReviewed(event.target.checked)}
+                  />
+                  <span>I reviewed the extracted JD facts</span>
+                </label>
+              </div>
+            ) : null}
           </div>
           <div className="field field-document">
             <label htmlFor="resume-text">Candidate resume</label>
             <p className="field-help">
               Used to personalize evidence-based questions and follow-ups.
             </p>
+            <div className="document-upload-row">
+              <input
+                id="resume-file"
+                type="file"
+                accept=".pdf,.docx,.txt,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                disabled={ingestBusy !== null}
+                onChange={(event) => void ingestDocument("resume", event)}
+              />
+              <span className="field-help">
+                {ingestBusy === "resume" ? "Extracting…" : "PDF, DOCX, or text · max 2MB"}
+              </span>
+            </div>
             <textarea id="resume-text" required rows={5}
               value={resumeText}
-              onChange={(event) => setResumeText(event.target.value)}
+              onChange={(event) => {
+                setResumeText(event.target.value);
+                setResumeReviewed(false);
+              }}
               placeholder="Paste the candidate resume text" />
+            {resumeSummary ? (
+              <div className="extract-review">
+                <p>
+                  Extracted from <strong>{resumeSummary.filename}</strong>
+                  {resumeSummary.highlights.length
+                    ? ` · ${resumeSummary.highlights.join(" · ")}`
+                    : ""}
+                </p>
+                {resumeSummary.warnings.map((warning) => (
+                  <p key={warning} className="extract-warning">{warning}</p>
+                ))}
+                <label className="policy-option">
+                  <input
+                    type="checkbox"
+                    checked={resumeReviewed}
+                    onChange={(event) => setResumeReviewed(event.target.checked)}
+                  />
+                  <span>I reviewed the extracted resume claims</span>
+                </label>
+              </div>
+            ) : null}
           </div>
+          {ingestError ? <p className="form-error">{ingestError}</p> : null}
           <div className="field">
             <label htmlFor="competencies">Competencies (comma-separated)</label>
             <p className="field-help">
@@ -479,6 +682,18 @@ export function SetupForm({
             <div>
               <span>Competencies</span>
               <p>{competencies}</p>
+            </div>
+            <div>
+              <span>Document review</span>
+              <p>
+                JD {jdSummary ? (jdReviewed ? "reviewed" : "needs review") : "pasted"} ·
+                Resume{" "}
+                {resumeSummary
+                  ? resumeReviewed
+                    ? "reviewed"
+                    : "needs review"
+                  : "pasted"}
+              </p>
             </div>
             <div>
               <span>Candidate policy</span>

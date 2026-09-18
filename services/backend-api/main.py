@@ -20,6 +20,8 @@ load_dotenv()
 configure_logging()
 
 from routers import (  # noqa: E402
+    brain_intelligence,
+    brain_state,
     health,
     interview_contexts,
     interviews,
@@ -119,6 +121,8 @@ app.include_router(interview_contexts.router)
 app.include_router(interviews.router)
 app.include_router(scheduled_interviews.router)
 app.include_router(session_events.router)
+app.include_router(brain_intelligence.router)
+app.include_router(brain_state.router)
 app.include_router(sessions.router)
 app.include_router(tools.router)
 

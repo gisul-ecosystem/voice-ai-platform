@@ -28,12 +28,18 @@ Both are built on LiveKit (self-hosted WebRTC) + FastAPI + a shared AI inference
   - Fast/normal tier → Qwen3-8B
   - High-reasoning tier → Qwen3-30B-A3B (MoE, ~3B active params/token — cheap to run despite size)
   - Mid tier → Qwen3-14B (optional, fill gap between fast and high-reasoning)
-- **AI Orchestrator (agent core)**: for Aaptor — plan interview flow, select next question, follow-up logic, predefined-mode sequencer. For CS — plan + tool selection, escalation decisioning
+- **AI Orchestrator (agent core)**: for Aaptor — policy-driven next action + LLM phrasing (definition-backed), follow-up within depth/probe caps. For CS — plan + tool selection, escalation decisioning
 - **Specialized modules**:
-  - Aaptor: scoring engine, AI scorecard generation
+  - Aaptor: JD/resume intelligence, blueprint compiler, 3-layer brain memory (RAM/Redis/Mongo), evidence-linked advisory scorecard (inside `backend-api` + interviewer worker — not a separate context-engine service)
   - CS: account/billing module, negotiation/offer module (where applicable)
 
-## Layer 3 — Context Engine (CS-specific, optional for Aaptor)
+## Layer 3 — Context Engine (CS-specific; not required for Aaptor interviewer)
+
+Aaptor interviewer intelligence is implemented in-process in `services/backend-api`
+(extract/compile/publish/state/scoring) with live policy in the interviewer worker.
+A separate context-engine service remains optional and CS-oriented.
+
+CS context-engine capabilities (when used):
 
 - Query understanding: rewrite, entity extraction, term normalization, language detection
 - Live platform integration (structured DB facts): server status, order/ticket lookups
@@ -49,10 +55,10 @@ Both are built on LiveKit (self-hosted WebRTC) + FastAPI + a shared AI inference
 
 ## Layer 5 — Data & Storage Layer
 
-- **MongoDB** (or Postgres for CS if relational fits better): sessions, turns, scores, candidates/tickets, flags
+- **MongoDB** (or Postgres for CS if relational fits better): sessions, turns, definitions, brain snapshots, scorecards, candidates/tickets, flags
 - **Vector DB** (Qdrant/Milvus): embeddings for RAG (CS knowledge base; optional for Aaptor)
 - **Blob storage**: S3 (API mode) / SeaweedFS (on-prem mode) — recordings, transcripts, screen captures
-- **Cache layer** (Redis): session state, hot lookups, rate-limit counters
+- **Cache layer** (Redis): Aaptor hot brain snapshots (`interview:brain:{session_id}`), session state, hot lookups, rate-limit counters. Mongo remains durable source of truth.
 
 ## Layer 6 — Infrastructure
 
@@ -120,11 +126,12 @@ Both are built on LiveKit (self-hosted WebRTC) + FastAPI + a shared AI inference
 2. VAD/turn detection identifies end of utterance
 3. Streaming STT (Nemotron or IndicConformer) → partial + final transcript
 4. Transcript → Conversation Manager → Intent/Router
-5. Router selects LLM tier → (Aaptor: Orchestrator picks next question / follow-up) or (CS: Orchestrator + Context Engine assemble retrieval context) → LLM generates response
+5. Router selects LLM tier → (Aaptor: policy engine selects next action / competency / depth; LLM phrases the question) or (CS: Orchestrator + Context Engine assemble retrieval context) → LLM generates response
 6. Response streamed to TTS (Kokoro/CosyVoice/Bulbul) as soon as first sentence is ready
 7. Audio streamed back to candidate/customer via LiveKit
-8. Turn logged to MongoDB; proctor/quality signals logged in parallel
+8. Turn logged to MongoDB; Aaptor also checkpoints brain snapshot (Redis hot + Mongo durable) and Q/A/evidence when applicable
 9. Observability layer captures latency at every hop (OpenTelemetry spans)
+10. On Aaptor session `completed`: advisory evidence-linked scorecard generated (human review pending)
 
 ---
 
@@ -157,7 +164,7 @@ Both are built on LiveKit (self-hosted WebRTC) + FastAPI + a shared AI inference
 - **LLM**: Qwen3 family (8B/14B/30B-A3B) via vLLM; GPT-4o/Claude/Gemini for API mode
 - **TTS**: Kokoro, CosyVoice 2, Indic Parler-TTS / Sarvam Bulbul, ElevenLabs/Cartesia (API mode)
 - **Backend**: FastAPI (Python), gRPC/websocket internal
-- **Data**: MongoDB, Qdrant/Milvus (vectors), Redis (cache), S3/SeaweedFS (blob)
+- **Data**: MongoDB (incl. Aaptor definitions/turns/brain/scorecards), Qdrant/Milvus (vectors), Redis (Aaptor hot brain + cache), S3/SeaweedFS (blob)
 - **Infra**: Kubernetes, Docker, Ray Serve or Triton for model serving, KEDA/HPA autoscaling
 - **Observability**: OpenTelemetry, Grafana, Prometheus
 - **Frontend**: Next.js (candidate/customer), admin panel

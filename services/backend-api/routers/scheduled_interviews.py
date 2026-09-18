@@ -6,6 +6,8 @@ import uuid
 from datetime import timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+
+from brain.definition_service import publish_and_store
 from db import interviews
 from models.schemas import (
     CreateScheduledInterviewRequest,
@@ -37,6 +39,17 @@ async def create_scheduled_interview(
     if starts_at < now - timedelta(minutes=5):
         raise HTTPException(status_code=422, detail="Interview cannot start in the past")
 
+    try:
+        published = await publish_and_store(
+            job_description=req.job_description.strip(),
+            interview_setup=req.interview_setup,
+            timezone=req.timezone,
+            published_by=f"schedule:{req.source_product_id}",
+            existing_definition_id=req.definition_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     expires_at = starts_at + timedelta(minutes=req.late_grace_minutes)
     interview_id = f"int_{uuid.uuid4().hex}"
     candidate_id = f"candidate_{uuid.uuid4().hex}"
@@ -44,6 +57,7 @@ async def create_scheduled_interview(
         req.job_description.strip(),
         req.resume_text.strip(),
         req.interview_setup.model_dump(mode="python"),
+        definition_id=published.definition_id,
         expires_at_override=starts_at
         + timedelta(
             days=max(1, int(os.getenv("INTERVIEW_CONTEXT_RETENTION_DAYS", "30")))
@@ -67,6 +81,7 @@ async def create_scheduled_interview(
         "candidate_name": req.candidate_name.strip(),
         "candidate_email": req.candidate_email.strip().lower(),
         "context_id": context["context_id"],
+        "definition_id": published.definition_id,
         "invitation_id": invitation["jti"],
         "starts_at": starts_at,
         "timezone": req.timezone,
@@ -106,6 +121,7 @@ async def create_scheduled_interview(
         invitation_token=token,
         status="scheduled",
         starts_at=starts_at,
+        definition_id=published.definition_id,
     )
 
 

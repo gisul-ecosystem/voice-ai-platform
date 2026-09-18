@@ -33,9 +33,10 @@ async def create_interview_context(
         await interviews.create_context(
             *args,
             req.interview_setup.model_dump(mode="python"),
+            definition_id=req.definition_id,
         )
         if req.interview_setup
-        else await interviews.create_context(*args)
+        else await interviews.create_context(*args, definition_id=req.definition_id)
     )
     return CreateInterviewContextResponse(**stored)
 
@@ -54,6 +55,7 @@ async def read_interview_context(context_id: str) -> InterviewContextResponse:
         job_description=stored["job_description"],
         resume_text=stored["resume_text"],
         interview_setup=stored.get("interview_setup"),
+        definition_id=stored.get("definition_id"),
     )
 
 
