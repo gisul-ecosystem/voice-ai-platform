@@ -186,6 +186,35 @@ def fingerprint(text: str) -> str:
     return _WS.sub(" ", cleaned).strip()
 
 
+def _question_tokens(text: str) -> set[str]:
+    ignored = {
+        "can", "could", "would", "you", "your", "the", "about", "me",
+        "please", "briefly", "recent", "work", "worked",
+    }
+    synonyms = {
+        "describe": "explain",
+        "discuss": "explain",
+        "share": "explain",
+        "tell": "explain",
+        "walk": "explain",
+        "overview": "explain",
+    }
+    return {
+        synonyms.get(token, token)
+        for token in fingerprint(text).split()
+        if len(token) > 2 and token not in ignored
+    }
+
+
+def _near_duplicate(left: str, right: str) -> bool:
+    left_tokens = _question_tokens(left)
+    right_tokens = _question_tokens(right)
+    if len(left_tokens) < 2 or len(right_tokens) < 2:
+        return False
+    overlap = len(left_tokens & right_tokens)
+    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.7
+
+
 def parse_generated_question(raw: str) -> GeneratedQuestion | None:
     text = (raw or "").strip()
     if not text:
@@ -372,7 +401,12 @@ def validate_generated_question(
     current_fp = fingerprint(question)
     for previous in recent_questions[-8:]:
         prev_fp = fingerprint(previous)
-        if current_fp and prev_fp and (current_fp == prev_fp or current_fp in prev_fp or prev_fp in current_fp):
+        if current_fp and prev_fp and (
+            current_fp == prev_fp
+            or current_fp in prev_fp
+            or prev_fp in current_fp
+            or _near_duplicate(current_fp, prev_fp)
+        ):
             reasons.append("duplicate_question")
             break
 

@@ -10,11 +10,13 @@ from products.interviewer.flow import (
     FALLBACK_OPENING,
     InterviewFlow,
     SpokenQuestionStream,
+    extract_jd_requirements,
     extract_resume_projects,
     parse_stage2,
 )
 from products.interviewer.worker import (
     GENERIC_OUTLINE,
+    enrich_outline_with_jd,
     enrich_outline_with_resume,
     normalize_probe_count,
     scale_outline_to_duration,
@@ -150,7 +152,9 @@ async def test_stage2_prompt_includes_prior_interviewer_questions() -> None:
             "Could you walk me through the Payments Gateway project?",
             "What challenges did you face?",
         ],
-        resume_text="Projects: Payments Gateway. Skills: Python.",
+        resume_text=(
+            "Projects: Payments Gateway on AWS with Kafka and PostgreSQL. Skills: Python."
+        ),
     )
     async for _ in flow.generate_next_question_stream(
         "I owned checkout and cut latency."
@@ -159,13 +163,24 @@ async def test_stage2_prompt_includes_prior_interviewer_questions() -> None:
     prompt = llm.messages[0][0]["content"]
     assert "walk me through" in prompt
     assert "What challenges did you face?" in prompt
-    assert "Deep-dive slowly" in prompt
+    assert "Do not repeat" in prompt
     assert "about 5 minutes" in prompt
+    assert "you mentioned" in prompt.lower()
+    assert "Resume facts for the current project" in prompt
+    assert "BOTH that last answer and the resume facts" in prompt
+    assert "Kafka" in prompt or "PostgreSQL" in prompt
+    user = llm.messages[0][1]["content"]
+    assert "Latest answer, in full" in user
+    assert "I owned checkout and cut latency." in user
+    assert "Resume facts" in user
 
 
 @pytest.mark.asyncio
 async def test_opening_stream_asks_for_an_intro() -> None:
-    llm = FakeStreamingLlm("should not run")
+    llm = FakeStreamingLlm(
+        "Hi — thanks for coming in. I'm Aaptor. Who are you, and what work "
+        "from the last couple of years are you most proud of?"
+    )
     flow = InterviewFlow(
         {
             "phases": [
@@ -182,10 +197,10 @@ async def test_opening_stream_asks_for_an_intro() -> None:
     )
     chunks = [chunk async for chunk in flow.generate_next_question_stream(None)]
     spoken = "".join(chunks)
-    assert spoken == FALLBACK_OPENING
-    assert "introduce yourself" in spoken.lower()
+    assert "who are you" in spoken.lower()
     assert flow.candidate_turns == []
-    assert llm.messages == []
+    assert llm.messages
+    assert "Invent a short, warm opening" in llm.messages[0][0]["content"]
 
 
 @pytest.mark.asyncio
@@ -215,7 +230,9 @@ async def test_first_answer_uses_intro_followup_prompt() -> None:
     prompt = llm.messages[0][0]["content"]
     assert "introduced themselves" in prompt
     assert "Payments Gateway" in prompt
-    assert "technical" in prompt.lower()
+    assert "walk me through" in prompt.lower()
+    user = llm.messages[0][1]["content"]
+    assert "whole intro" in user.lower()
     assert flow.probe_count == 1
 
 
@@ -340,7 +357,7 @@ def test_warmup_does_not_leave_just_because_clock_moved() -> None:
     )
     flow.phase_started_at = time.monotonic() - 10 * 60
     assert flow._should_leave_phase() is False
-    flow.probe_count = 2
+    flow.probe_count = 1
     assert flow._should_leave_phase() is True
 
 
@@ -411,3 +428,183 @@ async def test_does_not_jump_to_role_fit_while_projects_remain() -> None:
     prompt = llm.messages[0][0]["content"]
     assert "Inventory Service" in prompt
     assert "Projects still missing" in prompt
+
+
+def test_extract_jd_requirements_includes_dsa() -> None:
+    topics = extract_jd_requirements(
+        "We need strong DSA, system design, and PostgreSQL.",
+        ["Python"],
+    )
+    assert "Python" in topics
+    assert "DSA" in topics
+    assert "System design" in topics
+    assert "SQL" in topics
+
+
+def test_enrich_outline_adds_dsa_job_requirement() -> None:
+    enriched = enrich_outline_with_jd(
+        GENERIC_OUTLINE,
+        "Looking for DSA and backend ownership.",
+        ["System design"],
+    )
+    requirement_phase = next(
+        phase for phase in enriched["phases"] if phase.get("intent") == "jd_requirement"
+    )
+    topics = " ".join(requirement_phase["topics"])
+    assert "DSA" in topics
+    assert "System design" in topics
+
+
+@pytest.mark.asyncio
+async def test_intro_followup_sets_project_focus() -> None:
+    llm = FakeStreamingLlm(
+        "DECISION: probe\n\n",
+        "On Payments Gateway, which API did you own?",
+    )
+    flow = InterviewFlow(
+        {
+            "phases": [
+                {
+                    "name": "warm-up",
+                    "duration_minutes": 2,
+                    "topics": ["background"],
+                    "source": "generic",
+                    "intent": "intro",
+                }
+            ]
+        },
+        llm,
+        resume_text="Projects: Payments Gateway. Skills: Python.",
+        job_description="Backend role with DSA.",
+    )
+    async for _ in flow.generate_next_question_stream(
+        "I am a backend engineer and I built a payments gateway."
+    ):
+        pass
+    prompt = llm.messages[0][0]["content"]
+    assert "CURRENT SECTION: intro" in prompt
+    assert "Payments Gateway" in prompt
+    assert flow.focus_item == "Payments Gateway"
+
+
+@pytest.mark.asyncio
+async def test_advance_moves_to_next_resume_project_not_role_fit() -> None:
+    llm = FakeStreamingLlm(
+        "DECISION: advance\n\n",
+        "Let's look at Inventory Service next. How did you keep stock consistent?",
+    )
+    flow = InterviewFlow(
+        {
+            "phases": [
+                {
+                    "name": "project deep-dive",
+                    "duration_minutes": 10,
+                    "topics": ["Payments Gateway", "Inventory Service"],
+                    "source": "resume",
+                    "intent": "resume_project",
+                },
+                {
+                    "name": "job requirements",
+                    "duration_minutes": 8,
+                    "topics": ["DSA"],
+                    "source": "jd",
+                    "intent": "jd_requirement",
+                },
+            ]
+        },
+        llm,
+        candidate_turns=["I already introduced myself."],
+        interviewer_turns=["How did you shard Payments Gateway writes?"],
+        resume_text=(
+            "Projects\n- Payments Gateway: checkout\n- Inventory Service: stock sync"
+        ),
+        job_description="Need DSA.",
+        max_probes_per_phase=8,
+        target_duration_minutes=30,
+    )
+    flow.focus_item = "Payments Gateway"
+    flow.probe_count = 3
+    async for _ in flow.generate_next_question_stream(
+        "I owned checkout on the payments gateway."
+    ):
+        pass
+    assert flow.phase_index == 0
+    assert flow.focus_item == "Inventory Service"
+    prompt = llm.messages[0][0]["content"]
+    assert "CURRENT SECTION: resume_project" in prompt
+    assert "DSA" in prompt
+    assert "standalone" in prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_second_probe_moves_to_the_next_project() -> None:
+    llm = FakeStreamingLlm(
+        "DECISION: probe\n\n",
+        "What tradeoff did you make on Payments Gateway?",
+    )
+    flow = InterviewFlow(
+        {
+            "phases": [
+                {
+                    "name": "project deep-dive",
+                    "duration_minutes": 10,
+                    "topics": ["Payments Gateway", "Inventory Service"],
+                    "source": "resume",
+                    "intent": "resume_project",
+                }
+            ]
+        },
+        llm,
+        candidate_turns=["I already introduced myself."],
+        interviewer_turns=["How did you shard Payments Gateway writes?"],
+        resume_text=(
+            "Projects\n- Payments Gateway: checkout\n- Inventory Service: stock sync"
+        ),
+        target_duration_minutes=15,
+    )
+    flow.focus_item = "Payments Gateway"
+    flow.probe_count = 1
+    async for _ in flow.generate_next_question_stream(
+        "I owned checkout on the payments gateway."
+    ):
+        pass
+    assert flow.phase_index == 0
+    assert flow.focus_item == "Inventory Service"
+    assert "Payments Gateway" in flow._covered_projects()
+
+
+@pytest.mark.asyncio
+async def test_dsa_prompt_is_independent_of_projects() -> None:
+    llm = FakeStreamingLlm(
+        "DECISION: probe\n\n",
+        "Given an unsorted array of integers, how would you find two numbers that add to a target in linear time?",
+    )
+    flow = InterviewFlow(
+        {
+            "phases": [
+                {
+                    "name": "job requirements",
+                    "duration_minutes": 8,
+                    "topics": ["Python", "DSA"],
+                    "source": "jd",
+                    "intent": "jd_requirement",
+                }
+            ]
+        },
+        llm,
+        candidate_turns=["I already introduced myself.", "I owned checkout."],
+        interviewer_turns=["How did you shard Payments Gateway writes?"],
+        resume_text="Projects: Payments Gateway.",
+        job_description="Need Python and DSA.",
+        competencies=["Python"],
+    )
+    flow.focus_item = "DSA"
+    async for _ in flow.generate_next_question_stream(
+        "I used Redis for the checkout cache."
+    ):
+        pass
+    prompt = llm.messages[0][0]["content"]
+    assert "CURRENT SECTION: jd_requirement" in prompt
+    assert "standalone" in prompt.lower()
+    assert "Do not mention their projects" in prompt
+    assert "Do not connect it to a project" in prompt

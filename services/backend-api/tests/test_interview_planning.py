@@ -51,6 +51,7 @@ async def test_openai_planning_uses_strict_schema(monkeypatch) -> None:
                         "duration_minutes": 10,
                         "topics": ["Python"],
                         "source": "jd",
+                        "intent": "jd_requirement",
                     }
                 ]
             }
@@ -64,7 +65,60 @@ async def test_openai_planning_uses_strict_schema(monkeypatch) -> None:
     response_format = FakeClient.payload["response_format"]
     assert response_format["type"] == "json_schema"
     assert response_format["json_schema"]["strict"] is True
-    assert outline.phases[0].name == "Technical"
+    assert outline.phases[0].intent == "jd_requirement"
+
+
+@pytest.mark.asyncio
+async def test_plan_injects_dsa_from_job_description(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_SERVICE_URL", "https://api.openai.com/v1")
+    monkeypatch.setattr(interviews.httpx, "AsyncClient", FakeClient)
+    FakeClient.response = _response(
+        json.dumps(
+            {
+                "phases": [
+                    {
+                        "name": "warm-up",
+                        "duration_minutes": 2,
+                        "topics": ["background"],
+                        "source": "generic",
+                        "intent": "intro",
+                    },
+                    {
+                        "name": "resume projects",
+                        "duration_minutes": 10,
+                        "topics": ["Payments Gateway"],
+                        "source": "resume",
+                        "intent": "resume_project",
+                    },
+                    {
+                        "name": "role fit",
+                        "duration_minutes": 3,
+                        "topics": ["motivation"],
+                        "source": "jd",
+                        "intent": "role_fit",
+                    },
+                ]
+            }
+        )
+    )
+
+    outline = await interviews.create_interview_plan(
+        InterviewPlanRequest(
+            job_description="Backend engineer. Strong DSA and system design.",
+            resume_text="Projects: Payments Gateway",
+        )
+    )
+
+    intents = [phase.intent for phase in outline.phases]
+    assert "intro" in intents
+    assert "resume_project" in intents
+    assert "jd_requirement" in intents
+    topics = " ".join(
+        " ".join(phase.topics) for phase in outline.phases if phase.intent == "jd_requirement"
+    )
+    assert "DSA" in topics
+    assert "System design" in topics
 
 
 @pytest.mark.asyncio

@@ -198,7 +198,7 @@ def classify_live_answer(
             expected_hits += 1
 
     if not covered and expected and expected_hits == 0 and len(cleaned.split()) >= 8:
-        return "usable", "off_topic", []
+        return "off_topic", "off_topic", []
     if len(covered) >= max(1, (len(required_intents) + 1) // 2) and expected_hits >= 1:
         quality = "sufficient"
     elif covered or expected_hits:

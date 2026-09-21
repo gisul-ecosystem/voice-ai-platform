@@ -397,7 +397,10 @@ def compile_blueprint(
             )
         )
 
-    ladders = [default_question_ladder(item.id) for item in competencies]
+    ladders = [
+        default_question_ladder(item.id, item.name)
+        for item in competencies
+    ]
     role_title = job_intelligence.role.title.strip() or "Interview"
     draft_title = (title or f"{role_title} interview").strip()[:160]
 

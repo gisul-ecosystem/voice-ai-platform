@@ -449,6 +449,7 @@ class InterviewBrainState(BaseModel):
     definition_id: str = Field(min_length=8, max_length=64)
     state_version: int = Field(ge=0, default=0)
     current_section: InterviewSection = "opening"
+    phase_index: int = Field(ge=0, default=0)
     current_competency_id: str | None = Field(default=None, max_length=64)
     current_depth: int = Field(ge=1, le=5, default=1)
     active_question_id: str | None = Field(default=None, max_length=64)

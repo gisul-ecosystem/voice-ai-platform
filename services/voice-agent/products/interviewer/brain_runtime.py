@@ -64,6 +64,7 @@ def flow_to_brain_state(
         "definition_id": definition_id,
         "state_version": max(0, state_version),
         "current_section": section,
+        "phase_index": max(0, int(getattr(flow, "phase_index", 0))),
         "current_competency_id": competency_id,
         "current_depth": min(
             5,
@@ -116,7 +117,7 @@ def brain_bundle_to_initial_state(bundle: dict[str, Any] | None) -> dict[str, An
     restored: dict[str, Any] = {
         "candidate_turns": candidate_turns,
         "interviewer_turns": interviewer_turns,
-        "initial_phase_index": 0,
+        "initial_phase_index": max(0, int(state.get("phase_index") or 0)),
         "initial_probe_count": max(0, int(state.get("current_depth") or 1) - 1),
         "initial_sequence_number": len(candidate_turns) + len(interviewer_turns),
         "brain_state_version": int(state.get("state_version") or 0),

@@ -116,12 +116,27 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
             provider_override="elevenlabs",
             api_key_override="override-key-456",
         )
-        inner = getattr(client, "_primary", client)
-        self.assertIsInstance(inner, ElevenLabsTts)
-        self.assertEqual(inner._api_key, "override-key-456")
-        self.assertEqual(getattr(client, "_fallback")._api_key, "")
-        self.assertEqual(inner.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
-        self.assertTrue(inner.model_id)
+        self.assertIsInstance(client, ElevenLabsTts)
+        self.assertEqual(client._api_key, "override-key-456")
+        self.assertEqual(client.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
+        self.assertTrue(client.model_id)
+
+    async def test_voice_override_cannot_change_interviewer_voice(self):
+        tts = ElevenLabsTts(
+            base_url="https://api.elevenlabs.io/v1",
+            api_key="mock-key-123",
+            voice_id="fixed-interviewer-voice",
+        )
+        response = httpx.Response(200, content=b"\x00\x00")
+
+        with patch("clients.tts.elevenlabs.request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = response
+            await tts.synthesize("Hello", voice="different-voice")
+
+        self.assertIn(
+            "text-to-speech/fixed-interviewer-voice",
+            mock_request.call_args.args[2],
+        )
 
     def test_normalize_speech_text(self):
         """Tests text pre-processing and formatting for TTS."""

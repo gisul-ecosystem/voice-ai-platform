@@ -8,7 +8,7 @@ from datetime import timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from brain.definition_service import publish_and_store
-from db import interviews
+from db import candidates, definitions, interviews
 from models.schemas import (
     CreateScheduledInterviewRequest,
     CreateScheduledInterviewResponse,
@@ -31,6 +31,35 @@ router = APIRouter(prefix="/v1", tags=["scheduled-interviews"])
 async def create_scheduled_interview(
     req: CreateScheduledInterviewRequest,
 ) -> CreateScheduledInterviewResponse:
+    candidate_id = (req.candidate_id or "").strip() or None
+    candidate_record = None
+    if candidate_id:
+        candidate_record = await candidates.get_candidate(candidate_id)
+        if candidate_record is None:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        if not (candidate_record.get("resume_text") or "").strip():
+            raise HTTPException(status_code=422, detail="Candidate CV must be uploaded first")
+        if not req.definition_id:
+            raise HTTPException(
+                status_code=422,
+                detail="definition_id is required when scheduling an admin candidate",
+            )
+        if await definitions.get_definition(req.definition_id) is None:
+            raise HTTPException(status_code=404, detail="Interview definition not found")
+
+    effective_candidate_name = (
+        candidate_record["name"] if candidate_record else req.candidate_name.strip()
+    )
+    effective_candidate_email = (
+        candidate_record["email"]
+        if candidate_record
+        else req.candidate_email.strip().lower()
+    )
+    effective_resume_text = (
+        candidate_record["resume_text"] if candidate_record else (req.resume_text or "").strip()
+    )
+    if not effective_resume_text:
+        raise HTTPException(status_code=422, detail="resume_text is required")
     starts_at = req.starts_at
     if starts_at.tzinfo is None:
         raise HTTPException(status_code=422, detail="starts_at must include a timezone")
@@ -52,12 +81,13 @@ async def create_scheduled_interview(
 
     expires_at = starts_at + timedelta(minutes=req.late_grace_minutes)
     interview_id = f"int_{uuid.uuid4().hex}"
-    candidate_id = f"candidate_{uuid.uuid4().hex}"
+    candidate_id = candidate_id or f"candidate_{uuid.uuid4().hex}"
     context = await interviews.create_context(
         req.job_description.strip(),
-        req.resume_text.strip(),
+        effective_resume_text,
         req.interview_setup.model_dump(mode="python"),
         definition_id=published.definition_id,
+        candidate_profile=(candidate_record or {}).get("candidate_profile"),
         expires_at_override=starts_at
         + timedelta(
             days=max(1, int(os.getenv("INTERVIEW_CONTEXT_RETENTION_DAYS", "30")))
@@ -78,8 +108,8 @@ async def create_scheduled_interview(
         "source_product_id": req.source_product_id,
         "external_interview_id": external_interview_id,
         "candidate_id": candidate_id,
-        "candidate_name": req.candidate_name.strip(),
-        "candidate_email": req.candidate_email.strip().lower(),
+        "candidate_name": effective_candidate_name,
+        "candidate_email": effective_candidate_email,
         "context_id": context["context_id"],
         "definition_id": published.definition_id,
         "invitation_id": invitation["jti"],
@@ -159,6 +189,7 @@ async def preview_invitation(
     setup = stored["interview_setup"]
     return InvitationPreviewResponse(
         interview_id=stored["_id"],
+        definition_id=stored.get("definition_id"),
         candidate_name=stored["candidate_name"],
         title=setup["title"],
         role=setup["role"],
