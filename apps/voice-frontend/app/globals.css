@@ -3038,3 +3038,109 @@ select:focus-visible,
     font-size: 0.8rem;
   }
 }
+
+.landing-nav-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.landing-nav-actions a {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.scorecard-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 18px;
+}
+
+.scorecard-summary article {
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.scorecard-summary strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.05rem;
+  text-transform: capitalize;
+}
+
+.scorecard-list {
+  display: grid;
+  gap: 16px;
+}
+
+.scorecard-competency {
+  display: grid;
+  gap: 10px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.scorecard-competency:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.scorecard-competency header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scorecard-competency h2 {
+  font-size: 1.1rem;
+  text-transform: capitalize;
+}
+
+.scorecard-competency header span,
+.scorecard-missing {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.scorecard-anchor {
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-accent);
+  font-size: 0.92rem;
+}
+
+.scorecard-excerpts {
+  display: grid;
+  gap: 8px;
+  padding-left: 18px;
+  color: var(--foreground);
+}
+
+.scorecard-review-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.scorecard-review-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.scorecard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 800px) {
+  .scorecard-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+}

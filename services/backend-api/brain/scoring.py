@@ -118,6 +118,61 @@ def _strength_for_answer(
     return "weak"
 
 
+_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "was",
+    "were",
+    "are",
+    "has",
+    "have",
+    "not",
+    "but",
+    "they",
+    "their",
+    "them",
+    "you",
+    "your",
+    "our",
+    "can",
+    "did",
+    "does",
+    "than",
+    "then",
+    "when",
+    "what",
+    "how",
+    "into",
+    "about",
+    "also",
+    "only",
+}
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {token for token in _tokens(text) if token not in _STOPWORDS}
+
+
+def _bars_anchors(competency: dict[str, Any]) -> list[tuple[int, str]]:
+    rubric = competency.get("rubric") if isinstance(competency.get("rubric"), list) else []
+    anchors: list[tuple[int, str]] = []
+    for item in rubric:
+        if not isinstance(item, dict) or item.get("rating") is None:
+            continue
+        rating = int(item.get("rating") or 0)
+        if rating not in {1, 3, 5}:
+            continue
+        description = str(item.get("description") or "").strip()
+        if description:
+            anchors.append((rating, description))
+    return anchors
+
+
 def _rating_from_strength(
     strength: EvidenceStrength,
     *,
@@ -130,13 +185,49 @@ def _rating_from_strength(
         return None, "insufficient_evidence"
     mapping = {
         "partial": 3,
-        "sufficient": 4,
+        "sufficient": 3,
         "strong": 5,
     }
     rating = mapping.get(strength)
     if rating is None:
         return None, "insufficient_evidence"
     return rating, "scored"
+
+
+def _rating_from_bars(
+    text: str,
+    competency: dict[str, Any],
+    strength: EvidenceStrength,
+    *,
+    evidence_count: int,
+    min_evidence: int = 1,
+) -> tuple[int | None, str]:
+    """Map evidence onto frozen 1/3/5 anchors. Thin answers stay unrated."""
+    gate_rating, gate_outcome = _rating_from_strength(
+        strength,
+        evidence_count=evidence_count,
+        min_evidence=min_evidence,
+    )
+    if gate_outcome != "scored" or gate_rating is None:
+        return gate_rating, gate_outcome
+    allowed = {3, 5} if strength == "strong" else {3, 5} if strength == "sufficient" else {3}
+    anchors = [
+        (rating, description)
+        for rating, description in _bars_anchors(competency)
+        if rating in allowed
+    ]
+    if not anchors:
+        return gate_rating, "scored"
+    scored = [
+        (len(_content_tokens(text) & _content_tokens(description)), rating)
+        for rating, description in anchors
+    ]
+    best_overlap = max(overlap for overlap, _rating in scored)
+    if best_overlap <= 0:
+        return gate_rating, "scored"
+    top = [rating for overlap, rating in scored if overlap == best_overlap]
+    chosen = max(top) if strength == "strong" else min(top)
+    return chosen, "scored"
 
 
 def _anchor_for_rating(competency: dict[str, Any], rating: int | None) -> str | None:
@@ -362,6 +453,7 @@ def build_scorecard_bundle(
 
         competency_evidence_ids: list[str] = []
         best_strength: EvidenceStrength = "none"
+        best_text = ""
         missing = list(expected)
         excerpts: list[str] = []
         for answer in related_answers:
@@ -379,6 +471,7 @@ def build_scorecard_bundle(
             }
             if rank.get(strength, 0) > rank.get(best_strength, 0):
                 best_strength = strength
+                best_text = text
             for item in list(missing):
                 if item.lower() in text.lower() or any(
                     token in _tokens(text) for token in _tokens(item)
@@ -446,7 +539,9 @@ def build_scorecard_bundle(
             if intent not in asked_intents and intent not in covered_intents
         ]
 
-        rating, outcome = _rating_from_strength(
+        rating, outcome = _rating_from_bars(
+            best_text,
+            competency,
             best_strength,
             evidence_count=len(competency_evidence_ids),
             min_evidence=min_evidence,

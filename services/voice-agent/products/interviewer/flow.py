@@ -483,6 +483,58 @@ class SpokenQuestionStream:
         return question
 
 
+class SpokenJsonQuestionStream:
+    """Emit the spoken `question` field from a streaming JSON object."""
+
+    _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.question = ""
+        self._emitted = 0
+        self._in_question = False
+        self._done = False
+        self._start = 0
+
+    def push(self, delta: str) -> str:
+        if self._done:
+            return ""
+        self.buffer += delta or ""
+        if not self._in_question:
+            match = re.search(r'"question"\s*:\s*"', self.buffer)
+            if not match:
+                return ""
+            self._in_question = True
+            self._start = match.end()
+        body = self.buffer[self._start :]
+        chars: list[str] = []
+        escaped = False
+        for ch in body:
+            if escaped:
+                chars.append(self._ESCAPES.get(ch, ch))
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                self._done = True
+                break
+            chars.append(ch)
+        text = "".join(chars)
+        extra = text[self._emitted :]
+        self._emitted = len(text)
+        self.question = text
+        return extra
+
+    def finish(self) -> str:
+        if self._done or self._emitted >= len(self.question):
+            return ""
+        extra = self.question[self._emitted :]
+        self._emitted = len(self.question)
+        return extra
+
+
 class InterviewFlow:
     """State and question generation independent of LiveKit transport."""
 
@@ -1174,6 +1226,33 @@ class InterviewFlow:
     def _job_target_level(self) -> str:
         return str(self.candidate_profile.get("job_target_level") or "mid")
 
+    def _role_title(self) -> str:
+        if isinstance(self.interview_definition, dict):
+            intelligence = self.interview_definition.get("job_intelligence")
+            if isinstance(intelligence, dict):
+                role = intelligence.get("role") or {}
+                if isinstance(role, dict):
+                    title = str(role.get("title") or "").strip()
+                    if title:
+                        return title
+        return ""
+
+    def _fallback_opening(self) -> str:
+        role = self._role_title()
+        if role:
+            return (
+                f"Thanks for joining. I'm your interviewer for the {role} conversation. "
+                "To get started, please introduce yourself — a short overview of your "
+                "background, and the work that is most relevant to this role."
+            )
+        if (self.job_description or "").strip():
+            return (
+                "Thanks for joining. I'll be interviewing you for this role today. "
+                "Please introduce yourself and share the work from your background "
+                "that is most relevant to this job."
+            )
+        return FALLBACK_OPENING
+
     def _profile_type(self) -> str:
         summary = self.candidate_profile.get("experience_summary")
         if isinstance(summary, dict):
@@ -1538,7 +1617,7 @@ class InterviewFlow:
         if last_candidate_turn is None:
             if not self.policy_mode:
                 started = time.perf_counter()
-                opening = FALLBACK_OPENING
+                opening = self._fallback_opening()
                 self.last_question_competency_id = None
                 self.last_question_intent = "opening"
                 self.last_question_depth = 1
@@ -1583,7 +1662,7 @@ class InterviewFlow:
                     is_intro_reply=is_intro_reply,
                 )
             fallback = (
-                FALLBACK_OPENING
+                self._fallback_opening()
                 if last_candidate_turn is None
                 else self._fallback_spoken_question(policy)
             )
@@ -1598,13 +1677,35 @@ class InterviewFlow:
             self._remember_generated(generated, policy)
             self._remember_question(fallback)
             return fallback
+        return await self._complete_generated_turn(
+            raw,
+            last_candidate_turn,
+            started=started,
+            prompt=prompt,
+            user_content=user_content,
+        )
+
+    async def _complete_generated_turn(
+        self,
+        raw: str,
+        last_candidate_turn: str | None,
+        *,
+        started: float,
+        prompt: str,
+        user_content: str,
+        allow_retry: bool = True,
+        spoken_question: str | None = None,
+    ) -> str:
+        policy = self.last_policy_decision
         if self.policy_mode:
             generated = self._coerce_generated(
                 raw, policy=policy, last_candidate_turn=last_candidate_turn
             )
             parsed = parse_generated_question(raw)
-            if parsed is None and generated.question == self._fallback_spoken_question(
-                policy
+            if (
+                allow_retry
+                and parsed is None
+                and generated.question == self._fallback_spoken_question(policy)
             ):
                 try:
                     raw = await self.llm_client.generate_reply(
@@ -1621,11 +1722,15 @@ class InterviewFlow:
                         "stage2_question_retry_failed",
                         extra={"event": "stage2_question_retry_failed"},
                     )
+            if spoken_question:
+                generated.question = spoken_question
             decision, question = generated.decision, generated.question
             self._remember_generated(generated, policy)
             self._refine_answer_quality(last_candidate_turn, generated)
         else:
             decision, question = parse_stage2(raw)
+            if spoken_question:
+                question = spoken_question
         if last_candidate_turn:
             is_intro_reply = not self.candidate_turns
             if not self.policy_mode:
@@ -1747,7 +1852,8 @@ class InterviewFlow:
 
     async def generate_next_question_stream(self, last_candidate_turn: str | None):
         if self.policy_mode:
-            yield await self.generate_next_question(last_candidate_turn)
+            async for chunk in self._stream_policy_question(last_candidate_turn):
+                yield chunk
             return
         last_candidate_turn = (last_candidate_turn or "").strip() or None
         closing = self._closing_speech(last_candidate_turn)
@@ -1796,7 +1902,7 @@ class InterviewFlow:
             )
         question = "".join(spoken_parts).strip()
         if not question:
-            question = FALLBACK_OPENING if is_opening else FALLBACK_FOLLOWUP
+            question = self._fallback_opening() if is_opening else FALLBACK_FOLLOWUP
             yield question
         self._commit_turn(
             last_candidate_turn,
@@ -1805,3 +1911,89 @@ class InterviewFlow:
             is_opening=is_opening,
             question=question,
         )
+
+    async def _stream_policy_question(self, last_candidate_turn: str | None):
+        last_candidate_turn = (last_candidate_turn or "").strip() or None
+        closing = self._closing_speech(last_candidate_turn)
+        if closing:
+            yield closing
+            return
+        stream = getattr(self.llm_client, "generate_reply_stream", None) or getattr(
+            self.llm_client, "stream_reply", None
+        )
+        if stream is None:
+            yield await self.generate_next_question(last_candidate_turn)
+            return
+        if last_candidate_turn:
+            is_intro_reply = not self.candidate_turns
+            self._record_answer_quality(
+                last_candidate_turn, is_intro_reply=is_intro_reply
+            )
+        prompt, user_content = self._prompt_for_turn(last_candidate_turn)
+        started = time.perf_counter()
+        policy = self.last_policy_decision
+        parser = SpokenJsonQuestionStream()
+        raw_parts: list[str] = []
+        spoken_any = False
+        try:
+            async for delta in stream(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_content},
+                ]
+            ):
+                raw_parts.append(delta or "")
+                spoken = parser.push(delta or "")
+                if spoken:
+                    spoken_any = True
+                    yield spoken
+        except Exception:
+            logger.exception(
+                "stage2_question_failed",
+                extra={"event": "stage2_question_failed"},
+            )
+            fallback = (
+                self._fallback_opening()
+                if last_candidate_turn is None
+                else self._fallback_spoken_question(policy)
+            )
+            if self.completed:
+                fallback = CLOSING_MESSAGE
+            if last_candidate_turn:
+                is_intro_reply = not self.candidate_turns
+                self.candidate_turns.append(last_candidate_turn)
+                self._apply_turn_decision(
+                    self._normalize_decision("probe", is_intro_reply=is_intro_reply),
+                    is_intro_reply=is_intro_reply,
+                )
+            question = parser.question.strip() or fallback
+            generated = GeneratedQuestion(
+                question=question,
+                competency_id=policy.competency_id if policy else None,
+                intent=policy.intent if policy else "live_question",
+                depth=policy.current_depth if policy else 1,
+            )
+            self._remember_generated(generated, policy)
+            self._remember_question(question)
+            if not spoken_any:
+                yield question
+            return
+        leftover = parser.finish()
+        if leftover:
+            spoken_any = True
+            yield leftover
+        question = await self._complete_generated_turn(
+            "".join(raw_parts),
+            last_candidate_turn,
+            started=started,
+            prompt=prompt,
+            user_content=user_content,
+            allow_retry=not spoken_any,
+            spoken_question=parser.question.strip() or None,
+        )
+        if question == CLOSING_MESSAGE:
+            if parser.question.strip() != CLOSING_MESSAGE:
+                yield question
+            return
+        if not spoken_any and question:
+            yield question

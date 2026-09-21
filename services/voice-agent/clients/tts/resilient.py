@@ -27,9 +27,10 @@ def _should_failover(exc: BaseException) -> bool:
 
 
 class ResilientTts:
-    def __init__(self, primary, fallback) -> None:
+    def __init__(self, primary, fallback, *, pin_voice: bool = True) -> None:
         self._primary = primary
         self._fallback = fallback
+        self._pin_voice = pin_voice
 
     def __getattr__(self, name: str):
         return getattr(self._primary, name)
@@ -38,7 +39,14 @@ class ResilientTts:
         try:
             return await self._primary.synthesize(text, **kwargs)
         except ServiceUnavailableError as exc:
-            if not _should_failover(exc):
+            if self._pin_voice or self._fallback is None or not _should_failover(exc):
+                logger.warning(
+                    "tts_pinned_no_failover",
+                    extra={
+                        "event": "tts_pinned_no_failover",
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 raise
             logger.warning(
                 "tts_provider_failover",
@@ -58,7 +66,14 @@ class ResilientTts:
                 yield audio
             return
         except ServiceUnavailableError as exc:
-            if not _should_failover(exc):
+            if self._pin_voice or self._fallback is None or not _should_failover(exc):
+                logger.warning(
+                    "tts_pinned_no_failover",
+                    extra={
+                        "event": "tts_pinned_no_failover",
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 raise
             logger.warning(
                 "tts_provider_failover",

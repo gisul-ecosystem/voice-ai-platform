@@ -45,6 +45,82 @@ function ensureFutureStart(value: string): string {
   return value;
 }
 
+const CANDIDATE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+type PublicationGateInput = {
+  step: number;
+  reviewing: boolean;
+  title: string;
+  role: string;
+  language: string;
+  jobDescription: string;
+  resumeText: string;
+  competencies: string;
+  jdSummary: IngestSummary | null;
+  jdReviewed: boolean;
+  resumeSummary: IngestSummary | null;
+  resumeReviewed: boolean;
+  participantName: string;
+  candidateEmail: string;
+  startsAt: string;
+};
+
+function listedCompetencies(value: string): string[] {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function roleStepError(input: PublicationGateInput): string | null {
+  if (input.title.trim().length < 2) return "Add an interview title before continuing.";
+  if (input.role.trim().length < 2) return "Add a role title before continuing.";
+  if (input.language.trim().length < 2) return "Set the interview language before continuing.";
+  return null;
+}
+
+function contentStepError(input: PublicationGateInput): string | null {
+  if (input.jobDescription.trim().length < 20) {
+    return "Paste a complete job description (or upload a JD) before continuing.";
+  }
+  if (input.resumeText.trim().length < 20) {
+    return "Paste candidate resume text (or upload a CV) before continuing.";
+  }
+  const competencies = listedCompetencies(input.competencies);
+  if (competencies.length < 1) return "Add at least one competency before publishing.";
+  if (competencies.length > 12) {
+    return `You listed ${competencies.length} competencies — trim to 12 or fewer before continuing.`;
+  }
+  if (input.jdSummary && !input.jdReviewed) {
+    return "Review the extracted JD and resume facts before continuing.";
+  }
+  if (input.resumeSummary && !input.resumeReviewed) {
+    return "Review the extracted JD and resume facts before continuing.";
+  }
+  return null;
+}
+
+function candidateStepError(input: PublicationGateInput): string | null {
+  if (input.participantName.trim().length < 1) {
+    return "Candidate name is required before scheduling.";
+  }
+  if (!CANDIDATE_EMAIL.test(input.candidateEmail.trim())) {
+    return "A valid candidate email is required before scheduling.";
+  }
+  if (!input.startsAt) return "Set the interview start time before scheduling.";
+  return null;
+}
+
+function appliesToStep(input: PublicationGateInput, step: number): boolean {
+  return input.reviewing || input.step === step;
+}
+
+/** Creator publication gates — incomplete setup cannot advance or schedule. */
+function publicationGateError(input: PublicationGateInput): string | null {
+  return (
+    (appliesToStep(input, 0) ? roleStepError(input) : null) ||
+    (appliesToStep(input, 1) ? contentStepError(input) : null) ||
+    (appliesToStep(input, 2) ? candidateStepError(input) : null)
+  );
+}
+
 function itemTexts(items: unknown): string[] {
   if (!Array.isArray(items)) return [];
   return items
@@ -290,46 +366,6 @@ export function SetupForm({
     };
   }
 
-  /** Creator publication gates — incomplete setup cannot advance or schedule. */
-  function publicationGateError(forStep: number, forReview: boolean): string | null {
-    const competencyList = competencies
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (forStep === 0 || forReview) {
-      if (title.trim().length < 2) return "Add an interview title before continuing.";
-      if (role.trim().length < 2) return "Add a role title before continuing.";
-      if (language.trim().length < 2) return "Set the interview language before continuing.";
-    }
-    if (forStep === 1 || forReview) {
-      if (jobDescription.trim().length < 20) {
-        return "Paste a complete job description (or upload a JD) before continuing.";
-      }
-      if (resumeText.trim().length < 20) {
-        return "Paste candidate resume text (or upload a CV) before continuing.";
-      }
-      if (competencyList.length < 1) {
-        return "Add at least one competency before publishing.";
-      }
-      if (competencyList.length > 12) {
-        return `You listed ${competencyList.length} competencies — trim to 12 or fewer before continuing.`;
-      }
-      if ((jdSummary && !jdReviewed) || (resumeSummary && !resumeReviewed)) {
-        return "Review the extracted JD and resume facts before continuing.";
-      }
-    }
-    if (forStep === 2 || forReview) {
-      if (participantName.trim().length < 1) {
-        return "Candidate name is required before scheduling.";
-      }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidateEmail.trim())) {
-        return "A valid candidate email is required before scheduling.";
-      }
-      if (!startsAt) return "Set the interview start time before scheduling.";
-    }
-    return null;
-  }
-
   async function ingestDocument(
     kind: "jd" | "resume",
     event: ChangeEvent<HTMLInputElement>,
@@ -403,7 +439,23 @@ export function SetupForm({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const gate = publicationGateError(step, reviewing);
+    const gate = publicationGateError({
+      step,
+      reviewing,
+      title,
+      role,
+      language,
+      jobDescription,
+      resumeText,
+      competencies,
+      jdSummary,
+      jdReviewed,
+      resumeSummary,
+      resumeReviewed,
+      participantName,
+      candidateEmail,
+      startsAt,
+    });
     if (gate) {
       setIngestError(gate);
       return;

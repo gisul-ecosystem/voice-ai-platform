@@ -39,3 +39,10 @@ def test_usable_candidate_turn_rejects_echo_and_collapsed_stt() -> None:
         "Could you walk me through your background?",
         last_agent_text="Could you walk me through your background?",
     )
+    assert not is_usable_candidate_turn(
+        "Thanks for joining. I'm your interviewer",
+        last_agent_text=(
+            "Thanks for joining. I'm your interviewer for the Backend Engineer "
+            "conversation. To get started, please introduce yourself."
+        ),
+    )

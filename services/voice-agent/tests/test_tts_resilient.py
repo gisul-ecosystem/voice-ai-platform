@@ -22,9 +22,17 @@ class Fallback:
 
 @pytest.mark.asyncio
 async def test_resilient_tts_fails_over_on_payment_required() -> None:
-    tts = ResilientTts(Primary(), Fallback())
+    tts = ResilientTts(Primary(), Fallback(), pin_voice=False)
     audio = await tts.synthesize("Hello")
     assert audio == b"RIFF-fallback"
     second = await tts.synthesize("Again")
     assert second == b"RIFF-fallback"
     assert tts._primary.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_resilient_tts_pins_voice_and_does_not_switch_provider() -> None:
+    tts = ResilientTts(Primary(), Fallback())
+    with pytest.raises(ServiceUnavailableError):
+        await tts.synthesize("Hello")
+    assert tts._primary.calls == 1

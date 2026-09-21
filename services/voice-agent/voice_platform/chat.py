@@ -58,10 +58,13 @@ def is_usable_candidate_turn(
     if agent_words:
         agent_set = set(agent_words)
         overlap = sum(1 for word in words if word in agent_set) / len(words)
-        if overlap >= 0.55:
+        if overlap >= 0.45:
             return False
-        # Long substring overlap with the last agent utterance.
         agent_joined = " ".join(agent_words)
-        if len(joined) >= 18 and (joined in agent_joined or agent_joined in joined):
+        if len(words) >= 5:
+            prefix = " ".join(words[:8])
+            if prefix and prefix in agent_joined:
+                return False
+        if len(joined) >= 12 and (joined in agent_joined or agent_joined in joined):
             return False
     return True
