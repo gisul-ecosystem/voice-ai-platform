@@ -311,6 +311,9 @@ export function SetupForm({
       if (competencyList.length < 1) {
         return "Add at least one competency before publishing.";
       }
+      if (competencyList.length > 12) {
+        return `You listed ${competencyList.length} competencies — trim to 12 or fewer before continuing.`;
+      }
       if ((jdSummary && !jdReviewed) || (resumeSummary && !resumeReviewed)) {
         return "Review the extracted JD and resume facts before continuing.";
       }
@@ -400,30 +403,10 @@ export function SetupForm({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-<<<<<<< HEAD
-    if (step === 1) {
-      if ((jdSummary && !jdReviewed) || (resumeSummary && !resumeReviewed)) {
-        setIngestError(
-          "Review the extracted JD and resume facts before continuing.",
-        );
-        return;
-      }
-      const competencyCount = competencies
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean).length;
-      if (competencyCount > 12) {
-        setIngestError(
-          `You listed ${competencyCount} competencies — trim to 12 or fewer before continuing.`,
-        );
-        return;
-      }
-=======
     const gate = publicationGateError(step, reviewing);
     if (gate) {
       setIngestError(gate);
       return;
->>>>>>> origin/dev
     }
     setIngestError("");
     if (step < 2) {
