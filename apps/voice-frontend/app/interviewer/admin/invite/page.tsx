@@ -8,13 +8,27 @@ type Candidate = { name: string; email: string; resume: File | null; invite?: st
 
 type Pipeline = { backend: boolean; services: Array<{ name: string; provider: string; configured: boolean }> };
 
+function readDraft(): { state?: Record<string, unknown>; error: string } {
+  if (typeof window === "undefined") return { error: "" };
+  try {
+    const saved = sessionStorage.getItem(DRAFT_KEY);
+    return { state: saved ? (JSON.parse(saved) as Record<string, unknown>) : undefined, error: "" };
+  } catch {
+    return { error: "Interview definition could not be loaded." };
+  }
+}
+
 export default function InviteCandidatesPage() {
-  const [state, setState] = useState<Record<string, unknown>>();
+  const [{ state, error }] = useState(readDraft);
   const [candidates, setCandidates] = useState<Candidate[]>([{ name: "", email: "", resume: null }]);
   const [pipeline, setPipeline] = useState<Pipeline>();
-  const [error, setError] = useState("");
 
-  useEffect(() => { try { const saved = sessionStorage.getItem(DRAFT_KEY); if (saved) setState(JSON.parse(saved)); } catch { setError("Interview definition could not be loaded."); } fetch("/api/admin/pipeline").then((response) => response.json()).then(setPipeline).catch(() => undefined); }, []);
+  useEffect(() => {
+    fetch("/api/admin/pipeline")
+      .then((response) => response.json())
+      .then(setPipeline)
+      .catch(() => undefined);
+  }, []);
   const published = state?.published as Record<string, unknown> | undefined;
   const draft = state?.draft as Record<string, unknown> | undefined;
   const definitionId = String(published?.definition_id || state?.definitionId || "");
