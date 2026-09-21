@@ -272,36 +272,43 @@ Ship a minimal results page: competencies (must/nice), evidence demonstrated, mi
 
 **Title:** `Staging runbook and Redis brain hot-memory layer`
 
-**Description**  
+**Description**
 Reproducible stack; Redis in staging for brain hot snapshots; start order; fail-closed secrets; prove context carries across turns/restart.
 
+**Doc:** `docs/staging_runbook_redis_brain.md` (VM path `/home/voiceai-runner/voice-ai-platform`, restart continuity §4.5).
+
 **Acceptance**
-- [ ] Clean machine completes one interview from runbook  
-- [ ] Redis key observed (or written exception)  
-- [ ] Rollback documented  
+- [ ] Clean machine completes one interview from runbook
+- [ ] Redis key observed (or written exception)
+- [ ] Restart continuity proven
+- [ ] Rollback documented
 
 ### PBI-D2 — M7 validation matrix (3 SP)
 
 **Title:** `End-to-end validation matrix — roles and failure drills`
 
-**Description**  
+**Description**
 Junior/Senior BE, sparse/final-year resume, same JD different experience, non-answers, TTS fail (no voice change), time boundary, scorecard review path (Akshay).
 
+**Doc:** `docs/m7_validation_matrix.md`
+
 **Acceptance**
-- [ ] ≥6 scenarios recorded pass/fail with owners  
-- [ ] Demo script ≤10 min on green path  
+- [ ] ≥6 scenarios recorded pass/fail with owners
+- [ ] Demo script ≤10 min on green path
 
 ### PBI-D3 — Board hygiene, publication gates, UI research note (2 SP)
 
 **Title:** `Sprint board hygiene, publication gates, and UI research note`
 
-**Description**  
+**Description**
 Azure board daily; creator publication gates; one-page note for next-sprint UI redesign (create/schedule/attend/results) — no redesign build this sprint.
 
+**Docs / code:** `docs/ui_redesign_research_note.md`; gates in `SetupForm` + `brain/definition_service.py`.
+
 **Acceptance**
-- [ ] Board accurate by day 10  
-- [ ] Incomplete setup cannot publish  
-- [ ] UI research note in `docs/`  
+- [ ] Board accurate by day 10
+- [ ] Incomplete setup cannot publish
+- [ ] UI research note in `docs/`
 
 ---
 

@@ -31,9 +31,9 @@ Rules:
 1. Stop local `voice-agent` when testing staging, **or** keep staging on
    `aaptor-staging`.
 2. Do **not** use LiveKit `devkey` on staging. Put real API key/secret in
-   `/etc/voice-ai-platform/backend-api.env` and `voice-agent.env`. Until then,
-   Compose may set `LIVEKIT_ALLOW_WEAK_API_KEY=true` so services can start;
-   remove that flag after rotating keys.
+   `/etc/voice-ai-platform/backend-api.env` and `voice-agent.env`. Production
+   and staging startup **reject** weak/shared keys (`devkey`, `dev`, `test`,
+   `changeme`) with no override.
 3. After changing agent name or keys: redeploy / recreate those two containers
    and confirm logs show `registered worker` with `agent_name=aaptor-staging`.
 
@@ -69,25 +69,36 @@ the hostname.
 
 ## Operations
 
+Staging checkout lives at `/home/voiceai-runner/voice-ai-platform` (not
+`gisuladmin`'s home). Prefer:
+
+```bash
+APP=/home/voiceai-runner/voice-ai-platform
+COMPOSE="sudo docker compose -f $APP/compose.staging.yml --project-directory $APP"
+```
+
 Inspect status:
 
 ```bash
-docker compose -f "$HOME/voice-ai-platform/compose.staging.yml" ps
+$COMPOSE ps
 ```
 
 Inspect service logs:
 
 ```bash
-docker compose -f "$HOME/voice-ai-platform/compose.staging.yml" logs --since=15m SERVICE
+$COMPOSE logs --since=15m SERVICE
 ```
 
 Redeploy a known commit:
 
 ```bash
 printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username USER --password-stdin
-"$HOME/voice-ai-platform/deploy.sh" ghcr.io/gisul-ecosystem COMMIT_SHA
+sudo "$APP/deploy.sh" ghcr.io/gisul-ecosystem COMMIT_SHA
 docker logout ghcr.io
 ```
 
 The deploy script serializes deployments with a file lock and records the last
-healthy image tag in `$HOME/voice-ai-platform/.last-successful-tag`.
+healthy image tag in `$APP/.last-successful-tag`.
+
+Redis brain acceptance (ping, interview key, restart continuity):  
+`docs/staging_runbook_redis_brain.md`.
