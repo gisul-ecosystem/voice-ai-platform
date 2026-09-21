@@ -30,10 +30,9 @@ Rules:
 
 1. Stop local `voice-agent` when testing staging, **or** keep staging on
    `aaptor-staging`.
-2. Do **not** use LiveKit `devkey` on staging. Put real API key/secret in
-   `/etc/voice-ai-platform/backend-api.env` and `voice-agent.env`. Production
-   and staging startup **reject** weak/shared keys (`devkey`, `dev`, `test`,
-   `changeme`) with no override.
+2. Staging currently keeps the existing LiveKit credentials via
+   `LIVEKIT_ALLOW_WEAK_API_KEY=true` in Compose (same key/secret in
+   `/etc/voice-ai-platform/backend-api.env` and `voice-agent.env`).
 3. After changing agent name or keys: redeploy / recreate those two containers
    and confirm logs show `registered worker` with `agent_name=aaptor-staging`.
 
