@@ -1,6 +1,6 @@
 """Hot interview-brain snapshots (layer 2).
 
-Production: Redis keyed by session_id.
+Production/staging: Redis keyed by session_id (fail-closed when REDIS_URL is set).
 Development/tests: in-process memory fallback when Redis is unavailable.
 """
 from __future__ import annotations
@@ -34,6 +34,23 @@ def snapshot_ttl_seconds() -> int:
     return max(300, int(os.getenv("INTERVIEW_BRAIN_REDIS_TTL_SECONDS", str(_DEFAULT_TTL_SECONDS))))
 
 
+def _app_env() -> str:
+    return (os.getenv("APP_ENV") or "development").strip().lower()
+
+
+def _redis_required() -> bool:
+    """Staging/production must use Redis when REDIS_URL is configured."""
+    if not (os.getenv("REDIS_URL") or "").strip():
+        return False
+    return _app_env() in {"production", "staging", "prod"}
+
+
+def _reset_redis_client() -> None:
+    global _redis_client, _redis_init_attempted
+    _redis_client = None
+    _redis_init_attempted = False
+
+
 def _get_redis():
     global _redis_client, _redis_init_attempted
     if _redis_client is not None:
@@ -63,11 +80,9 @@ def _get_redis():
 
 def reset_redis_for_tests() -> None:
     """Test helper: clear clients and memory store."""
-    global _redis_client, _redis_init_attempted
     with _memory_lock:
         _memory_store.clear()
-    _redis_client = None
-    _redis_init_attempted = False
+    _reset_redis_client()
 
 
 def _memory_put(key: str, payload: str, ttl_seconds: int) -> None:
@@ -107,6 +122,12 @@ def put_hot_snapshot(session_id: str, state: dict[str, Any]) -> str:
                 extra={"event": "brain_redis_write_failed", "session_id": session_id},
                 exc_info=True,
             )
+            # Allow a later request to reconnect after a transient outage.
+            _reset_redis_client()
+    if _redis_required():
+        raise RuntimeError(
+            "Redis hot brain is required in production/staging; refusing memory fallback"
+        )
     _memory_put(key, payload, ttl)
     return "memory"
 
@@ -124,6 +145,7 @@ def get_hot_snapshot(session_id: str) -> dict[str, Any] | None:
                 extra={"event": "brain_redis_read_failed", "session_id": session_id},
                 exc_info=True,
             )
+            _reset_redis_client()
             raw = None
     if raw is None:
         raw = _memory_get(key)
@@ -148,5 +170,6 @@ def delete_hot_snapshot(session_id: str) -> None:
                 extra={"event": "brain_redis_delete_failed", "session_id": session_id},
                 exc_info=True,
             )
+            _reset_redis_client()
     with _memory_lock:
         _memory_store.pop(key, None)
