@@ -208,12 +208,35 @@ def classify_live_answer(
     return "usable", quality, covered
 
 
+def quality_from_evaluation(answer_eval: Any) -> str | None:
+    """Map an LLM substance verdict onto the live quality vocabulary.
+
+    See the score-mapping threshold table in AnswerEvaluation's docstring
+    (validator.py) for the full deep/partial/surface -> quality mapping.
+
+    Returns None when the verdict is absent or non-committal, so the caller keeps
+    the keyword heuristic from ``classify_live_answer``.
+    """
+    # A factually wrong claim caps quality regardless of how deep it sounds.
+    if getattr(answer_eval, "factually_correct", True) is False:
+        return "unclear"
+    substance = str(getattr(answer_eval, "technical_substance", "") or "").strip()
+    if substance == "deep":
+        return "sufficient"
+    if substance == "partial":
+        return "partial"
+    if substance in {"surface", "incorrect"}:
+        return "unclear"
+    return None
+
+
 def apply_coverage(
     coverage: dict[str, dict[str, Any]],
     *,
     competency_id: str | None,
     covered_intents: list[str],
     evidence_id: str | None = None,
+    answer_eval: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
     if not competency_id or competency_id not in coverage:
         return coverage
@@ -234,6 +257,9 @@ def apply_coverage(
     else:
         status = "complete"
     if already and not missing and not evidence_ids:
+        status = "insufficient_evidence"
+    # A named-but-hollow answer must never close out a competency.
+    if status == "complete" and quality_from_evaluation(answer_eval) == "unclear":
         status = "insufficient_evidence"
     coverage[competency_id] = {
         "status": status,

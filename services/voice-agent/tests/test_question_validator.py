@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from products.interviewer.validator import (
+    AnswerEvaluation,
     GeneratedQuestion,
     ladder_fallback_question,
     parse_generated_question,
@@ -115,3 +116,35 @@ def test_ladder_fallback_is_domain_neutral() -> None:
     assert "API" not in spoken
     assert "queue" not in spoken.lower()
     assert "situation" in spoken.lower()
+
+
+def test_validator_preserves_evaluation_and_tags_on_success() -> None:
+    evaluation = AnswerEvaluation(
+        technical_substance="deep",
+        key_facts_stated=["closed a $2M renewal"],
+        reasoning="Candidate described the specific renewal mechanics.",
+        matches_evidence_expected=True,
+    )
+    generated = GeneratedQuestion(
+        question="What would have happened if the customer pushed back on price?",
+        competency_id="negotiation",
+        intent="establish_ownership",
+        depth=2,
+        answer_evaluation=evaluation,
+        depth_tag="applied",
+        probe_shape="trade_off",
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="negotiation",
+        policy_intent="establish_ownership",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=_sales_definition()["allowed_probes"],
+    )
+    assert result.ok is True
+    assert result.question.answer_evaluation is evaluation
+    assert result.question.depth_tag == "applied"
+    assert result.question.probe_shape == "trade_off"

@@ -370,6 +370,16 @@ export function SetupForm({
         );
         return;
       }
+      const competencyCount = competencies
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean).length;
+      if (competencyCount > 12) {
+        setIngestError(
+          `You listed ${competencyCount} competencies — trim to 12 or fewer before continuing.`,
+        );
+        return;
+      }
     }
     if (step < 2) {
       if (step === 1) {
