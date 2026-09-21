@@ -199,9 +199,8 @@ class AaptorAgent(Agent):
             self._last_agent_text,
             min_words=1 if not self.flow.candidate_turns else 3,
         ):
-            if candidate_turn and candidate_turn.strip():
-                # Keep partial/unusable speech in the durable transcript.
-                await self._record("candidate", candidate_turn.strip())
+            # Echo / noise / too-short STT must not pollute durable transcript or scoring.
+            # Still ask for a clearer answer so the live session recovers.
             yield CLARIFY_TURN
             self._last_agent_text = CLARIFY_TURN
             turn_id = await self._record("agent", CLARIFY_TURN)
