@@ -751,13 +751,26 @@ class InterviewFlow:
         )
 
     def _current_policy_decision(
-        self, *, pending_candidate_turn: bool = False
+        self,
+        *,
+        pending_candidate_turn: bool = False,
+        advance_if_ready: bool = False,
     ) -> PolicyDecision | None:
         if not self.policy_mode:
             return None
         decision = decide_next_action(
             self._policy_state(pending_candidate_turn=pending_candidate_turn)
         )
+        if advance_if_ready and decision.forced_flow_decision == "advance" and not self.completed:
+            # Hop the phase we're leaving now (once), so the prompt built from this
+            # decision reflects the competency we're entering (real name, ladder
+            # objective, missing intents) instead of the one we just left. Only a
+            # single hop — cascading through multiple phases in one turn would let
+            # a trivially "complete" competency get skipped without ever being asked.
+            self.apply_decision("advance")
+            decision = decide_next_action(
+                self._policy_state(pending_candidate_turn=pending_candidate_turn)
+            )
         self.last_policy_decision = decision
         return decision
 
@@ -1138,6 +1151,8 @@ class InterviewFlow:
             )
             or "(use the last answer)",
             "allowed_probes": "; ".join(self._allowed_probes()) or "(STAR probes)",
+            "interview_structure": self._interview_structure_text(),
+            "published_context": self._published_context_text(),
             "job_target_level": self._job_target_level(),
             "candidate_framing": self._profile_type(),
             "claim_brief": claim_brief(self.candidate_profile),
@@ -1147,6 +1162,8 @@ class InterviewFlow:
             "recent_questions": "\n".join(f"- {q}" for q in self.interviewer_turns[-8:])
             or "(none yet)",
             "last_turn": last_candidate_turn or "(interview opening)",
+            "answer_quality": self.last_answer_quality,
+            "answer_adaptation": self._answer_adaptation_hint(),
             "framing_notes": framing_notes(self._profile_type(), self._job_target_level()),
             "role_title": str(role.get("title") or ""),
         }
@@ -1156,6 +1173,90 @@ class InterviewFlow:
         return system + "\n\n" + OPENING_INSTRUCTIONS_V2.format(**briefing), (
             "Open the interview in your own words and invite them to introduce themselves."
         )
+
+    def _answer_adaptation_hint(self) -> str:
+        if self.last_answer_quality in {"off_topic", "unsupported"}:
+            return "stay in the same competency, acknowledge briefly, and ask an easier adjacent question"
+        if self.last_answer_quality in {"unclear", "partial"}:
+            return "ask for the specific missing evidence before changing topic"
+        if self.last_answer_quality == "sufficient":
+            return "increase depth by at most one level or move to the next uncovered topic"
+        return "continue with the policy-required intent"
+
+    def _interview_structure_text(self) -> str:
+        lines: list[str] = []
+        for index, phase in enumerate(self.phases, start=1):
+            name = str(phase.get("name") or "section").strip()
+            topics = ", ".join(str(item) for item in (phase.get("topics") or [])[:4])
+            depth = phase.get("max_depth") or "standard"
+            probes = phase.get("max_probes") or "standard"
+            lines.append(
+                f"{index}. {name}: topics={topics or '(none)'}, "
+                f"max_depth={depth}, max_follow_ups={probes}"
+            )
+        return "\n".join(lines) or "(structure unavailable)"
+
+    def _published_context_text(self) -> str:
+        definition = self.interview_definition
+        if not isinstance(definition, dict):
+            return "(published definition unavailable)"
+
+        def values(items: Any, limit: int = 12) -> str:
+            result: list[str] = []
+            for item in items if isinstance(items, list) else []:
+                if isinstance(item, dict):
+                    text = str(item.get("text") or "").strip()
+                else:
+                    text = str(item).strip()
+                if text:
+                    result.append(text[:300])
+            return "; ".join(result[:limit]) or "(none)"
+
+        intelligence = definition.get("job_intelligence")
+        role = intelligence.get("role") if isinstance(intelligence, dict) else {}
+        lines = [
+            "REFERENCE CONTEXT (use for technical grounding; policy remains authoritative):",
+            f"Role: {role.get('title', '')} | Domain: {role.get('domain', '')} | Level: {role.get('target_level', '')}",
+        ]
+        if isinstance(intelligence, dict):
+            for label, key in (
+                ("Responsibilities", "responsibilities"),
+                ("Mandatory requirements", "mandatory_requirements"),
+                ("Preferred requirements", "preferred_requirements"),
+                ("Knowledge", "knowledge"),
+                ("Skills", "skills"),
+                ("Tools", "tools"),
+                ("Expected outcomes", "expected_outcomes"),
+            ):
+                lines.append(f"{label}: {values(intelligence.get(key))}")
+
+        ladders = {
+            str(item.get("competency_id")): item
+            for item in definition.get("question_ladders") or []
+            if isinstance(item, dict)
+        }
+        lines.append("Competencies and technical coverage:")
+        for item in (definition.get("competencies") or [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            competency_id = str(item.get("id") or "")
+            lines.append(
+                f"- {item.get('name', competency_id)}: {str(item.get('definition') or '')[:500]}"
+            )
+            lines.append(f"  Evidence: {values(item.get('evidence_expected'), 8)}")
+            ladder = ladders.get(competency_id) or {}
+            for step in (ladder.get("levels") or [])[:5]:
+                if isinstance(step, dict):
+                    lines.append(
+                        f"  Depth {step.get('depth')}, {step.get('intent')}: "
+                        f"{str(step.get('objective') or '')[:240]} | "
+                        f"Example: {str(step.get('example_question') or '')[:300]}"
+                    )
+        lines.append("Resume facts:")
+        lines.append(claim_brief(self.candidate_profile, limit=30))
+        lines.append("Raw JD excerpt:")
+        lines.append(clip_source_text(self.job_description, 3000))
+        return "\n".join(lines)[:20000]
 
     def _fallback_spoken_question(self, policy: PolicyDecision | None) -> str:
         intent = policy.intent if policy else "opening"
@@ -1167,6 +1268,17 @@ class InterviewFlow:
             competency_id=competency_id,
             intent=intent,
         )
+
+    def _configured_ladder_question(self, policy: PolicyDecision | None) -> str:
+        if not policy or not policy.competency_id:
+            return ""
+        for step in ladder_steps(self.interview_definition, policy.competency_id):
+            if (
+                str(step.get("intent") or "").strip() == policy.intent
+                and str(step.get("example_question") or "").strip()
+            ):
+                return str(step["example_question"]).strip()
+        return ""
 
     def _coerce_generated(
         self,
@@ -1201,6 +1313,9 @@ class InterviewFlow:
         )
         self._capture_replay(raw, validator_ok=result.ok, reasons=result.reasons)
         if result.ok:
+            configured_question = self._configured_ladder_question(policy)
+            if configured_question:
+                result.question.question = configured_question
             return result.question
         logger.info(
             "question_validation_failed",
@@ -1225,7 +1340,8 @@ class InterviewFlow:
             return self._structured_system_prompt(
                 last_candidate_turn,
                 self._current_policy_decision(
-                    pending_candidate_turn=bool(last_candidate_turn)
+                    pending_candidate_turn=bool(last_candidate_turn),
+                    advance_if_ready=True,
                 ),
             )
         phase = self.current_phase()
@@ -1308,23 +1424,24 @@ class InterviewFlow:
         if closing:
             return closing
         if last_candidate_turn is None:
-            started = time.perf_counter()
-            opening = FALLBACK_OPENING
-            self.last_question_competency_id = None
-            self.last_question_intent = "opening"
-            self.last_question_depth = 1
-            self.last_question_claim_ids = []
-            self.last_raw_model_output = None
-            self.last_validator_ok = None
-            self.last_validator_reasons = []
-            self._commit_turn(
-                None,
-                "probe",
-                started=started,
-                is_opening=True,
-                question=opening,
-            )
-            return opening
+            if not self.policy_mode:
+                started = time.perf_counter()
+                opening = FALLBACK_OPENING
+                self.last_question_competency_id = None
+                self.last_question_intent = "opening"
+                self.last_question_depth = 1
+                self.last_question_claim_ids = []
+                self.last_raw_model_output = None
+                self.last_validator_ok = None
+                self.last_validator_reasons = []
+                self._commit_turn(
+                    None,
+                    "probe",
+                    started=started,
+                    is_opening=True,
+                    question=opening,
+                )
+                return opening
         if last_candidate_turn and self.policy_mode:
             is_intro_reply = not self.candidate_turns
             self._record_answer_quality(

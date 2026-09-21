@@ -25,6 +25,7 @@ from products.interviewer.brain_runtime import (
     definition_id_for_session,
     load_brain_initial_state,
 )
+from products.interviewer.policy import outline_from_definition
 from products.interviewer.flow import (
     build_candidate_profile,
     extract_jd_requirements,
@@ -356,16 +357,6 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.add_shutdown_callback(shutdown_session)
 
     clients = load_inference_clients(ctx, logger)
-    outline = await build_outline(ctx)
-    logger.info(
-        "stage1_outline",
-        extra={
-            "event": "stage1_outline",
-            "phase_count": len(outline.get("phases") or []),
-            "phases": [phase.get("name") for phase in (outline.get("phases") or [])],
-        },
-    )
-
     session = build_agent_session(clients)
     attach_session_metrics(session, logger)
     initial_state: dict = {}
@@ -542,10 +533,6 @@ async def entrypoint(ctx: JobContext) -> None:
                 extra={"event": "interview_setup_unavailable"},
             )
 
-    outline = enrich_outline_with_resume(outline, resume_text)
-    outline = enrich_outline_with_jd(outline, job_description, competencies)
-    outline = stamp_phase_intents(outline)
-    outline = scale_outline_to_duration(outline, target_duration_minutes)
     interview_definition: dict | None = None
     if explicit_definition_id:
         try:
@@ -565,6 +552,25 @@ async def entrypoint(ctx: JobContext) -> None:
                 "interview_definition_unavailable",
                 extra={"event": "interview_definition_unavailable"},
             )
+    if interview_definition:
+        outline = outline_from_definition(interview_definition) or GENERIC_OUTLINE
+        outline_source = "published_definition"
+    else:
+        outline = await build_outline(ctx)
+        outline = enrich_outline_with_resume(outline, resume_text)
+        outline = enrich_outline_with_jd(outline, job_description, competencies)
+        outline = stamp_phase_intents(outline)
+        outline = scale_outline_to_duration(outline, target_duration_minutes)
+        outline_source = "generated_plan"
+    logger.info(
+        "stage1_outline",
+        extra={
+            "event": "stage1_outline",
+            "phase_count": len(outline.get("phases") or []),
+            "phases": [phase.get("name") for phase in (outline.get("phases") or [])],
+            "source": outline_source,
+        },
+    )
     candidate_profile = build_candidate_profile(
         resume_text=resume_text,
         interview_setup=context.get("interview_setup") if isinstance(context, dict) else None,
@@ -606,6 +612,10 @@ def run() -> None:
             entrypoint_fnc=entrypoint,
             agent_name=os.getenv("LIVEKIT_AGENT_NAME", "aaptor"),
             port=int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
+            # Default 0.7 is based on whole-machine CPU; on a dev box with
+            # unrelated apps running, that falsely marks the worker "at
+            # capacity" and it refuses to join new interview rooms.
+            load_threshold=float(os.getenv("AAPTOR_LOAD_THRESHOLD", "0.95")),
         )
     )
 

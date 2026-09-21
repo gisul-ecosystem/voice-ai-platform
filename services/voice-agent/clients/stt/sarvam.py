@@ -80,7 +80,9 @@ def build_realtime_ws_url(
             "endpointing": "vad",
             "encoding": "linear16",
             "sample_rate": str(sample_rate),
-            "silence_duration_ms": "400",
+            # Sarvam's own server-side endpointing — independent of the LiveKit VAD.
+            # 400ms was flushing mid-sentence pauses as finished utterances.
+            "silence_duration_ms": "1100",
             "min_speech_duration_ms": "250",
         }
     )

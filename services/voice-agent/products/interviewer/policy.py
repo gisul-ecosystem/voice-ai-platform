@@ -20,7 +20,7 @@ PROBE_FOR_OWNERSHIP = "PROBE_FOR_OWNERSHIP"
 PROBE_FOR_METHOD = "PROBE_FOR_METHOD"
 PROBE_FOR_REASONING = "PROBE_FOR_REASONING"
 PROBE_FOR_RESULT = "PROBE_FOR_RESULT"
-PROBE_FOR_REFLECTION = "PROBE_FOR_REFLECTION"
+PROBE_FOR_REFLECTION    = "PROBE_FOR_REFLECTION"
 MOVE_TO_NEXT_COMPETENCY = "MOVE_TO_NEXT_COMPETENCY"
 CHECK_REMAINING_GAP = "CHECK_REMAINING_GAP"
 OFFER_FINAL_ADDITION = "OFFER_FINAL_ADDITION"
@@ -286,9 +286,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="opening",
         )
 
-    if section == "opening" or (
-        section == "candidate_map" and state.candidate_turn_count <= 1
-    ):
+    if section == "opening" and state.candidate_turn_count <= 1:
         return PolicyDecision(
             action=MAP_CANDIDATE_BACKGROUND,
             forced_flow_decision="probe",
@@ -301,7 +299,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="candidate_map",
         )
 
-    if section == "candidate_map" and state.candidate_turn_count == 2:
+    if section == "candidate_map" and state.candidate_turn_count >= 1:
         return PolicyDecision(
             action=ASK_BASELINE,
             forced_flow_decision="advance",
@@ -310,7 +308,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=2,
             competency_id=state.competency_id,
             intent="baseline",
-            reason="move into first competency baseline",
+            reason="candidate map complete — move into technical competency baseline",
             section="baseline",
         )
 

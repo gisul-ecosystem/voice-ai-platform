@@ -9,6 +9,28 @@ from products.interviewer.validator import (
 )
 
 
+def test_near_duplicate_questions_are_rejected() -> None:
+    generated = GeneratedQuestion(
+        question="Can you describe the project you worked on?",
+        competency_id="project",
+        intent="establish_context",
+        depth=1,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=None,
+        policy_competency_id="project",
+        policy_intent="establish_context",
+        policy_depth=1,
+        max_depth=3,
+        recent_questions=["Could you tell me about the project you worked on?"],
+        allowed_probes=[],
+    )
+
+    assert result.ok is False
+    assert "duplicate_question" in result.reasons
+
+
 def _sales_definition() -> dict:
     return {
         "prompt_version": "interviewer-system-v2",

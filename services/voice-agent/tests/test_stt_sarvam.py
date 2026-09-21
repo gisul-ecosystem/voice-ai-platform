@@ -99,7 +99,9 @@ class MockedTranscribeTests(unittest.IsolatedAsyncioTestCase):
             new_callable=AsyncMock,
             side_effect=[empty, filled],
         ) as mocked:
-            text = await SarvamStt(api_key="sk-test").transcribe(b"RIFF....")
+            text = await SarvamStt(
+                api_key="sk-test", language_code="unknown"
+            ).transcribe(b"RIFF....")
         self.assertEqual(text, "hello")
         self.assertEqual(mocked.await_count, 2)
 

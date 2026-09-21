@@ -24,13 +24,6 @@ from clients.settings import (
 
 logger = logging.getLogger("voice-agent.tts")
 
-FREE_VOICE_IDS = (
-    "EXAVITQu4vr4xnSDxMaL",
-    "pFZP5JQG7iQjIQuC4Bku",
-    "JBFqnCBsd6RMkjVDRZzb",
-)
-
-
 def normalize_speech_text(text: str) -> str:
     """Prepare LLM output text for high-quality, natural TTS pronunciation."""
     if not text:
@@ -137,13 +130,6 @@ class ElevenLabsTts:
             params["optimize_streaming_latency"] = self.latency_optimization
         return params
 
-    def _is_blocked(self, exc: BaseException) -> bool:
-        text = str(exc).lower()
-        return any(
-            token in text
-            for token in ("402", "401", "paid_plan", "payment", "unauthorized")
-        )
-
     async def _synthesize_once(self, text: str, voice_id: str) -> bytes:
         resp = await request(
             "tts",
@@ -157,31 +143,10 @@ class ElevenLabsTts:
         return _pcm_to_wav(resp.content, sample_rate=24000)
 
     async def synthesize(self, text: str, voice: str | None = None) -> bytes:
-        voice_id = (voice or self.voice_id).strip()
+        # Keep one stable interviewer voice for the entire session.
+        voice_id = self.voice_id
         started = time.perf_counter()
-        tried = {voice_id}
-        try:
-            audio = await self._synthesize_once(text, voice_id)
-        except ServiceUnavailableError as exc:
-            if not self._is_blocked(exc):
-                raise
-            audio = None
-            for alt in FREE_VOICE_IDS:
-                if alt in tried:
-                    continue
-                tried.add(alt)
-                try:
-                    audio = await self._synthesize_once(text, alt)
-                    self.voice_id = alt
-                    logger.warning(
-                        "tts_voice_failover",
-                        extra={"event": "tts_voice_failover", "voice_id": alt},
-                    )
-                    break
-                except ServiceUnavailableError:
-                    continue
-            if audio is None:
-                raise
+        audio = await self._synthesize_once(text, voice_id)
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
         logger.info(
             "stage_latency",
@@ -204,7 +169,8 @@ class ElevenLabsTts:
         voice: str | None = None,
     ) -> AsyncIterator[bytes]:
         """Yield raw PCM 24 kHz chunks as ElevenLabs produces them."""
-        voice_id = (voice or self.voice_id).strip()
+        # Keep one stable interviewer voice for the entire session.
+        voice_id = self.voice_id
         started = time.perf_counter()
         first_ms: float | None = None
         audio_bytes = 0
