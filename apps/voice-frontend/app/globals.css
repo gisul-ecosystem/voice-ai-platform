@@ -784,6 +784,10 @@ a {
   object-fit: cover;
 }
 
+.start-audio-button {
+  justify-self: center;
+}
+
 .video-placeholder,
 .agent-panel {
   display: flex;

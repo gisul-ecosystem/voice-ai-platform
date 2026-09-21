@@ -84,8 +84,8 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
 def test_baseline_then_depth_caps_force_advance() -> None:
     baseline = decide_next_action(
         PolicyState(
-            interviewer_turn_count=2,
-            candidate_turn_count=2,
+            interviewer_turn_count=1,
+            candidate_turn_count=1,
             phase_name="candidate_map",
             competency_id="problem_solving",
         )

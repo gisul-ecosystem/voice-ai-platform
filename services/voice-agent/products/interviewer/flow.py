@@ -14,6 +14,7 @@ from products.interviewer.coverage import (
     first_incomplete_competency,
     init_coverage,
     ladder_steps,
+    quality_from_evaluation,
     required_intents_for,
 )
 from products.interviewer.policy import (
@@ -29,6 +30,7 @@ from products.interviewer.policy import (
 from products.interviewer.prompts import (
     OPENING_INSTRUCTIONS_V2,
     TURN_INSTRUCTIONS_V2,
+    action_phrasing_note,
     claim_brief,
     framing_notes,
     prompt_pack,
@@ -551,6 +553,9 @@ class InterviewFlow:
         self.last_policy_decision: PolicyDecision | None = None
         self.last_answer_usability = "usable"
         self.last_answer_quality = "partial"
+        self.last_answer_evaluation: dict[str, Any] | None = None
+        self.known_facts: dict[str, list[str]] = {}
+        self.last_probe_shape: dict[str, str] = {}
         self.last_question_competency_id: str | None = None
         self.last_question_intent = "opening"
         self.last_question_depth = 1
@@ -1047,7 +1052,14 @@ class InterviewFlow:
             )
         return "\n\n".join(parts)
 
-    def _record_answer_quality(self, last_candidate_turn: str, *, is_intro_reply: bool) -> None:
+    def _record_answer_quality(
+        self,
+        last_candidate_turn: str,
+        *,
+        is_intro_reply: bool,
+        answer_eval: Any | None = None,
+        update_counters: bool = True,
+    ) -> None:
         competency_id = (
             str(self.current_phase().get("competency_id"))
             if self.current_phase().get("competency_id")
@@ -1062,17 +1074,86 @@ class InterviewFlow:
             min_words=1 if is_intro_reply else 3,
         )
         self.last_answer_usability = usability
-        self.last_answer_quality = quality
-        if usability == "usable":
-            self.consecutive_unusable = 0
-        elif usability not in {"silence", "stt_failure", "network_failure"}:
-            self.consecutive_unusable += 1
+        # An LLM substance verdict outranks the keyword heuristic when available.
+        llm_quality = quality_from_evaluation(answer_eval) if answer_eval else None
+        self.last_answer_quality = llm_quality or quality
+        if answer_eval is not None:
+            self._remember_known_facts(competency_id, answer_eval)
+            logger.info(
+                "answer_quality_evaluated",
+                extra={
+                    "event": "answer_quality_evaluated",
+                    "llm_substance": getattr(
+                        answer_eval, "technical_substance", None
+                    ),
+                    "keyword_quality": quality,
+                    "applied_quality": self.last_answer_quality,
+                    "competency_id": competency_id,
+                },
+            )
+        if update_counters:
+            if usability == "usable":
+                self.consecutive_unusable = 0
+            elif usability not in {"silence", "stt_failure", "network_failure"}:
+                self.consecutive_unusable += 1
         if self.policy_mode and competency_id:
             apply_coverage(
                 self.coverage,
                 competency_id=competency_id,
                 covered_intents=covered,
                 evidence_id=f"ev_{self.last_question_competency_id or competency_id}_{len(self.candidate_turns)}",
+                answer_eval=answer_eval,
+            )
+
+    def _remember_known_facts(self, competency_id: str | None, answer_eval: Any) -> None:
+        if not competency_id:
+            return
+        facts = getattr(answer_eval, "key_facts_stated", None) or []
+        bucket = self.known_facts.setdefault(competency_id, [])
+        for fact in facts:
+            text = str(fact).strip()
+            if text and text not in bucket:
+                bucket.append(text)
+        if len(bucket) > 8:
+            del bucket[:-8]
+
+    def _known_facts_brief(self, competency_id: str | None) -> str:
+        facts = self.known_facts.get(competency_id or "", [])
+        return "\n".join(f"- {fact}" for fact in facts) or "(none yet)"
+
+    def _probe_shape_guidance(self, competency_id: str | None) -> str:
+        shape = self.last_probe_shape.get(competency_id or "")
+        return shape or "(none yet)"
+
+    def _refine_answer_quality(
+        self, last_candidate_turn: str | None, generated: GeneratedQuestion
+    ) -> None:
+        """Re-score the just-answered turn once the LLM verdict arrives with the next question."""
+        answer_eval = generated.answer_evaluation
+        if answer_eval is None:
+            self.last_answer_evaluation = None
+            return
+        self.last_answer_evaluation = answer_eval.as_dict()
+        if not last_candidate_turn or not self.policy_mode:
+            return
+        # candidate_turns has not been appended yet, so intro detection still holds.
+        self._record_answer_quality(
+            last_candidate_turn,
+            is_intro_reply=not self.candidate_turns,
+            answer_eval=answer_eval,
+            update_counters=False,
+        )
+        if answer_eval.needs_clarification:
+            # A real-but-ambiguous answer forces CLARIFY_CURRENT_ANSWER on the next
+            # turn, via the same consecutive_unusable counter the policy engine
+            # already uses for silence/gibberish.
+            self.consecutive_unusable += 1
+            logger.info(
+                "answer_needs_clarification",
+                extra={
+                    "event": "answer_needs_clarification",
+                    "consecutive_unusable": self.consecutive_unusable,
+                },
             )
 
     def _remember_generated(self, generated: GeneratedQuestion, policy: PolicyDecision | None) -> None:
@@ -1082,6 +1163,8 @@ class InterviewFlow:
         self.last_question_intent = generated.intent or (policy.intent if policy else "live_question")
         self.last_question_depth = generated.depth
         self.last_question_claim_ids = list(generated.source_claim_ids)
+        if self.last_question_competency_id and generated.probe_shape:
+            self.last_probe_shape[self.last_question_competency_id] = generated.probe_shape
 
     def _capture_replay(self, raw: str, *, validator_ok: bool | None, reasons: list[str] | None = None) -> None:
         self.last_raw_model_output = (raw or "")[:2000] or None
@@ -1102,6 +1185,28 @@ class InterviewFlow:
             return []
         probes = self.interview_definition.get("allowed_probes") or []
         return [str(item).strip() for item in probes if str(item).strip()]
+
+    def _priority_guidance(self, competency: dict[str, Any]) -> str:
+        importance = str(competency.get("importance") or "high").strip().lower()
+        if importance == "high":
+            return (
+                "must-have — use rigorous, detail-seeking phrasing and press for concrete specifics."
+            )
+        return "preferred — keep it lighter and conversational, but still job-related."
+
+    def _claim_guidance(self) -> str:
+        claims = (
+            self.candidate_profile.get("claims") if isinstance(self.candidate_profile, dict) else None
+        )
+        if not claims:
+            return (
+                "No resume claim is available for this competency. Ask an exploratory "
+                "question first rather than assuming or fabricating one."
+            )
+        return (
+            "When a relevant resume claim is listed above, reference its actual project, "
+            "tool, or number — never just the competency name."
+        )
 
     def _prompt_version(self) -> str:
         if isinstance(self.interview_definition, dict):
@@ -1146,6 +1251,7 @@ class InterviewFlow:
             "competency_name": str(competency.get("name") or "general"),
             "competency_id": competency_id or "",
             "competency_definition": str(competency.get("definition") or "job-related work"),
+            "priority_guidance": self._priority_guidance(competency),
             "ladder_objective": objective or "Ask one job-related question.",
             "missing_intents": ", ".join(missing) or "(none)",
             "evidence_expected": ", ".join(
@@ -1153,11 +1259,15 @@ class InterviewFlow:
             )
             or "(use the last answer)",
             "allowed_probes": "; ".join(self._allowed_probes()) or "(STAR probes)",
+            "known_facts": self._known_facts_brief(competency_id),
+            "last_probe_shape": self._probe_shape_guidance(competency_id),
+            "action_phrasing": action_phrasing_note(decision.action if decision else None),
             "interview_structure": self._interview_structure_text(),
             "published_context": self._published_context_text(),
             "job_target_level": self._job_target_level(),
             "candidate_framing": self._profile_type(),
             "claim_brief": claim_brief(self.candidate_profile),
+            "claim_guidance": self._claim_guidance(),
             "jd_excerpt": clip_source_text(self.job_description, 2_000),
             "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-2:])
             or "(none yet)",
@@ -1513,6 +1623,7 @@ class InterviewFlow:
                     )
             decision, question = generated.decision, generated.question
             self._remember_generated(generated, policy)
+            self._refine_answer_quality(last_candidate_turn, generated)
         else:
             decision, question = parse_stage2(raw)
         if last_candidate_turn:

@@ -256,23 +256,27 @@ async def record_brain_answer(
     final_transcript: str,
     usable: bool = True,
     usability: str = "usable",
+    answer_evaluation: dict | None = None,
 ) -> None:
+    payload = {
+        "answer_id": answer_id,
+        "question_id": question_id,
+        "session_id": session_id,
+        "turn_ids": turn_ids,
+        "final_transcript": final_transcript,
+        "usable": usable,
+        "usability": usability,
+        "status": "answered",
+    }
+    if answer_evaluation:
+        payload["answer_evaluation"] = answer_evaluation
     await request(
         "backend-api",
         "POST",
         f"{BACKEND_API_URL}/internal/interview-sessions/{session_id}/brain/answers",
         timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
         headers=_service_headers(),
-        json={
-            "answer_id": answer_id,
-            "question_id": question_id,
-            "session_id": session_id,
-            "turn_ids": turn_ids,
-            "final_transcript": final_transcript,
-            "usable": usable,
-            "usability": usability,
-            "status": "answered",
-        },
+        json=payload,
         retry_safe=True,
     )
 
