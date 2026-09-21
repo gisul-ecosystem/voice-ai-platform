@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
 
@@ -40,6 +41,38 @@ from voice_platform.runtime import (
 )
 
 logger = logging.getLogger("voice-agent.aaptor")
+
+
+async def flush_pending_session_turns(
+    session_id: str,
+    pending: list[dict[str, Any]],
+    *,
+    reason: str,
+) -> bool:
+    """Persist queued turns in order. Stop on first failure so sequence stays intact."""
+    if not session_id or not pending:
+        return True
+    while pending:
+        item = pending[0]
+        try:
+            await record_session_turn(session_id, **item)
+            pending.pop(0)
+        except ServiceUnavailableError:
+            logger.error(
+                "turn_record_unavailable",
+                extra={
+                    "event": "turn_record_unavailable",
+                    "reason": reason,
+                    "session_id": session_id,
+                    "turn_id": item.get("turn_id"),
+                    "speaker": item.get("speaker"),
+                    "sequence_number": item.get("sequence_number"),
+                    "pending_count": len(pending),
+                },
+            )
+            return False
+    return True
+
 
 GENERIC_OUTLINE = {
     "phases": [
@@ -390,10 +423,14 @@ async def entrypoint(ctx: JobContext) -> None:
 
     metadata = job_metadata(ctx)
     session_id = str(metadata.get("session_id") or "").strip()
+    pending_turns: list[dict[str, Any]] = []
 
     async def shutdown_session() -> None:
         try:
             if session_id:
+                await flush_pending_session_turns(
+                    session_id, pending_turns, reason="worker_shutdown"
+                )
                 await report_session_status(
                     session_id,
                     "abandoned",
@@ -534,14 +571,18 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
     async def turn_sink(**turn) -> None:
-        if session_id:
-            try:
-                await record_session_turn(session_id, **turn)
-            except ServiceUnavailableError:
-                logger.warning("turn_record_unavailable", extra={"event": "turn_record_unavailable"})
+        if not session_id:
+            return
+        pending_turns.append(dict(turn))
+        await flush_pending_session_turns(
+            session_id, pending_turns, reason="turn_sink"
+        )
 
     async def status_sink(status: str, *, reason: str | None = None) -> None:
         if session_id:
+            await flush_pending_session_turns(
+                session_id, pending_turns, reason=f"status:{status}"
+            )
             try:
                 await report_session_status(session_id, status, reason=reason)
             except ServiceUnavailableError:
