@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 type CompetencyScore = {
   competency_id?: string;
@@ -49,38 +49,39 @@ export default function ScorecardReviewPage() {
   const params = useParams<{ sessionId: string }>();
   const sessionId = sessionIdFromParams(params.sessionId);
   const [scorecard, setScorecard] = useState<Scorecard | null>(null);
+  const [loadedSessionId, setLoadedSessionId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [reviewerId, setReviewerId] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
 
-  const load = useCallback(async () => {
-    if (sessionId.length < 8) {
-      setError("Invalid session.");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/scorecard`, {
-        cache: "no-store",
-      });
-      const data = (await response.json().catch(() => ({}))) as Scorecard & { error?: string };
-      if (!response.ok) {
-        throw new Error(data.error || "Scorecard could not be loaded.");
-      }
-      setScorecard(data);
-    } catch (reason) {
-      setScorecard(null);
-      setError(reason instanceof Error ? reason.message : "Scorecard could not be loaded.");
-    } finally {
-      setBusy(false);
-    }
-  }, [sessionId]);
-
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (sessionId.length < 8) return;
+    const controller = new AbortController();
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/scorecard`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = (await response.json().catch(() => ({}))) as Scorecard & { error?: string };
+        if (!response.ok) {
+          throw new Error(data.error || "Scorecard could not be loaded.");
+        }
+        return data;
+      })
+      .then((data) => {
+        setScorecard(data);
+        setError("");
+        setLoadedSessionId(sessionId);
+      })
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setScorecard(null);
+        setLoadedSessionId(sessionId);
+        setError(reason instanceof Error ? reason.message : "Scorecard could not be loaded.");
+      });
+    return () => controller.abort();
+  }, [sessionId]);
 
   async function submit(status: "approved" | "overridden") {
     if (!reviewerId.trim()) {
@@ -115,8 +116,12 @@ export default function ScorecardReviewPage() {
     }
   }
 
-  const metrics = scorecard?.quality_metrics;
-  const pending = (scorecard?.human_review_status || "pending") === "pending";
+  const invalidSession = sessionId.length < 8;
+  const ready = invalidSession || loadedSessionId === sessionId;
+  const visibleScorecard = ready && !invalidSession ? scorecard : null;
+  const visibleError = invalidSession ? "Invalid session." : ready ? error : "";
+  const metrics = visibleScorecard?.quality_metrics;
+  const pending = (visibleScorecard?.human_review_status || "pending") === "pending";
 
   return (
     <main className="interviewer-home admin-builder-page">
@@ -136,22 +141,22 @@ export default function ScorecardReviewPage() {
         </p>
       </section>
 
-      {error ? <div className="alert" role="alert">{error}</div> : null}
+      {visibleError ? <div className="alert" role="alert">{visibleError}</div> : null}
 
-      {!scorecard && !error ? (
-        <section className="demo-card"><p>{busy ? "Loading scorecard..." : "Scorecard is not available yet."}</p></section>
+      {!visibleScorecard && !visibleError ? (
+        <section className="demo-card"><p>{ready ? "Scorecard is not available yet." : "Loading scorecard..."}</p></section>
       ) : null}
 
-      {scorecard ? (
+      {visibleScorecard ? (
         <>
           <section className="scorecard-summary" aria-label="Scorecard summary">
             <article>
               <p className="step-label">Recommendation</p>
-              <strong>{label(scorecard.overall_recommendation)}</strong>
+              <strong>{label(visibleScorecard.overall_recommendation)}</strong>
             </article>
             <article>
               <p className="step-label">Human review</p>
-              <strong>{label(scorecard.human_review_status)}</strong>
+              <strong>{label(visibleScorecard.human_review_status)}</strong>
             </article>
             <article>
               <p className="step-label">Coverage</p>
@@ -164,7 +169,7 @@ export default function ScorecardReviewPage() {
           </section>
 
           <section className="demo-card scorecard-list" aria-label="Competency evidence">
-            {(scorecard.competencies || []).map((item) => (
+            {(visibleScorecard.competencies || []).map((item) => (
               <article className="scorecard-competency" key={item.competency_id || item.anchor || "row"}>
                 <header>
                   <h2>{label(item.competency_id)}</h2>
@@ -190,11 +195,11 @@ export default function ScorecardReviewPage() {
             ))}
           </section>
 
-          {(scorecard.next_human_questions || []).length ? (
+          {(visibleScorecard.next_human_questions || []).length ? (
             <section className="demo-card">
               <p className="step-label">Follow-up for a human interviewer</p>
               <ul className="scorecard-excerpts">
-                {(scorecard.next_human_questions || []).map((item) => (
+                {(visibleScorecard.next_human_questions || []).map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
@@ -222,8 +227,8 @@ export default function ScorecardReviewPage() {
                 disabled={!pending || busy}
               />
             </label>
-            {scorecard.override_reason ? (
-              <p className="section-help">Previous override: {scorecard.override_reason}</p>
+            {visibleScorecard.override_reason ? (
+              <p className="section-help">Previous override: {visibleScorecard.override_reason}</p>
             ) : null}
             <div className="admin-page-actions">
               <span>Hiring use requires an accept or an override with a reason.</span>
