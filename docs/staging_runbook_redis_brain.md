@@ -126,6 +126,15 @@ Last healthy tag: `$APP/.last-successful-tag`.
 
 ## 4. Prove Redis hot brain (acceptance)
 
+Operator script on the VM (after 2–3 live turns):
+
+```bash
+APP=/home/voiceai-runner/voice-ai-platform
+SESSION_ID="paste_session_id_here"
+bash $APP/deploy/scripts/staging_redis_brain_proof.sh
+PROVE_RESTART=1 SESSION_ID="$SESSION_ID" bash $APP/deploy/scripts/staging_redis_brain_proof.sh
+```
+
 ### 4.1 Ping Redis
 
 ```bash
@@ -154,7 +163,7 @@ $COMPOSE exec -T redis redis-cli TTL "interview:brain:${SESSION_ID}"
 
 **Pass:** `EXISTS` = `1`, payload JSON includes matching `session_id`, TTL &gt; 0.
 
-**Exception (document if used):** Redis deliberately off; hot path returned `memory` only — **not** acceptable for staging sign-off of 2092 unless Lead + stakeholder agree in writing.
+**Exception (document if used):** Redis deliberately off; hot path returned `memory` only — **not** acceptable for staging sign-off of 2092 unless Lead + stakeholder agree in writing. Staging Compose sets `APP_ENV=production` and **refuses silent memory fallback** when `REDIS_URL` is set.
 
 ### 4.4 Context carry smoke
 
