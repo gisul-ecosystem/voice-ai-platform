@@ -36,6 +36,9 @@ from db.mongo import close_client, get_db, set_fallback_mode  # noqa: E402
 logger = logging.getLogger("backend-api")
 
 
+_WEAK_LIVEKIT_KEYS = frozenset({"devkey", "dev", "test", "changeme"})
+
+
 def validate_startup_configuration() -> None:
     if (os.getenv("APP_ENV") or "development").strip().lower() not in {
         "production",
@@ -61,6 +64,18 @@ def validate_startup_configuration() -> None:
     if missing:
         raise RuntimeError(
             "Missing required backend-api settings: " + ", ".join(missing)
+        )
+    livekit_key = (os.getenv("LIVEKIT_API_KEY") or "").strip().lower()
+    allow_weak = (os.getenv("LIVEKIT_ALLOW_WEAK_API_KEY") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if livekit_key in _WEAK_LIVEKIT_KEYS and not allow_weak:
+        raise RuntimeError(
+            "LIVEKIT_API_KEY must not be a shared/dev placeholder "
+            f"({livekit_key!r}) in production/staging; set a real LiveKit API "
+            "key or set LIVEKIT_ALLOW_WEAK_API_KEY=true to keep current credentials"
         )
 
 

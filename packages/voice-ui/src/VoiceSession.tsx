@@ -328,19 +328,81 @@ export type VoiceTranscriptLine = {
   who: "candidate" | "agent";
   text: string;
   final: boolean;
+  /** Epoch ms when the segment was first seen; used for stable chronological order. */
+  at?: number;
 };
 
-function normalizeTranscriptText(text: string): string {
+export function normalizeTranscriptText(text: string): string {
   return text.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+export function isLikelyAgentIdentity(
+  identity: string,
+  agentIdentity = "",
+): boolean {
+  const value = identity.trim().toLowerCase();
+  if (!value) return false;
+  const agent = agentIdentity.trim().toLowerCase();
+  if (agent && value === agent) return true;
+  return (
+    value.includes("agent") ||
+    value.startsWith("aaptor") ||
+    value.includes("interviewer")
+  );
+}
+
+/** Drop speaker-echo / duplicated agent text wrongly labeled as the candidate. */
+export function isEchoOfAgentSpeech(
+  candidateText: string,
+  agentTexts: string[],
+): boolean {
+  const cand = normalizeTranscriptText(candidateText);
+  if (cand.length < 12) return false;
+  const candTokens = new Set(cand.split(" ").filter((token) => token.length > 2));
+  for (const raw of agentTexts) {
+    const agent = normalizeTranscriptText(raw);
+    if (!agent || agent.length < 12) continue;
+    if (cand === agent) return true;
+    if (agent.includes(cand) && cand.length >= 18) return true;
+    if (cand.includes(agent) && agent.length >= 18) return true;
+    const agentTokens = agent.split(" ").filter((token) => token.length > 2);
+    if (agentTokens.length < 3 || candTokens.size < 3) continue;
+    let overlap = 0;
+    for (const token of agentTokens) {
+      if (candTokens.has(token)) overlap += 1;
+    }
+    const ratio = overlap / Math.min(agentTokens.length, candTokens.size);
+    if (ratio >= 0.55 && Math.min(cand.length, agent.length) >= 24) return true;
+  }
+  return false;
+}
+
+/** True for short/looping STT fragments that usually come from speaker echo. */
+export function isLikelyEchoFragment(text: string): boolean {
+  const words = normalizeTranscriptText(text)
+    .split(" ")
+    .filter(Boolean);
+  if (words.length === 0) return true;
+  if (words.length <= 5) return true;
+  if (words.length >= 6 && new Set(words).size <= 3) return true;
+  // Repeated starter phrases from bad STT on TTS playback.
+  const joined = words.join(" ");
+  if (/^(there are (the |many )?)+/.test(joined) && words.length <= 12) {
+    return true;
+  }
+  return false;
 }
 
 /** Merge growing STT fragments (e.g. "hello" → "hello world") into one line. */
 export function coalesceTranscriptLines(
   lines: VoiceTranscriptLine[],
 ): VoiceTranscriptLine[] {
+  const chronological = [...lines]
+    .filter((line) => line.text.trim())
+    .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+
   const result: VoiceTranscriptLine[] = [];
-  for (const line of lines) {
-    if (!line.text) continue;
+  for (const line of chronological) {
     const last = result[result.length - 1];
     if (!last || last.who !== line.who) {
       result.push(line);
@@ -348,15 +410,30 @@ export function coalesceTranscriptLines(
     }
     const prev = normalizeTranscriptText(last.text);
     const next = normalizeTranscriptText(line.text);
+    const prevWords = prev.split(" ").filter(Boolean);
+    const nextWords = next.split(" ").filter(Boolean);
+    const sharedPrefix = (() => {
+      let count = 0;
+      while (
+        count < prevWords.length &&
+        count < nextWords.length &&
+        prevWords[count] === nextWords[count]
+      ) {
+        count += 1;
+      }
+      return count;
+    })();
     if (
       next === prev ||
       next.startsWith(prev) ||
       prev.startsWith(next) ||
-      next.includes(prev)
+      next.includes(prev) ||
+      (sharedPrefix >= 3 && last.who === "candidate")
     ) {
       result[result.length - 1] = {
         ...line,
         id: last.id,
+        at: last.at ?? line.at,
         text: line.text.length >= last.text.length ? line.text : last.text,
         final: last.final || line.final,
       };
@@ -364,34 +441,92 @@ export function coalesceTranscriptLines(
     }
     result.push(line);
   }
-  return result;
+
+  // Second pass: remove candidate lines that are echoes of nearby agent speech.
+  const agentTexts = result
+    .filter((line) => line.who === "agent")
+    .map((line) => line.text);
+  return result.filter((line) => {
+    if (line.who !== "candidate") return true;
+    if (isEchoOfAgentSpeech(line.text, agentTexts)) return false;
+    if (agentTexts.length > 0 && isLikelyEchoFragment(line.text)) return false;
+    return true;
+  });
 }
 
 export function useVoiceTranscriptLines(limit = 40): VoiceTranscriptLine[] {
   const streams = useTranscriptions();
-  const { agent, agentTranscriptions } = useVoiceAssistant();
+  const { agent, agentTranscriptions, state: agentState } = useVoiceAssistant();
   const agentIdentity = agent?.identity?.trim() || "";
+  const agentBusy =
+    agentState === "speaking" || agentState === "thinking";
 
-  const fromStreams: VoiceTranscriptLine[] = streams.map((item) => {
-    const identity = String(item.participantInfo?.identity || "").trim();
-    const isAgent =
-      Boolean(agentIdentity) &&
-      identity.length > 0 &&
-      identity === agentIdentity;
-    return {
-      id: item.streamInfo.id,
-      who: isAgent ? ("agent" as const) : ("candidate" as const),
-      text: item.text.trim(),
-      final: true,
-    };
-  });
   const fromAgent: VoiceTranscriptLine[] = agentTranscriptions.map((segment) => ({
-    id: segment.id,
+    id: `agent:${segment.id}`,
     who: "agent" as const,
     text: segment.text.trim(),
-    final: segment.final,
+    final: Boolean(segment.final),
+    at: Number(segment.firstReceivedTime || segment.lastReceivedTime || 0) || undefined,
   }));
-  const incoming = [...fromStreams, ...fromAgent].filter((line) => line.text);
+
+  const agentTexts = fromAgent.map((line) => line.text).filter(Boolean);
+
+  const fromStreams: VoiceTranscriptLine[] = [];
+  for (const item of streams) {
+    const text = item.text.trim();
+    if (!text) continue;
+    const identity = String(item.participantInfo?.identity || "").trim();
+    const agentLine = isLikelyAgentIdentity(identity, agentIdentity);
+    const at = Number(item.streamInfo.timestamp || 0) || undefined;
+
+    if (agentLine) {
+      // Prefer useVoiceAssistant segments; only keep stream agent text if new.
+      if (
+        isEchoOfAgentSpeech(text, agentTexts) ||
+        agentTexts.some(
+          (agentText) =>
+            normalizeTranscriptText(agentText) === normalizeTranscriptText(text),
+        )
+      ) {
+        continue;
+      }
+      fromStreams.push({
+        id: `stream-agent:${item.streamInfo.id}`,
+        who: "agent",
+        text,
+        final: true,
+        at,
+      });
+      continue;
+    }
+
+    // Empty identity while the agent is talking is almost always TTS echo / text stream bleed.
+    if (!identity && agentBusy) {
+      if (!isLikelyEchoFragment(text) && text.split(/\s+/).length >= 10) {
+        fromStreams.push({
+          id: `stream-agent-unknown:${item.streamInfo.id}`,
+          who: "agent",
+          text,
+          final: true,
+          at,
+        });
+      }
+      continue;
+    }
+
+    if (agentBusy && isLikelyEchoFragment(text)) continue;
+    if (isEchoOfAgentSpeech(text, agentTexts)) continue;
+
+    fromStreams.push({
+      id: `stream:${item.streamInfo.id}`,
+      who: "candidate",
+      text,
+      final: true,
+      at,
+    });
+  }
+
+  const incoming = [...fromAgent, ...fromStreams];
   return coalesceTranscriptLines(incoming).slice(-limit);
 }
 
@@ -406,6 +541,13 @@ export function VoiceTranscripts({
 }) {
   const lines = useVoiceTranscriptLines(maxLines);
   const latestFinal = [...lines].reverse().find((line) => line.final);
+  const listRef = useRef<HTMLOListElement | null>(null);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+  }, [lines]);
 
   return (
     <section className="transcript-panel" data-voice-ui="transcripts"
@@ -422,9 +564,9 @@ export function VoiceTranscripts({
           The conversation will appear here when the interview begins.
         </p>
       ) : (
-        <ol className="transcript-list">
+        <ol className="transcript-list" ref={listRef}>
           {lines.map((line) => (
-            <li key={`${line.who}:${line.id}`} data-final={line.final}>
+            <li key={line.id} data-final={line.final} data-who={line.who}>
               <span>{line.who === "agent" ? agentLabel : candidateLabel}</span>
               <p>{line.text}</p>
               {!line.final ? <small>Speaking…</small> : null}

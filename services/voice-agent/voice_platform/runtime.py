@@ -56,14 +56,15 @@ def build_agent_session(clients: InferenceClients) -> AgentSession:
         tts=LaptopTTS(client=clients.tts),
         # Publish agent speech text so the live transcript can show interviewer lines.
         use_tts_aligned_transcript=True,
-        # Allow barge-in, but ignore short speaker-echo bursts while the agent talks.
+        # Allow real barge-in, but ignore laptop-speaker echo while the agent talks.
+        # Echo of a full opening question is long; require sustained speech + words.
         allow_interruptions=True,
-        min_interruption_duration=2.5,
-        min_interruption_words=6,
-        min_endpointing_delay=0.8,
-        max_endpointing_delay=3.0,
+        min_interruption_duration=3.2,
+        min_interruption_words=10,
+        min_endpointing_delay=0.9,
+        max_endpointing_delay=3.5,
         resume_false_interruption=True,
-        false_interruption_timeout=2.0,
+        false_interruption_timeout=2.8,
         # Start drafting the reply as soon as speech looks finished, cutting dead air.
         preemptive_generation=True,
     )

@@ -12,8 +12,8 @@ describe("product registry", () => {
     expect(JSON.stringify(products)).not.toContain("racko");
   });
 
-  it("keeps camera access feature-gated", () => {
-    expect(getProduct("interviewer").cameraAllowed).toBe(false);
-    expect(getProduct("interviewer").cameraEnabledByDefault).toBe(false);
+  it("enables LiveKit camera for interviewer sessions", () => {
+    expect(getProduct("interviewer").cameraAllowed).toBe(true);
+    expect(getProduct("interviewer").cameraEnabledByDefault).toBe(true);
   });
 });

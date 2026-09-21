@@ -24,8 +24,9 @@ class FakeAgentDispatchService:
     def __init__(self) -> None:
         self.created = []
 
-    async def create_dispatch(self, request) -> None:
+    async def create_dispatch(self, request):
         self.created.append(request)
+        return type("FakeDispatch", (), {"id": "AD_test"})()
 
 
 class FakeLiveKitApi:
@@ -68,6 +69,7 @@ async def test_session_dispatches_only_supported_workers(
     metadata = json.loads(created.metadata)
     dispatch = FakeLiveKitApi.dispatch_service.created[0]
     assert dispatch.agent_name == agent_name
+    assert list(created.agents)[0].agent_name == agent_name
     assert response.room.startswith("interview-")
     assert response.token
     assert response.session_id == "ses_test"
@@ -117,9 +119,20 @@ async def test_public_products_map_to_private_workers(
     created = FakeLiveKitApi.room_service.created[0]
     metadata = json.loads(created.metadata)
     assert FakeLiveKitApi.dispatch_service.created[0].agent_name == agent_name
+    assert list(created.agents)[0].agent_name == agent_name
     assert metadata["product_id"] == product_id
     assert "provider_policy_id" in metadata
     assert response.product_id == product_id
+
+
+def test_livekit_agent_name_env_overrides_interviewer_worker(monkeypatch) -> None:
+    from products.registry import resolve_product
+
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "aaptor-staging")
+    profile = resolve_product("interviewer", None)
+    assert profile.agent_name == "aaptor-staging"
+    # Legacy callers may still pass default worker name with product_id.
+    assert resolve_product("interviewer", "aaptor").agent_name == "aaptor-staging"
 
 
 def test_unknown_product_is_rejected_by_schema() -> None:
