@@ -454,9 +454,7 @@ export function useVoiceTranscriptLines(limit = 40): VoiceTranscriptLine[] {
   const { agent, agentTranscriptions, state: agentState } = useVoiceAssistant();
   const agentIdentity = agent?.identity?.trim() || "";
   const agentBusy =
-    agentState === "speaking" ||
-    agentState === "thinking" ||
-    agentState === "generating";
+    agentState === "speaking" || agentState === "thinking";
 
   const fromAgent: VoiceTranscriptLine[] = agentTranscriptions.map((segment) => ({
     id: `agent:${segment.id}`,
