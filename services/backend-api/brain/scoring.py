@@ -60,7 +60,38 @@ def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
     return any(marker in lowered for marker in markers)
 
 
-def _strength_for_answer(text: str, expected: list[str]) -> EvidenceStrength:
+_SUBSTANCE_STRENGTH: dict[str, EvidenceStrength] = {
+    "deep": "strong",
+    "partial": "sufficient",
+    "surface": "weak",
+    "incorrect": "weak",
+}
+# See the score-mapping threshold table in AnswerEvaluation's docstring
+# (services/voice-agent/products/interviewer/validator.py) for the full contract.
+
+
+def _strength_from_evaluation(answer: Any) -> EvidenceStrength | None:
+    """Return the stored LLM verdict, or None for legacy answers without one."""
+    if not isinstance(answer, dict):
+        return None
+    evaluation = answer.get("answer_evaluation")
+    if not isinstance(evaluation, dict):
+        return None
+    # A factually wrong claim caps strength regardless of how deep it sounds.
+    if evaluation.get("factually_correct") is False:
+        return "weak"
+    substance = str(evaluation.get("technical_substance") or "").strip().lower()
+    return _SUBSTANCE_STRENGTH.get(substance)
+
+
+def _strength_for_answer(
+    text: str,
+    expected: list[str],
+    answer_evaluation: Any | None = None,
+) -> EvidenceStrength:
+    from_llm = _strength_from_evaluation(answer_evaluation)
+    if from_llm is not None:
+        return from_llm
     cleaned = (text or "").strip()
     if len(cleaned.split()) < 8:
         return "weak"
@@ -75,8 +106,11 @@ def _strength_for_answer(text: str, expected: list[str]) -> EvidenceStrength:
     has_result = _contains_any(cleaned, _RESULT_MARKERS)
     has_tradeoff = _contains_any(cleaned, _TRADEOFF_MARKERS)
     words = len(cleaned.split())
+    # Keyword/marker presence alone can never earn "strong" — that tier is
+    # reserved for an explicit LLM "deep" verdict, so a fluent buzzword answer
+    # (e.g. "there was a trade-off and the result was good") cannot top-score.
     if hits >= 2 and has_result and has_tradeoff:
-        return "strong"
+        return "sufficient"
     if hits >= 2 and words >= 12 and has_result:
         return "sufficient"
     if hits >= 1 and words >= 8:
@@ -334,7 +368,7 @@ def build_scorecard_bundle(
             text = str(answer.get("final_transcript") or "").strip()
             if not text:
                 continue
-            strength = _strength_for_answer(text, expected)
+            strength = _strength_for_answer(text, expected, answer)
             rank = {
                 "none": 0,
                 "weak": 1,

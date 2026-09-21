@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from products.interviewer.coverage import competency_by_id, ladder_steps
 
@@ -74,6 +74,100 @@ INTENT_PROBE_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+TechnicalSubstance = Literal[
+    "surface", "partial", "deep", "incorrect", "not_applicable"
+]
+
+SUBSTANCE_VALUES: frozenset[str] = frozenset(
+    ("surface", "partial", "deep", "incorrect", "not_applicable")
+)
+
+# Informational only — the numeric depth ladder in policy.py stays authoritative.
+DEPTH_TAG_VALUES: frozenset[str] = frozenset(("concept", "applied", "trade_off"))
+PROBE_SHAPE_VALUES: frozenset[str] = frozenset(
+    ("why", "trade_off", "failure_mode", "metric", "other")
+)
+
+
+@dataclass
+class AnswerEvaluation:
+    """LLM verdict on the candidate's previous answer, returned with the next question.
+
+    Contract:
+      technical_substance: "surface" | "partial" | "deep" | "incorrect" | "not_applicable"
+        - deep: specific, verifiable detail (numbers, mechanisms, trade-offs, decisions).
+        - partial: practical application shown but missing concrete trade-offs/metrics.
+        - surface: only names concepts / textbook definition, no applied evidence.
+        - incorrect: legacy value, kept for backward compatibility — prefer combining
+          a depth value with factually_correct=False for new evaluations.
+        - not_applicable: greeting, meta-question, or non-technical turn.
+      factually_correct: independent of depth — false whenever the answer contains a
+        claim that contradicts established fact for this domain, even if the answer is
+        otherwise deep or partial. A "deep but wrong" answer is a distinct, more
+        important signal than a shallow one and must not be hidden by the depth label.
+        True (default) when no claim is factually wrong, including surface/not_applicable
+        answers that make no verifiable claim at all.
+      key_facts_stated: concrete facts extracted from the answer, reused across turns so
+        the interviewer does not re-ask what is already known.
+      reasoning: one sentence, written so a human reviewer could paste it directly into
+        the scorecard as justification.
+      matches_evidence_expected: whether the answer satisfies the competency's
+        evidence_expected list.
+      needs_clarification: true only when the answer itself is too ambiguous to score
+        confidently (unclear pronouns, contradictions, cut-off sentences) — distinct
+        from "surface", which means a clear but shallow answer.
+
+    Score-mapping threshold (single source of truth other modules reference):
+      factually_correct == False -> unclear -> weak, regardless of technical_substance.
+      Otherwise, technical_substance -> coverage quality (coverage.quality_from_evaluation)
+                                     -> scorecard strength (scoring._strength_from_evaluation)
+        deep               -> sufficient  -> strong
+        partial            -> partial     -> sufficient
+        surface/incorrect  -> unclear      -> weak
+        not_applicable     -> None (falls back to the keyword/word-count heuristic)
+    """
+
+    technical_substance: TechnicalSubstance = "not_applicable"
+    key_facts_stated: list[str] = field(default_factory=list)
+    reasoning: str = ""
+    matches_evidence_expected: bool = False
+    needs_clarification: bool = False
+    factually_correct: bool = True
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "technical_substance": self.technical_substance,
+            "key_facts_stated": list(self.key_facts_stated),
+            "reasoning": self.reasoning,
+            "matches_evidence_expected": self.matches_evidence_expected,
+            "needs_clarification": self.needs_clarification,
+            "factually_correct": self.factually_correct,
+        }
+
+
+def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
+    """Return a validated evaluation, or None so callers fall back to heuristics."""
+    if not isinstance(payload, dict):
+        return None
+    substance = str(payload.get("technical_substance") or "").strip().lower()
+    if substance not in SUBSTANCE_VALUES:
+        return None
+    raw_facts = payload.get("key_facts_stated")
+    facts = (
+        [str(item).strip() for item in raw_facts if str(item).strip()]
+        if isinstance(raw_facts, list)
+        else []
+    )
+    return AnswerEvaluation(
+        technical_substance=substance,  # type: ignore[arg-type]
+        key_facts_stated=facts[:20],
+        reasoning=str(payload.get("reasoning") or "").strip()[:500],
+        matches_evidence_expected=bool(payload.get("matches_evidence_expected")),
+        needs_clarification=bool(payload.get("needs_clarification")),
+        factually_correct=bool(payload.get("factually_correct", True)),
+    )
+
+
 @dataclass
 class GeneratedQuestion:
     question: str
@@ -82,6 +176,9 @@ class GeneratedQuestion:
     depth: int = 1
     source_claim_ids: list[str] = field(default_factory=list)
     decision: str = "probe"
+    answer_evaluation: AnswerEvaluation | None = None
+    depth_tag: str | None = None
+    probe_shape: str | None = None
 
 
 @dataclass
@@ -157,6 +254,12 @@ def parse_generated_question(raw: str) -> GeneratedQuestion | None:
         if str(item).strip()
     ]
     competency_id = str(payload.get("competency_id") or "").strip() or None
+    depth_tag = str(payload.get("depth_tag") or "").strip().lower() or None
+    if depth_tag not in DEPTH_TAG_VALUES:
+        depth_tag = None
+    probe_shape = str(payload.get("probe_shape") or "").strip().lower() or None
+    if probe_shape not in PROBE_SHAPE_VALUES:
+        probe_shape = None
     return GeneratedQuestion(
         question=question,
         competency_id=competency_id,
@@ -164,6 +267,9 @@ def parse_generated_question(raw: str) -> GeneratedQuestion | None:
         depth=max(1, min(5, depth)),
         source_claim_ids=claim_ids,
         decision=str(payload.get("decision") or "probe").strip().lower() or "probe",
+        answer_evaluation=parse_answer_evaluation(payload.get("answer_evaluation")),
+        depth_tag=depth_tag,
+        probe_shape=probe_shape,
     )
 
 
@@ -336,5 +442,8 @@ def validate_generated_question(
         if allowed_ids
         else list(generated.source_claim_ids),
         decision=generated.decision if generated.decision in {"probe", "advance"} else "probe",
+        answer_evaluation=generated.answer_evaluation,
+        depth_tag=generated.depth_tag,
+        probe_shape=generated.probe_shape,
     )
     return ValidationResult(ok=ok, question=normalized, reasons=reasons)
