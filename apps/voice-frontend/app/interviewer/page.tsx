@@ -8,7 +8,10 @@ export default function InterviewerPage() {
           <span className="brand-mark" aria-hidden="true">AI</span>
           AI Interviewer
         </Link>
-        <span className="environment-badge">Reference environment</span>
+        <div className="landing-nav-actions">
+          <Link href="/interviewer/results">Review a scorecard</Link>
+          <span className="environment-badge">Reference environment</span>
+        </div>
       </nav>
 
       <section className="interviewer-hero">
@@ -32,6 +35,7 @@ export default function InterviewerPage() {
             <li><span>01</span><div><strong>Design</strong><p>Role, competencies and policy</p></div></li>
             <li><span>02</span><div><strong>Invite</strong><p>Signed, time-bound candidate access</p></div></li>
             <li><span>03</span><div><strong>Interview</strong><p>Audio-first conversation and captions</p></div></li>
+            <li><span>04</span><div><strong>Review</strong><p>Evidence, excerpts, human override</p></div></li>
           </ol>
         </aside>
       </section>
