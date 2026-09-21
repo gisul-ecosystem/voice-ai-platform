@@ -48,6 +48,24 @@ async def test_publish_and_store_persists_immutable_definition() -> None:
 
 
 @pytest.mark.asyncio
+async def test_publish_and_store_blocks_incomplete_setup() -> None:
+    with pytest.raises(ValueError, match="job description is incomplete"):
+        await publish_and_store(
+            job_description="too short",
+            interview_setup=_setup(),
+            timezone="Asia/Kolkata",
+            published_by="test@example.com",
+        )
+    with pytest.raises(ValueError, match="creator competencies are required"):
+        await publish_and_store(
+            job_description="Build APIs with Python and own production incidents.",
+            interview_setup=_setup().model_copy(update={"competencies": ["  ", ""]}),
+            timezone="Asia/Kolkata",
+            published_by="test@example.com",
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_context_stores_definition_id() -> None:
     created = await interviews.create_context(
         "Build APIs",

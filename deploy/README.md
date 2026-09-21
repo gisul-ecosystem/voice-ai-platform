@@ -12,9 +12,29 @@ frontend CI jobs pass.
 4. Docker Compose pulls the images and waits for service health checks.
 5. A failed update automatically attempts to restore the last successful tag.
 
-The stack contains MongoDB, the context engine, backend API, interviewer worker,
+The stack contains MongoDB, **Redis (hot interview brain)**, the context engine, backend API, interviewer worker,
 reference frontend, and Caddy gateway. Only ports 80 and 443 are externally
 bound. Backend and worker health ports bind to loopback.
+
+For the operator checklist (start order, Redis key proof, rollback, Azure 2092
+acceptance), see **`docs/staging_runbook_redis_brain.md`**.
+
+## LiveKit worker isolation
+
+Staging Compose sets `LIVEKIT_AGENT_NAME=aaptor-staging` on **backend-api** and
+**voice-agent**. Local workers usually register as `aaptor`. If both use the same
+LiveKit project (`LIVEKIT_URL` / API key), a local worker can steal staging jobs
+and the staging agent stays silent.
+
+Rules:
+
+1. Stop local `voice-agent` when testing staging, **or** keep staging on
+   `aaptor-staging`.
+2. Staging currently keeps the existing LiveKit credentials via
+   `LIVEKIT_ALLOW_WEAK_API_KEY=true` in Compose (same key/secret in
+   `/etc/voice-ai-platform/backend-api.env` and `voice-agent.env`).
+3. After changing agent name or keys: redeploy / recreate those two containers
+   and confirm logs show `registered worker` with `agent_name=aaptor-staging`.
 
 ## VM secret files
 
@@ -48,25 +68,36 @@ the hostname.
 
 ## Operations
 
+Staging checkout lives at `/home/voiceai-runner/voice-ai-platform` (not
+`gisuladmin`'s home). Prefer:
+
+```bash
+APP=/home/voiceai-runner/voice-ai-platform
+COMPOSE="sudo docker compose -f $APP/compose.staging.yml --project-directory $APP"
+```
+
 Inspect status:
 
 ```bash
-docker compose -f "$HOME/voice-ai-platform/compose.staging.yml" ps
+$COMPOSE ps
 ```
 
 Inspect service logs:
 
 ```bash
-docker compose -f "$HOME/voice-ai-platform/compose.staging.yml" logs --since=15m SERVICE
+$COMPOSE logs --since=15m SERVICE
 ```
 
 Redeploy a known commit:
 
 ```bash
 printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username USER --password-stdin
-"$HOME/voice-ai-platform/deploy.sh" ghcr.io/gisul-ecosystem COMMIT_SHA
+sudo "$APP/deploy.sh" ghcr.io/gisul-ecosystem COMMIT_SHA
 docker logout ghcr.io
 ```
 
 The deploy script serializes deployments with a file lock and records the last
-healthy image tag in `$HOME/voice-ai-platform/.last-successful-tag`.
+healthy image tag in `$APP/.last-successful-tag`.
+
+Redis brain acceptance (ping, interview key, restart continuity):  
+`docs/staging_runbook_redis_brain.md`.
