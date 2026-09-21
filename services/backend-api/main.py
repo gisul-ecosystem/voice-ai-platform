@@ -66,10 +66,16 @@ def validate_startup_configuration() -> None:
             "Missing required backend-api settings: " + ", ".join(missing)
         )
     livekit_key = (os.getenv("LIVEKIT_API_KEY") or "").strip().lower()
-    if livekit_key in _WEAK_LIVEKIT_KEYS:
+    allow_weak = (os.getenv("LIVEKIT_ALLOW_WEAK_API_KEY") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if livekit_key in _WEAK_LIVEKIT_KEYS and not allow_weak:
         raise RuntimeError(
             "LIVEKIT_API_KEY must not be a shared/dev placeholder "
-            f"({livekit_key!r}) in production/staging; set a real LiveKit API key"
+            f"({livekit_key!r}) in production/staging; set a real LiveKit API "
+            "key or set LIVEKIT_ALLOW_WEAK_API_KEY=true to keep current credentials"
         )
 
 
