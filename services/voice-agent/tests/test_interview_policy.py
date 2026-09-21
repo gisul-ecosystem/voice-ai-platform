@@ -70,6 +70,16 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
     assert mapping.action == MAP_CANDIDATE_BACKGROUND
     assert mapping.allow_llm_decision is False
 
+    after_map = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=2,
+            candidate_turn_count=2,
+            phase_name="candidate_map",
+        )
+    )
+    assert after_map.action == ASK_BASELINE
+    assert after_map.forced_flow_decision == "advance"
+
 
 def test_baseline_then_depth_caps_force_advance() -> None:
     baseline = decide_next_action(
