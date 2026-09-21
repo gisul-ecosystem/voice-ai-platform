@@ -31,6 +31,13 @@ PROTECTED_MARKERS = (
     "maiden",
 )
 
+TRIVIA_MARKERS = (
+    "brain teaser",
+    "brain-teaser",
+    "riddle",
+    "puzzle",
+)
+
 UNGROUNDED_TECH_TERMS = (
     "api",
     "schema",
@@ -270,6 +277,8 @@ def validate_generated_question(
     lowered = question.lower()
     if any(marker in lowered for marker in PROTECTED_MARKERS):
         reasons.append("protected_topic")
+    if any(marker in lowered for marker in TRIVIA_MARKERS):
+        reasons.append("trivia_question")
 
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:

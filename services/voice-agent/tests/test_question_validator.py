@@ -128,6 +128,28 @@ def test_validator_rejects_protected_topics_and_duplicates() -> None:
     assert "duplicate_question" in result.reasons
 
 
+def test_validator_rejects_trivia_questions() -> None:
+    generated = GeneratedQuestion(
+        question="Here is a brain teaser: how many ping-pong balls fit in a bus?",
+        competency_id="negotiation",
+        intent="establish_context",
+        depth=1,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="negotiation",
+        policy_intent="establish_context",
+        policy_depth=1,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=_sales_definition()["allowed_probes"],
+    )
+
+    assert result.ok is False
+    assert "trivia_question" in result.reasons
+
+
 def test_ladder_fallback_is_domain_neutral() -> None:
     spoken = ladder_fallback_question(
         _sales_definition(),
