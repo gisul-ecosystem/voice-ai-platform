@@ -56,6 +56,7 @@ async def read_interview_context(context_id: str) -> InterviewContextResponse:
         resume_text=stored["resume_text"],
         interview_setup=stored.get("interview_setup"),
         definition_id=stored.get("definition_id"),
+        candidate_profile=stored.get("candidate_profile"),
     )
 
 

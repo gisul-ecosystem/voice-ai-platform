@@ -50,6 +50,7 @@ def _room_metadata(
     product: ProductProfile,
     session_id: str,
     context_id: str | None,
+    definition_id: str | None,
     correlation_id: str,
 ) -> dict:
     metadata: dict = {
@@ -61,6 +62,8 @@ def _room_metadata(
     }
     if context_id:
         metadata["context_id"] = context_id
+    if definition_id:
+        metadata["definition_id"] = definition_id
     return metadata
 
 
@@ -144,6 +147,14 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     if product.product_id == "interviewer" and not context_id:
         raise HTTPException(status_code=422, detail="Interview context is required")
 
+    definition_id = None
+    if context_id:
+        context = await interviews.get_context(context_id)
+        if context:
+            raw_definition_id = context.get("definition_id")
+            if isinstance(raw_definition_id, str) and raw_definition_id.strip():
+                definition_id = raw_definition_id.strip()
+
     room_name = (
         str(existing_session["room"])
         if existing_session
@@ -180,6 +191,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         product=product,
         session_id=session_id,
         context_id=context_id,
+        definition_id=definition_id,
         correlation_id=correlation_id,
     )
     metadata_json = json.dumps(metadata)

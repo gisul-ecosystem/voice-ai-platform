@@ -48,6 +48,9 @@ TTS_SAMPLE_RATE = 24000
 TTS_NUM_CHANNELS = 1
 _STT_SAMPLE_RATE = 16000
 _STT_CHUNK_BYTES = _STT_SAMPLE_RATE // 20 * 2  # 50 ms of 16-bit mono
+# Brief patience after speech_end before committing to the LLM — a corrected
+# Sarvam transcript arriving just after speech_end is worth the small delay.
+_SARVAM_FINAL_GRACE_SECONDS = 0.2
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -216,6 +219,34 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                 speaking = False
             last_text = ""
 
+        pending_final_task: asyncio.Task | None = None
+
+        def _cancel_pending_final() -> None:
+            nonlocal pending_final_task
+            if pending_final_task is not None and not pending_final_task.done():
+                pending_final_task.cancel()
+            pending_final_task = None
+
+        async def _finalize_after_grace() -> None:
+            nonlocal pending_final_task
+            try:
+                await asyncio.sleep(_SARVAM_FINAL_GRACE_SECONDS)
+            except asyncio.CancelledError:
+                return
+            pending_final_task = None
+            text_to_send = last_text
+            if text_to_send:
+                _emit_final(text_to_send)
+            _end_speech()
+
+        def _schedule_final() -> None:
+            # Wait briefly for a possible corrected transcript.final instead of
+            # committing the first guess immediately — small latency is worth
+            # not sending a wrong transcript to the LLM.
+            nonlocal pending_final_task
+            _cancel_pending_final()
+            pending_final_task = asyncio.create_task(_finalize_after_grace())
+
         def emit_transcript(kind: str, text: str) -> None:
             """Map Sarvam events to LiveKit STT events.
 
@@ -235,21 +266,27 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
             if kind == "partial" and text:
                 last_text = text
                 _emit_interim(text)
+                if pending_final_task is not None:
+                    # Speech resumed before the grace window elapsed; more is coming.
+                    _cancel_pending_final()
                 return
             if kind == "final" and text:
                 # Identical final twice → utterance settled; otherwise keep interim.
                 if speaking and text == last_text:
+                    _cancel_pending_final()
                     _emit_final(text)
                     _end_speech()
                     return
                 last_text = text
                 _emit_interim(text)
+                # Sarvam may omit speech_end. Every final therefore gets a short
+                # debounce window so a correction can replace it before commit.
+                _schedule_final()
                 return
             if kind == "speech_end":
-                final_text = text or last_text
-                if final_text:
-                    _emit_final(final_text)
-                _end_speech()
+                if text:
+                    last_text = text
+                _schedule_final()
 
         try:
             connect_options = {_WEBSOCKET_HEADERS_ARG: headers}
@@ -342,6 +379,7 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                     for task in (sender, receiver):
                         if not task.done():
                             task.cancel()
+                    _cancel_pending_final()
                     await asyncio.gather(sender, receiver, return_exceptions=True)
         except APIConnectionError:
             raise
@@ -446,6 +484,8 @@ class _LaptopSynthesizeStream(tts.SynthesizeStream):
                 buffer = pieces[-1]
                 await emit_text(" ".join(pieces[:-1]))
         await emit_text(buffer)
+        output_emitter.end_segment()
+        output_emitter.flush()
 
 
 def _to_pcm(audio_bytes: bytes) -> bytes:

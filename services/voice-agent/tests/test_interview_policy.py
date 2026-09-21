@@ -129,6 +129,7 @@ def test_non_answer_policy_thresholds_are_honored() -> None:
             consecutive_unusable=1,
             clarify_after=1,
             change_topic_after=4,
+            close_after=6,
         )
     )
     assert clarify.action == CLARIFY_CURRENT_ANSWER
@@ -140,7 +141,23 @@ def test_non_answer_policy_thresholds_are_honored() -> None:
             consecutive_unusable=4,
             clarify_after=1,
             change_topic_after=4,
+            close_after=6,
             has_uncovered_competencies=True,
         )
     )
     assert moved.action == MOVE_TO_NEXT_COMPETENCY
+
+
+def test_repeated_unusable_answers_force_controlled_close() -> None:
+    closed = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=6,
+            candidate_turn_count=6,
+            phase_name="Problem solving",
+            consecutive_unusable=4,
+            has_uncovered_competencies=True,
+        )
+    )
+    assert closed.action == CLOSE_INTERVIEW
+    assert closed.forced_flow_decision == "close"
+

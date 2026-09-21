@@ -81,8 +81,9 @@ def build_realtime_ws_url(
             "encoding": "linear16",
             "sample_rate": str(sample_rate),
             # Sarvam's own server-side endpointing — independent of the LiveKit VAD.
-            # 400ms was flushing mid-sentence pauses as finished utterances.
-            "silence_duration_ms": "1100",
+            # Kept short for responsiveness; the LiveKit-side grace-period commit
+            # (see livekit_adapters.py) absorbs late corrections without this delay.
+            "silence_duration_ms": "500",
             "min_speech_duration_ms": "250",
         }
     )

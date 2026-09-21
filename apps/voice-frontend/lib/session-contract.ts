@@ -21,6 +21,8 @@ export type PublicSessionRequest = {
   invitationToken?: string;
   idempotencyKey?: string;
   candidateEmail?: string;
+  candidateId?: string;
+  definitionId?: string;
   startsAt?: string;
   timezone?: string;
   interviewSetup?: {

@@ -80,6 +80,12 @@ class PublishBlueprintRequest(BaseModel):
     published_by: str = Field(min_length=1, max_length=128)
     template_id: str | None = Field(default=None, max_length=64)
     version: int = Field(default=1, ge=1)
+    definition_id: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*$",
+    )
 
 
 @router.post(
@@ -252,10 +258,16 @@ async def publish_interview_blueprint(
             template_id=req.template_id,
             version=req.version,
             published_by=req.published_by,
+            definition_id=req.definition_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await definitions.save_definition(published)
+    outcome = await definitions.save_definition(published)
+    if outcome == "duplicate":
+        raise HTTPException(
+            status_code=409,
+            detail="definition_id is already published; use a new versioned definition_id",
+        )
     return published
 
 

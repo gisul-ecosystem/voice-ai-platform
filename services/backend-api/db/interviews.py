@@ -99,6 +99,8 @@ async def ensure_session_correlation_index(collection: Any) -> None:
 async def ensure_indexes() -> None:
     db = get_db()
     await db.interview_contexts.create_index("expires_at", expireAfterSeconds=0)
+    from db.candidates import ensure_candidate_indexes
+    await ensure_candidate_indexes()
     await db.interview_sessions.create_index(
         "retention_expires_at", expireAfterSeconds=0
     )
@@ -141,6 +143,7 @@ async def create_context(
     interview_setup: dict[str, Any] | None = None,
     *,
     definition_id: str | None = None,
+    candidate_profile: dict[str, Any] | None = None,
     expires_at_override: datetime | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
@@ -157,6 +160,7 @@ async def create_context(
         "resume_text": resume_text,
         "interview_setup": interview_setup,
         "definition_id": (definition_id or "").strip() or None,
+        "candidate_profile": candidate_profile,
         "created_at": now,
         "expires_at": expires_at,
     }

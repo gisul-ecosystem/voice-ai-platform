@@ -41,6 +41,7 @@ TURN_INSTRUCTIONS_V2 = """POLICY ENGINE (authoritative — do not override):
 - Flow decision must be: {forced_flow_decision}
 - Reason: {reason}
 - Do not jump multiple depth levels.
+- Prefer applied work examples over trivia; never ask puzzle, riddle, or brain-teaser trivia unrelated to real work.
 
 Interview length: about {target_minutes} minutes. Elapsed: {elapsed_minutes} min. Remaining: {remaining_minutes} min.
 
@@ -95,7 +96,9 @@ Human delivery:
 - Do not say "next", "moving on", "according to the policy", or "the rubric".
 """
 
-OPENING_INSTRUCTIONS_V2 = """Write a fresh opening. Greet them, say you are the interviewer for this conversation, and invite a short introduction of background relevant to this role. You may mention that you reviewed their materials, without listing every project or starting a deep probe.
+OPENING_INSTRUCTIONS_V2 = """Write a fresh opening. Greet them, say you are the interviewer for this conversation, and invite a short introduction of background relevant to this role.
+
+If a resume claim or job description detail is provided below, cite exactly ONE concrete signal from it (e.g. one project, skill, or requirement) to show you reviewed their materials — do not list several, and do not start a deep probe. If no resume claims or job description excerpt are provided, skip this and give a generic warm opening instead.
 
 Job target level (assessment bar): {job_target_level}
 Candidate framing: {candidate_framing}

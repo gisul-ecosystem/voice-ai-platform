@@ -329,34 +329,55 @@ function normalizeTranscriptText(text: string): string {
   return text.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-/** Merge growing STT fragments (e.g. "hello" → "hello world") into one line. */
+function wordOverlapRatio(a: string, b: string): number {
+  const aWords = new Set(a.split(" ").filter((w) => w.length > 1));
+  const bWords = new Set(b.split(" ").filter((w) => w.length > 1));
+  if (aWords.size === 0 || bWords.size === 0) return 0;
+  let shared = 0;
+  for (const word of aWords) if (bWords.has(word)) shared += 1;
+  return shared / Math.min(aWords.size, bWords.size);
+}
+
+/** Merge growing/corrected STT fragments into one line per underlying segment. */
 export function coalesceTranscriptLines(
   lines: VoiceTranscriptLine[],
 ): VoiceTranscriptLine[] {
   const result: VoiceTranscriptLine[] = [];
+  const indexById = new Map<string, number>();
   for (const line of lines) {
     if (!line.text) continue;
+    const existingIndex = indexById.get(line.id);
+    if (existingIndex !== undefined) {
+      // Same underlying STT segment revised (e.g. interim guess -> corrected
+      // final text) — replace in place rather than opening a new box.
+      result[existingIndex] = line;
+      continue;
+    }
     const last = result[result.length - 1];
-    if (!last || last.who !== line.who) {
-      result.push(line);
-      continue;
+    if (last && last.who === line.who) {
+      const prev = normalizeTranscriptText(last.text);
+      const next = normalizeTranscriptText(line.text);
+      if (
+        next === prev ||
+        next.startsWith(prev) ||
+        prev.startsWith(next) ||
+        next.includes(prev) ||
+        // Late-arriving corrected transcript on a new stream id, but clearly
+        // the same spoken utterance (e.g. STT rewrote wording after commit).
+        wordOverlapRatio(prev, next) >= 0.7
+      ) {
+        const mergedIndex = result.length - 1;
+        result[mergedIndex] = {
+          ...line,
+          id: last.id,
+          text: line.text.length >= last.text.length ? line.text : last.text,
+          final: last.final || line.final,
+        };
+        indexById.set(last.id, mergedIndex);
+        continue;
+      }
     }
-    const prev = normalizeTranscriptText(last.text);
-    const next = normalizeTranscriptText(line.text);
-    if (
-      next === prev ||
-      next.startsWith(prev) ||
-      prev.startsWith(next) ||
-      next.includes(prev)
-    ) {
-      result[result.length - 1] = {
-        ...line,
-        id: last.id,
-        text: line.text.length >= last.text.length ? line.text : last.text,
-        final: last.final || line.final,
-      };
-      continue;
-    }
+    indexById.set(line.id, result.length);
     result.push(line);
   }
   return result;
@@ -368,11 +389,19 @@ export function useVoiceTranscriptLines(limit = 40): VoiceTranscriptLine[] {
   const agentIdentity = agent?.identity?.trim() || "";
 
   const fromStreams: VoiceTranscriptLine[] = streams.map((item) => {
-    const identity = String(item.participantInfo?.identity || "").trim();
+    const participantInfo = item.participantInfo as
+      | { identity?: unknown; kind?: unknown }
+      | undefined;
+    const identity = String(participantInfo?.identity || "").trim();
+    const participantKind = String(participantInfo?.kind || "")
+      .trim()
+      .toLowerCase();
     const isAgent =
-      Boolean(agentIdentity) &&
-      identity.length > 0 &&
-      identity === agentIdentity;
+      (Boolean(agentIdentity) &&
+        identity.length > 0 &&
+        identity === agentIdentity) ||
+      participantKind.includes("agent") ||
+      /(^|[-_:])agent($|[-_:])/i.test(identity);
     return {
       id: item.streamInfo.id,
       who: isAgent ? ("agent" as const) : ("candidate" as const),

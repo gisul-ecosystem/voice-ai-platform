@@ -563,6 +563,7 @@ class InterviewFlow:
         self.clarify_after = non_answer["clarify_after"]
         self.rephrase_after = non_answer["rephrase_after"]
         self.change_topic_after = non_answer["change_topic_after"]
+        self.close_after_unusable = non_answer["close_after"]
         phase_minutes = sum(
             max(int(phase.get("duration_minutes", 0)), 0) for phase in self.phases
         )
@@ -748,6 +749,7 @@ class InterviewFlow:
             clarify_after=self.clarify_after,
             rephrase_after=self.rephrase_after,
             change_topic_after=self.change_topic_after,
+            close_after=self.close_after_unusable,
         )
 
     def _current_policy_decision(

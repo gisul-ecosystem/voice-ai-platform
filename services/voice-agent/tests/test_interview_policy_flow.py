@@ -186,3 +186,51 @@ def test_candidate_map_moves_to_technical_baseline_after_one_turn() -> None:
 
     assert decision.action == "ASK_BASELINE"
     assert decision.forced_flow_decision == "advance"
+
+
+@pytest.mark.asyncio
+async def test_policy_mode_opening_cites_resume_or_jd_materials() -> None:
+    llm = FakeLlm(
+        '{"question":"Welcome! I saw you worked on a machine learning classifier '
+        '\u2014 could you introduce yourself and your background?","intent":"opening","depth":1}'
+    )
+    definition = _definition()
+    flow = InterviewFlow(
+        {"phases": []},
+        llm,
+        interview_definition=definition,
+        candidate_profile={
+            "claims": [{"claim_id": "c1", "value": "Built a machine learning classifier"}]
+        },
+        job_description="Looking for an engineer skilled in data structures and algorithms.",
+        initial_phase_index=0,
+    )
+
+    await flow.generate_next_question(None)
+
+    prompt = llm.messages[0][0]["content"]
+    assert "cite exactly ONE concrete signal" in prompt
+    assert "machine learning classifier" in prompt
+
+
+@pytest.mark.asyncio
+async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:
+    class FailingLlm:
+        async def generate_reply(self, messages: list[dict], **_kwargs) -> str:
+            raise RuntimeError("provider unavailable")
+
+    from products.interviewer.flow import FALLBACK_OPENING
+
+    flow = InterviewFlow(
+        {"phases": []},
+        FailingLlm(),
+        interview_definition=_definition(),
+        candidate_profile={"claims": [{"claim_id": "c1", "value": "Built a classifier"}]},
+        job_description="Data structures and algorithms role.",
+        initial_phase_index=0,
+    )
+
+    question = await flow.generate_next_question(None)
+
+    assert question == FALLBACK_OPENING
+

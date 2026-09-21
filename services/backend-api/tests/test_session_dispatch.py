@@ -56,6 +56,11 @@ async def test_session_dispatches_only_supported_workers(
         "create_live_session",
         _fake_create_live_session,
     )
+    monkeypatch.setattr(
+        sessions.interviews,
+        "get_context",
+        _fake_get_context,
+    )
 
     request = CreateSessionRequest(
         name="Test Participant",
@@ -77,6 +82,33 @@ async def test_session_dispatches_only_supported_workers(
     assert "job_description" not in metadata
     assert "resume_text" not in metadata
     assert "session_id" in metadata
+
+
+@pytest.mark.asyncio
+async def test_session_metadata_includes_published_definition(monkeypatch) -> None:
+    FakeLiveKitApi.room_service = FakeRoomService()
+    FakeLiveKitApi.dispatch_service = FakeAgentDispatchService()
+    monkeypatch.setattr(sessions.api, "LiveKitAPI", FakeLiveKitApi)
+    monkeypatch.setattr(sessions, "_ws_url", lambda: "wss://livekit.test")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "x" * 32)
+    monkeypatch.setattr(sessions.interviews, "create_live_session", _fake_create_live_session)
+    monkeypatch.setattr(
+        sessions.interviews,
+        "get_context",
+        _fake_get_context_with_definition,
+    )
+
+    await sessions.create_session(
+        CreateSessionRequest(
+            name="Test Candidate",
+            product_id="interviewer",
+            context_id="ctx_1234567890123456",
+        )
+    )
+
+    metadata = json.loads(FakeLiveKitApi.room_service.created[0].metadata)
+    assert metadata["definition_id"] == "ai-engineer-junior-v1"
 
 
 def test_unknown_worker_is_rejected_by_schema() -> None:
@@ -137,3 +169,11 @@ def test_public_session_schema_rejects_provider_credentials() -> None:
 
 async def _fake_create_live_session(**_kwargs) -> str:
     return "ses_test"
+
+
+async def _fake_get_context(_context_id: str) -> dict:
+    return {}
+
+
+async def _fake_get_context_with_definition(_context_id: str) -> dict:
+    return {"definition_id": "ai-engineer-junior-v1"}

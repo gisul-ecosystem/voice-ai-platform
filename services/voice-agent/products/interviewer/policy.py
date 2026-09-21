@@ -81,6 +81,7 @@ class PolicyState:
     clarify_after: int = 1
     rephrase_after: int = 2
     change_topic_after: int = 3
+    close_after: int = 4
 
 
 def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -142,7 +143,12 @@ def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any]
 
 
 def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict[str, int]:
-    defaults = {"clarify_after": 1, "rephrase_after": 2, "change_topic_after": 3}
+    defaults = {
+        "clarify_after": 1,
+        "rephrase_after": 2,
+        "change_topic_after": 3,
+        "close_after": 4,
+    }
     if not isinstance(definition, dict):
         return defaults
     policy = (
@@ -153,10 +159,12 @@ def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict
     clarify = max(1, int(policy.get("clarify_after") or defaults["clarify_after"]))
     rephrase = max(clarify, int(policy.get("rephrase_after") or defaults["rephrase_after"]))
     change = max(rephrase, int(policy.get("change_topic_after") or defaults["change_topic_after"]))
+    close = max(change + 1, int(policy.get("close_after") or defaults["close_after"]))
     return {
         "clarify_after": clarify,
         "rephrase_after": rephrase,
         "change_topic_after": change,
+        "close_after": close,
     }
 
 
@@ -239,6 +247,19 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             intent=intent,
             reason="unusable answer requires clarification",
             section=_section_for_phase(state.phase_name),
+        )
+
+    if state.consecutive_unusable >= state.close_after:
+        return PolicyDecision(
+            action=CLOSE_INTERVIEW,
+            forced_flow_decision="close",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="closing",
+            reason="repeated unusable answers — controlled close",
+            section="closing",
         )
 
     if state.consecutive_unusable >= state.change_topic_after:
