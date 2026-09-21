@@ -13,6 +13,37 @@ from models.schemas import InterviewSetupConfig
 logger = logging.getLogger("backend-api.brain.definitions")
 
 
+_MIN_JD_CHARS = 20
+_MIN_COMPETENCY_CHARS = 2
+
+
+def _require_publishable_setup(
+    *,
+    job_description: str,
+    interview_setup: InterviewSetupConfig,
+) -> tuple[str, list[str]]:
+    """Creator publication gates before compile/publish (incomplete setup blocked)."""
+    jd = (job_description or "").strip()
+    if len(jd) < _MIN_JD_CHARS:
+        raise ValueError(
+            "job description is incomplete; paste a full JD before publishing"
+        )
+    title = (interview_setup.title or "").strip()
+    role = (interview_setup.role or "").strip()
+    if len(title) < 2 or len(role) < 2:
+        raise ValueError("interview title and role are required before publishing")
+    competencies = [
+        item.strip()
+        for item in interview_setup.competencies
+        if isinstance(item, str) and item.strip()
+    ]
+    if not competencies:
+        raise ValueError("creator competencies are required to publish a definition")
+    if any(len(item) < _MIN_COMPETENCY_CHARS for item in competencies):
+        raise ValueError("each competency must be a real skill name, not a blank token")
+    return jd, competencies
+
+
 async def publish_and_store(
     *,
     job_description: str,
@@ -27,13 +58,16 @@ async def publish_and_store(
             raise ValueError("definition_id not found")
         return stored
 
-    if not interview_setup.competencies:
-        raise ValueError("creator competencies are required to publish a definition")
+    jd, competencies = _require_publishable_setup(
+        job_description=job_description,
+        interview_setup=interview_setup,
+    )
+    interview_setup = interview_setup.model_copy(update={"competencies": competencies})
 
     level: SeniorityLevel = interview_setup.seniority
     duration: DurationMinutes = interview_setup.durationMinutes
     job = await extract_job_intelligence_async(
-        job_description,
+        jd,
         target_level=level,
         domain=None,
     )

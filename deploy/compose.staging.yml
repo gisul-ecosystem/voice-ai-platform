@@ -72,9 +72,7 @@ services:
       # Isolate from local workers that also register as "aaptor" on the same LiveKit.
       LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-aaptor-staging}
       INTERVIEWER_AGENT_NAME: ${INTERVIEWER_AGENT_NAME:-aaptor-staging}
-      # Prefer real LiveKit API keys in /etc/voice-ai-platform/*.env — never leave "devkey" in staging.
-      # Temporary escape hatch until keys are rotated; remove after real keys are installed.
-      LIVEKIT_ALLOW_WEAK_API_KEY: ${LIVEKIT_ALLOW_WEAK_API_KEY:-true}
+      # Real LiveKit API key/secret required in /etc/voice-ai-platform/*.env (no devkey).
       LIVEKIT_TOKEN_TTL_MINUTES: ${LIVEKIT_TOKEN_TTL_MINUTES:-45}
     depends_on:
       mongo:
@@ -111,7 +109,6 @@ services:
       AAPTOR_WORKER_PORT: "8081"
       # Must match backend LIVEKIT_AGENT_NAME so dispatches hit this worker.
       LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-aaptor-staging}
-      LIVEKIT_ALLOW_WEAK_API_KEY: ${LIVEKIT_ALLOW_WEAK_API_KEY:-true}
     depends_on:
       backend-api:
         condition: service_healthy

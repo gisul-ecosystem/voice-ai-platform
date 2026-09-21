@@ -48,18 +48,6 @@ def test_production_rejects_devkey_livekit_credentials(monkeypatch):
     for name in REQUIRED:
         monkeypatch.setenv(name, "configured")
     monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
-    monkeypatch.delenv("LIVEKIT_ALLOW_WEAK_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="LIVEKIT_API_KEY must not be"):
         main.validate_startup_configuration()
-
-
-def test_production_allows_weak_livekit_key_with_explicit_override(monkeypatch):
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    for name in REQUIRED:
-        monkeypatch.setenv(name, "configured")
-    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
-    monkeypatch.setenv("LIVEKIT_ALLOW_WEAK_API_KEY", "true")
-
-    main.validate_startup_configuration()

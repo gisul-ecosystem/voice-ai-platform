@@ -8,16 +8,13 @@ export type ProductConfig = {
   cameraEnabledByDefault: boolean;
 };
 
-const interviewCameraEnabled =
-  process.env.NEXT_PUBLIC_INTERVIEW_CAMERA_ENABLED === "true";
-
 export const products: Record<ProductId, ProductConfig> = {
   interviewer: {
     id: "interviewer",
     participantLabel: "Candidate name",
     joinLabel: "Start interview",
-    cameraAllowed: interviewCameraEnabled,
-    cameraEnabledByDefault: false,
+    cameraAllowed: true,
+    cameraEnabledByDefault: true,
   },
 };
 
