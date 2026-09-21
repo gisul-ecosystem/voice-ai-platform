@@ -9,6 +9,7 @@ from products.interviewer.flow import (
     CLOSING_MESSAGE,
     FALLBACK_OPENING,
     InterviewFlow,
+    SpokenJsonQuestionStream,
     SpokenQuestionStream,
     extract_jd_requirements,
     extract_resume_projects,
@@ -57,6 +58,24 @@ def test_spoken_question_stream_falls_back_without_decision() -> None:
     assert spoken + leftover == "Just a spoken question?"
     _, parsed = parse_stage2("Just a spoken question?")
     assert parsed == "Just a spoken question?"
+
+
+def test_spoken_json_question_stream_emits_question_field() -> None:
+    parser = SpokenJsonQuestionStream()
+    assert parser.push('{"answer_evaluation": {}, "ques') == ""
+    spoken = parser.push('tion": "What part of that work')
+    spoken += parser.push(' did you personally handle?"}')
+    leftover = parser.finish()
+    assert (spoken + leftover) == "What part of that work did you personally handle?"
+    assert parser.question == "What part of that work did you personally handle?"
+
+
+def test_spoken_json_question_stream_starts_immediately_when_question_is_first() -> None:
+    parser = SpokenJsonQuestionStream()
+    spoken = parser.push('{"question": "Thanks for joining.')
+    spoken += parser.push(' Please introduce yourself."}')
+    leftover = parser.finish()
+    assert (spoken + leftover) == "Thanks for joining. Please introduce yourself."
 
 
 def test_openai_sse_content_deltas() -> None:

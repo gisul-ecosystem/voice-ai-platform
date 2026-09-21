@@ -78,6 +78,43 @@ GENERIC_OUTLINE = {
 ALLOWED_DURATIONS = (15, 30, 45)
 
 
+class InterviewPlanUnavailableError(RuntimeError):
+    """Raised when a published plan is required but cannot be used."""
+
+
+def published_plan_required(
+    *,
+    definition_id: str | None,
+    app_env: str | None = None,
+) -> bool:
+    if (definition_id or "").strip():
+        return True
+    env = (app_env if app_env is not None else os.getenv("APP_ENV") or "development")
+    return env.strip().lower() in {"production", "staging"}
+
+
+def resolve_live_outline(
+    *,
+    interview_definition: dict | None,
+    definition_id: str | None,
+    app_env: str | None = None,
+) -> tuple[dict | None, str]:
+    """Return (outline, source). Outline is None when a local generated plan is allowed.
+
+    Never falls back to GENERIC_OUTLINE when a published definition is bound or
+    the environment is production/staging.
+    """
+    require = published_plan_required(definition_id=definition_id, app_env=app_env)
+    if isinstance(interview_definition, dict) and interview_definition.get("competencies"):
+        outline = outline_from_definition(interview_definition)
+        if outline:
+            return outline, "published_definition"
+        raise InterviewPlanUnavailableError("definition_has_no_usable_plan")
+    if require:
+        raise InterviewPlanUnavailableError("published_definition_required")
+    return None, "generated_plan"
+
+
 def normalize_duration_minutes(value: int | None) -> int:
     minutes = int(value or 30)
     if minutes in ALLOWED_DURATIONS:
@@ -563,14 +600,43 @@ async def entrypoint(ctx: JobContext) -> None:
                     },
                 )
         except ServiceUnavailableError:
-            logger.warning(
+            logger.error(
                 "interview_definition_unavailable",
-                extra={"event": "interview_definition_unavailable"},
+                extra={
+                    "event": "interview_definition_unavailable",
+                    "definition_id": explicit_definition_id,
+                    "session_id": session_id,
+                },
             )
-    if interview_definition:
-        outline = outline_from_definition(interview_definition) or GENERIC_OUTLINE
-        outline_source = "published_definition"
-    else:
+    try:
+        outline, outline_source = resolve_live_outline(
+            interview_definition=interview_definition,
+            definition_id=explicit_definition_id,
+        )
+    except InterviewPlanUnavailableError as exc:
+        logger.error(
+            "interview_plan_unavailable",
+            extra={
+                "event": "interview_plan_unavailable",
+                "reason": str(exc),
+                "definition_id": explicit_definition_id,
+                "session_id": session_id,
+            },
+        )
+        if session_id:
+            try:
+                await report_session_status(
+                    session_id,
+                    "failed",
+                    reason=str(exc)[:120],
+                )
+            except ServiceUnavailableError:
+                logger.warning(
+                    "status_report_unavailable",
+                    extra={"event": "status_report_unavailable"},
+                )
+        raise
+    if outline is None:
         outline = await build_outline(ctx)
         outline = enrich_outline_with_resume(outline, resume_text)
         outline = enrich_outline_with_jd(outline, job_description, competencies)
