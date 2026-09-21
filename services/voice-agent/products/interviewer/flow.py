@@ -533,6 +533,20 @@ class InterviewFlow:
         self.jd_requirements = extract_jd_requirements(
             job_description, self.competencies
         )
+        if self.policy_mode and self.resume_projects:
+            resume_phase = {
+                "name": "resume projects",
+                "duration_minutes": max(3, min(8, len(self.resume_projects) * 2)),
+                "topics": self.resume_projects,
+                "source": "resume",
+                "intent": "resume_project",
+                "max_depth": 2,
+                "max_probes": 2,
+            }
+            insert_at = 2
+            self.phases.insert(insert_at, resume_phase)
+            if self.phase_index >= insert_at:
+                self.phase_index += 1
         self.focus_item = ""
         self._touched_topics: set[str] = set()
         self.candidate_profile = build_candidate_profile(
@@ -861,6 +875,17 @@ class InterviewFlow:
             )[0]
             return
         if intent == "jd_requirement":
+            if self.policy_mode:
+                competency = competency_by_id(
+                    self.interview_definition,
+                    str(self.current_phase().get("competency_id") or "") or None,
+                )
+                self.focus_item = str(
+                    competency.get("name")
+                    or self.current_phase().get("name")
+                    or "this competency"
+                ).strip()
+                return
             if self.focus_item and self.focus_item.lower() not in self._touched_topics:
                 return
             uncovered = (
@@ -1174,6 +1199,36 @@ class InterviewFlow:
     def _job_target_level(self) -> str:
         return str(self.candidate_profile.get("job_target_level") or "mid")
 
+    def _seniority_question_guidance(self) -> str:
+        level = self._job_target_level().strip().lower()
+        if level in {"intern", "junior", "entry", "entry_level"}:
+            return (
+                "Ask for a concrete implementation or debugging example at an accessible scope; "
+                "test fundamentals, ownership, and reasoning without assuming architecture leadership."
+            )
+        if level in {"senior", "lead", "staff", "principal"}:
+            return (
+                "Ask for concrete design trade-offs, operational consequences, and technical leadership "
+                "at the scope appropriate to this role."
+            )
+        return (
+            "Ask for a concrete implementation decision, the reasoning behind it, and the resulting impact "
+            "at an independent contributor scope."
+        )
+
+    def _active_focus_context(self) -> str:
+        if self._phase_intent() == "resume_project":
+            excerpt = self._resume_project_context()
+            if excerpt:
+                return f"Resume project excerpt for {self.focus_item}:\n{excerpt}"
+        if self._phase_intent() == "jd_requirement":
+            return (
+                "Published interview-brain competency selected for this turn: "
+                f"{self.focus_item}. Use its configured definition, evidence, and ladder objective; "
+                "use the JD only to make that competency question concrete."
+            )
+        return f"Candidate background focus: {self.focus_item}"
+
     def _profile_type(self) -> str:
         summary = self.candidate_profile.get("experience_summary")
         if isinstance(summary, dict):
@@ -1251,6 +1306,8 @@ class InterviewFlow:
             "competency_name": str(competency.get("name") or "general"),
             "competency_id": competency_id or "",
             "competency_definition": str(competency.get("definition") or "job-related work"),
+            "active_focus": self.focus_item or str(competency.get("name") or "this requirement"),
+            "active_focus_context": self._active_focus_context(),
             "priority_guidance": self._priority_guidance(competency),
             "ladder_objective": objective or "Ask one job-related question.",
             "missing_intents": ", ".join(missing) or "(none)",
@@ -1265,6 +1322,7 @@ class InterviewFlow:
             "interview_structure": self._interview_structure_text(),
             "published_context": self._published_context_text(),
             "job_target_level": self._job_target_level(),
+            "seniority_question_guidance": self._seniority_question_guidance(),
             "candidate_framing": self._profile_type(),
             "claim_brief": claim_brief(self.candidate_profile),
             "claim_guidance": self._claim_guidance(),
@@ -1449,6 +1507,8 @@ class InterviewFlow:
         self, last_candidate_turn: str | None
     ) -> tuple[str, str]:
         if self.policy_mode:
+            is_intro_reply = bool(last_candidate_turn) and not self.candidate_turns
+            self._ensure_focus(last_candidate_turn, is_intro_reply=is_intro_reply)
             return self._structured_system_prompt(
                 last_candidate_turn,
                 self._current_policy_decision(
@@ -1568,7 +1628,8 @@ class InterviewFlow:
                 [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": user_content},
-                ]
+                ],
+                extra_body={"max_completion_tokens": 256},
             )
         except Exception:
             logger.exception(
@@ -1602,25 +1663,6 @@ class InterviewFlow:
             generated = self._coerce_generated(
                 raw, policy=policy, last_candidate_turn=last_candidate_turn
             )
-            parsed = parse_generated_question(raw)
-            if parsed is None and generated.question == self._fallback_spoken_question(
-                policy
-            ):
-                try:
-                    raw = await self.llm_client.generate_reply(
-                        [
-                            {"role": "system", "content": prompt},
-                            {"role": "user", "content": user_content},
-                        ]
-                    )
-                    generated = self._coerce_generated(
-                        raw, policy=policy, last_candidate_turn=last_candidate_turn
-                    )
-                except Exception:
-                    logger.exception(
-                        "stage2_question_retry_failed",
-                        extra={"event": "stage2_question_retry_failed"},
-                    )
             decision, question = generated.decision, generated.question
             self._remember_generated(generated, policy)
             self._refine_answer_quality(last_candidate_turn, generated)

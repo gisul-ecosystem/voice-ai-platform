@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-const defaultStart = new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
+function defaultStartTime(): string {
+  return new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
+}
 
 export default function AdminInterviewPage() {
   const router = useRouter();
@@ -21,7 +23,7 @@ export default function AdminInterviewPage() {
   const [candidateName, setCandidateName] = useState("");
   const [candidateEmail, setCandidateEmail] = useState("");
   const [resume, setResume] = useState<File | null>(null);
-  const [startsAt, setStartsAt] = useState(defaultStart);
+  const [startsAt, setStartsAt] = useState("");
   const [draft, setDraft] = useState<Record<string, unknown>>();
   const [published, setPublished] = useState<Record<string, unknown>>();
   const [invite, setInvite] = useState<string>();
@@ -31,6 +33,11 @@ export default function AdminInterviewPage() {
   const [copied, setCopied] = useState(false);
   const [structureFinalized, setStructureFinalized] = useState(false);
   const [selectedCompetency, setSelectedCompetency] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setStartsAt(defaultStartTime()), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   async function jsonRequest(path: string, body: unknown) {
     const response = await fetch(path, {

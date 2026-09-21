@@ -51,6 +51,9 @@ Interview length: about {target_minutes} minutes. Elapsed: {elapsed_minutes} min
 
 Current competency: {competency_name} ({competency_id})
 Competency definition: {competency_definition}
+Active JD/resume focus: {active_focus}
+Active focus source context:
+{active_focus_context}
 Competency priority: {priority_guidance}
 Ladder objective: {ladder_objective}
 Missing required intents: {missing_intents}
@@ -68,8 +71,11 @@ Interview structure — follow this order; do not skip or invent sections:
 {published_context}
 
 Use the reference context to recognize concepts such as machine learning, model evaluation, algorithms, data structures, and system design when they are present. Ask from the active competency and current policy intent; do not choose a different competency because the reference context contains it.
+Anchor the question in the Active JD/resume focus above. Do not ask the candidate to define, rate, or generally describe the competency title itself. Ask about a concrete task, decision, implementation, debugging situation, or trade-off relevant to that focus.
+For a competency section, the published interview brain is authoritative: ask only from the current competency definition, ladder objective, evidence expected, and seniority guidance. JD and resume details may ground the example, but must never create a separate standalone question track.
 
 Job target level (assessment bar — do not lower): {job_target_level}
+Seniority-specific question guidance: {seniority_question_guidance}
 Candidate framing (examples only, not the bar): {candidate_framing}
 
 Allowed resume claims you may reference (id — value):

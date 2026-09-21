@@ -10,9 +10,11 @@ class FakeLlm:
     def __init__(self, *replies: str) -> None:
         self.replies = list(replies)
         self.messages: list[list[dict]] = []
+        self.request_options: list[dict] = []
 
-    async def generate_reply(self, messages: list[dict], **_kwargs) -> str:
+    async def generate_reply(self, messages: list[dict], **kwargs) -> str:
         self.messages.append(messages)
+        self.request_options.append(kwargs)
         return self.replies.pop(0)
 
 
@@ -152,6 +154,24 @@ async def test_policy_mode_uses_configured_competency_question() -> None:
 
 
 @pytest.mark.asyncio
+async def test_policy_mode_uses_fallback_without_retrying_invalid_output() -> None:
+    llm = FakeLlm("This is not the required JSON response.")
+    flow = InterviewFlow(
+        {"phases": []},
+        llm,
+        interview_definition=_definition(),
+        interviewer_turns=["Tell me about your background."],
+        candidate_turns=["I worked on payment systems."],
+        initial_phase_index=2,
+    )
+
+    question = await flow.generate_next_question("I improved payment retries.")
+
+    assert question == "Which algorithm did you use for the problem, and why?"
+    assert len(llm.messages) == 1
+
+
+@pytest.mark.asyncio
 async def test_policy_mode_advances_after_probe_cap() -> None:
     llm = FakeLlm(
         "DECISION: probe\n\nWhat was difficult about that ownership?"
@@ -233,4 +253,60 @@ async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:
     question = await flow.generate_next_question(None)
 
     assert question == FALLBACK_OPENING
+
+
+@pytest.mark.asyncio
+async def test_policy_mode_anchors_competency_question_to_active_jd_focus_and_seniority() -> None:
+    llm = FakeLlm(
+        '{"question":"How would you choose an algorithm for a large input and check that it performs well?",'
+        '"competency_id":"problem_solving","intent":"establish_context","depth":1}'
+    )
+    definition = _definition()
+    definition["job_intelligence"] = {
+        "role": {"title": "Junior AI Engineer", "target_level": "junior"},
+        "skills": [{"text": "Algorithms for large input data"}],
+    }
+    flow = InterviewFlow(
+        {"phases": []},
+        llm,
+        interview_definition=definition,
+        job_description="Use algorithms for large input data.",
+        initial_phase_index=2,
+        candidate_turns=["I am a junior engineer with Python experience."],
+    )
+    await flow.generate_next_question("I have used Python for data processing.")
+
+    prompt = llm.messages[0][0]["content"]
+    assert "Active JD/resume focus: Problem solving" in prompt
+    assert "Published interview-brain competency selected for this turn: Problem solving" in prompt
+    assert "Job target level (assessment bar — do not lower): junior" in prompt
+    assert "accessible scope" in prompt
+    assert "must never create a separate standalone question track" in prompt
+    assert llm.request_options[0]["extra_body"] == {"max_completion_tokens": 256}
+
+
+@pytest.mark.asyncio
+async def test_policy_mode_assesses_resume_projects_before_jd_skills() -> None:
+    llm = FakeLlm(
+        '{"question":"On your Payments Gateway project, what retry behavior did you implement?",'
+        '"intent":"establish_context","depth":1}'
+    )
+    flow = InterviewFlow(
+        {"phases": []},
+        llm,
+        interview_definition=_definition(),
+        resume_text="Projects\n- Payments Gateway: retries and checkout processing",
+        job_description="Need Python and data structures.",
+        candidate_turns=["I am a backend engineer."],
+        interviewer_turns=["Please introduce yourself."],
+    )
+
+    flow.apply_decision("advance")
+    flow.apply_decision("advance")
+    assert flow.current_phase()["intent"] == "resume_project"
+    await flow.generate_next_question("I built the Payments Gateway retry flow.")
+
+    prompt = llm.messages[0][0]["content"]
+    assert "Active JD/resume focus: Payments Gateway" in prompt
+    assert "Resume project excerpt for Payments Gateway" in prompt
 

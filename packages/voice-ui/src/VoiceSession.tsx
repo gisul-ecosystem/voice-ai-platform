@@ -48,7 +48,14 @@ export function VoiceRoom({
       serverUrl={credentials.livekitUrl}
       connect
       audio={
-        choices.audioEnabled ? { deviceId: choices.audioDeviceId } : false
+        choices.audioEnabled
+          ? {
+              deviceId: choices.audioDeviceId,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            }
+          : false
       }
       video={
         choices.videoEnabled ? { deviceId: choices.videoDeviceId } : false

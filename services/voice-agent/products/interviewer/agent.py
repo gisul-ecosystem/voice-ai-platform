@@ -168,12 +168,14 @@ class AaptorAgent(Agent):
         if self._opened:
             # Rejoin/restore: do not re-speak the opening or double-write brain.
             return
+        # Claim the opening before awaiting synthesis so a concurrent LLM callback
+        # cannot schedule a second opening/question for the same room.
+        self._opened = True
         parts: list[str] = []
         async for chunk in self.flow.generate_next_question_stream(None):
             parts.append(chunk)
         opening = "".join(parts).strip() or FALLBACK_OPENING
         await self.session.say(opening, allow_interruptions=False)
-        self._opened = True
         self._last_agent_text = opening
         turn_id = await self._record("agent", opening)
         await self._persist_brain_after_exchange(

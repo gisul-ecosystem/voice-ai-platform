@@ -160,25 +160,26 @@ export function SetupForm({
   const [startsAt, setStartsAt] = useState(
     initialValue?.startsAt
       ? new Date(initialValue.startsAt).toISOString().slice(0, 16)
-      : defaultStartTime(),
+      : "",
   );
+  const [timezone, setTimezone] = useState(initialValue?.timezone ?? "UTC");
   const [ingestBusy, setIngestBusy] = useState<"jd" | "resume" | null>(null);
   const [ingestError, setIngestError] = useState("");
   const [jdSummary, setJdSummary] = useState<IngestSummary | null>(null);
   const [resumeSummary, setResumeSummary] = useState<IngestSummary | null>(null);
   const [jdReviewed, setJdReviewed] = useState(false);
   const [resumeReviewed, setResumeReviewed] = useState(false);
-  const timezone =
-    initialValue?.timezone ??
-    Intl.DateTimeFormat().resolvedOptions().timeZone ??
-    "UTC";
 
   useEffect(() => {
     if (initialValue) return;
     const timer = window.setTimeout(() => {
       try {
+        setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
         const saved = sessionStorage.getItem(DRAFT_KEY);
-        if (!saved) return;
+        if (!saved) {
+          setStartsAt(defaultStartTime());
+          return;
+        }
         const draft = JSON.parse(saved) as PublicSessionRequest;
         const setup = draft.interviewSetup;
         setParticipantName(draft.participantName || "");
@@ -189,6 +190,8 @@ export function SetupForm({
           const date = new Date(draft.startsAt);
           const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
           setStartsAt(ensureFutureStart(local.toISOString().slice(0, 16)));
+        } else {
+          setStartsAt(defaultStartTime());
         }
         if (setup) {
           setTitle(setup.title);
@@ -311,6 +314,9 @@ export function SetupForm({
       if (competencyList.length < 1) {
         return "Add at least one competency before publishing.";
       }
+      if (competencyList.length > 12) {
+        return `You listed ${competencyList.length} competencies — trim to 12 or fewer before continuing.`;
+      }
       if ((jdSummary && !jdReviewed) || (resumeSummary && !resumeReviewed)) {
         return "Review the extracted JD and resume facts before continuing.";
       }
@@ -400,30 +406,10 @@ export function SetupForm({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-<<<<<<< HEAD
-    if (step === 1) {
-      if ((jdSummary && !jdReviewed) || (resumeSummary && !resumeReviewed)) {
-        setIngestError(
-          "Review the extracted JD and resume facts before continuing.",
-        );
-        return;
-      }
-      const competencyCount = competencies
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean).length;
-      if (competencyCount > 12) {
-        setIngestError(
-          `You listed ${competencyCount} competencies — trim to 12 or fewer before continuing.`,
-        );
-        return;
-      }
-=======
     const gate = publicationGateError(step, reviewing);
     if (gate) {
       setIngestError(gate);
       return;
->>>>>>> origin/dev
     }
     setIngestError("");
     if (step < 2) {

@@ -59,8 +59,8 @@ def build_agent_session(clients: InferenceClients) -> AgentSession:
         # Allow real barge-in, but ignore laptop-speaker echo while the agent talks.
         # Echo of a full opening question is long; require sustained speech + words.
         allow_interruptions=True,
-        min_interruption_duration=2.5,
-        min_interruption_words=6,
+        min_interruption_duration=3.5,
+        min_interruption_words=10,
         min_endpointing_delay=0.7,
         max_endpointing_delay=3.0,
         resume_false_interruption=True,
