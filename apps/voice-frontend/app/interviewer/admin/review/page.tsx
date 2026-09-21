@@ -1,21 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 const DRAFT_KEY = "ai-interview:role-draft";
 
 type DraftState = { definitionId: string; draft: Record<string, unknown>; title: string; role: string; seniority: string; durationMinutes: string; jobDescription: string; competencies: string; startsAt: string };
 
+function readDraft(): { state?: DraftState; error: string } {
+  if (typeof window === "undefined") return { error: "" };
+  try {
+    const saved = sessionStorage.getItem(DRAFT_KEY);
+    return { state: saved ? (JSON.parse(saved) as DraftState) : undefined, error: "" };
+  } catch {
+    return { error: "The draft could not be loaded." };
+  }
+}
+
 export default function ReviewAlignmentPage() {
-  const [state, setState] = useState<DraftState>();
+  const [boot] = useState(readDraft);
+  const [state, setState] = useState<DraftState | undefined>(boot.state);
   const [selected, setSelected] = useState(0);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(boot.error);
   const [busy, setBusy] = useState(false);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-
-  useEffect(() => { try { const saved = sessionStorage.getItem(DRAFT_KEY); if (saved) setState(JSON.parse(saved) as DraftState); } catch { setError("The draft could not be loaded."); } }, []);
 
   const competencies = state?.draft && Array.isArray(state.draft.competencies) ? state.draft.competencies as Array<Record<string, unknown>> : [];
   function update(index: number, patch: Record<string, unknown>) {

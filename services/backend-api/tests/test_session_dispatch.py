@@ -137,6 +137,11 @@ async def test_public_products_map_to_private_workers(
         "create_live_session",
         _fake_create_live_session,
     )
+    monkeypatch.setattr(
+        sessions.interviews,
+        "get_context",
+        _fake_get_context,
+    )
 
     response = await sessions.create_session(
         CreateSessionRequest(
