@@ -388,6 +388,19 @@ class InterviewQuestionRecord(BaseModel):
     raw_model_output: str | None = Field(default=None, max_length=2_000)
 
 
+class AnswerEvaluation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    technical_substance: Literal[
+        "surface", "partial", "deep", "incorrect", "not_applicable"
+    ] = "not_applicable"
+    key_facts_stated: list[str] = Field(default_factory=list, max_length=20)
+    reasoning: str = Field(default="", max_length=500)
+    matches_evidence_expected: bool = False
+    needs_clarification: bool = False
+    factually_correct: bool = True
+
+
 class InterviewAnswerRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -399,6 +412,7 @@ class InterviewAnswerRecord(BaseModel):
     usable: bool = True
     usability: AnswerUsability = "usable"
     final_transcript: str = Field(min_length=0, max_length=20_000)
+    answer_evaluation: AnswerEvaluation | None = None
     completed_at: datetime | None = None
 
 

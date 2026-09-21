@@ -107,6 +107,7 @@ class AaptorAgent(Agent):
                 text.strip(),
                 turn_id=turn_id,
                 usability=getattr(self.flow, "last_answer_usability", "usable"),
+                answer_evaluation=getattr(self.flow, "last_answer_evaluation", None),
             )
         elif speaker == "agent":
             await self._brain.on_agent_question(

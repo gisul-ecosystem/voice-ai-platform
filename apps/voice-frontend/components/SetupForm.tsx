@@ -400,10 +400,30 @@ export function SetupForm({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+<<<<<<< HEAD
+    if (step === 1) {
+      if ((jdSummary && !jdReviewed) || (resumeSummary && !resumeReviewed)) {
+        setIngestError(
+          "Review the extracted JD and resume facts before continuing.",
+        );
+        return;
+      }
+      const competencyCount = competencies
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean).length;
+      if (competencyCount > 12) {
+        setIngestError(
+          `You listed ${competencyCount} competencies — trim to 12 or fewer before continuing.`,
+        );
+        return;
+      }
+=======
     const gate = publicationGateError(step, reviewing);
     if (gate) {
       setIngestError(gate);
       return;
+>>>>>>> origin/dev
     }
     setIngestError("");
     if (step < 2) {

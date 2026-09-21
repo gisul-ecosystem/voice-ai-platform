@@ -199,6 +199,7 @@ class BrainSessionBridge:
         turn_id: str,
         usable: bool | None = None,
         usability: str | None = None,
+        answer_evaluation: dict | None = None,
     ) -> None:
         if not self.active_question_id:
             return
@@ -216,6 +217,7 @@ class BrainSessionBridge:
                 final_transcript=text,
                 usable=resolved_usable,
                 usability=resolved_usability,
+                answer_evaluation=answer_evaluation,
             )
         except ServiceUnavailableError:
             logger.warning(
