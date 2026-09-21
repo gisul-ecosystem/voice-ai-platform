@@ -77,40 +77,44 @@ def default_time_policy_for_duration(duration: DurationMinutes) -> TimePolicy:
     )
 
 
-def default_question_ladder(competency_id: str) -> CompetencyLadder:
-    """Domain-neutral depth ladder used when no custom ladder is supplied."""
+def default_question_ladder(
+    competency_id: str,
+    competency_name: str | None = None,
+) -> CompetencyLadder:
+    """Technical depth ladder used when no custom ladder is supplied."""
+    topic = (competency_name or competency_id or "this competency").strip()
     return CompetencyLadder(
         competency_id=competency_id,
         levels=[
             QuestionLadderStep(
                 depth=1,
                 intent="establish_context",
-                objective="Understand the situation or work the candidate is describing",
-                example_question="Can you briefly describe the situation?",
+                objective=f"Identify a concrete technical example involving {topic}",
+                example_question=f"Can you describe a technical problem where you used {topic}?",
             ),
             QuestionLadderStep(
                 depth=2,
                 intent="establish_ownership",
-                objective="Clarify what the candidate personally did",
-                example_question="What part of that did you personally handle?",
+                objective=f"Clarify the candidate's hands-on ownership of {topic}",
+                example_question=f"What part of the {topic} solution did you personally implement?",
             ),
             QuestionLadderStep(
                 depth=3,
                 intent="applied_understanding",
-                objective="Understand how the candidate carried out the work",
-                example_question="How did you approach that work?",
+                objective=f"Assess the implementation approach for {topic}",
+                example_question=f"How did you implement the {topic} solution, and why did you choose that approach?",
             ),
             QuestionLadderStep(
                 depth=4,
                 intent="problem_or_complexity",
-                objective="Explore a difficulty, constraint, or failure",
-                example_question="What was difficult about that, and how did you handle it?",
+                objective=f"Explore a technical difficulty or constraint in {topic}",
+                example_question=f"What was the hardest technical part of the {topic} solution, and how did you handle it?",
             ),
             QuestionLadderStep(
                 depth=5,
                 intent="tradeoff_or_transfer",
-                objective="Explore judgment, alternatives, or what they would change",
-                example_question="Looking back, what would you change and why?",
+                objective=f"Explore trade-offs and alternative designs for {topic}",
+                example_question=f"What trade-off did you make in the {topic} solution, and what would you change now?",
             ),
         ],
     )

@@ -2,6 +2,7 @@
 
 import {
   RoomAudioRenderer,
+  StartAudio,
   useConnectionState,
 } from "@livekit/components-react";
 import {
@@ -71,7 +72,7 @@ export function CandidateLiveInterview({
       <div className="interview-workspace">
         <section className="interviewer-stage" aria-label="AI interviewer">
           <VoiceAgentStatus
-            agentName="AI Interviewer"
+            agentName="Interviewer"
             participantLabel="Structured voice interview"
             waitingLabel="The interviewer is joining the room"
           />
@@ -86,13 +87,17 @@ export function CandidateLiveInterview({
           </div>
         </section>
         <VoiceTranscripts
-          candidateLabel="You"
-          agentLabel="AI Interviewer"
+          candidateLabel="Candidate"
+          agentLabel="Interviewer"
           maxLines={60}
         />
       </div>
 
       <RoomAudioRenderer />
+      <StartAudio
+        className="button primary interview-start-audio"
+        label="Enable interviewer audio"
+      />
       <footer className="interview-control-dock">
         <p>Your microphone audio is sent through the secure interview room.</p>
         <VoiceSessionControls

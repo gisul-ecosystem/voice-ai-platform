@@ -200,6 +200,20 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
     assert flow.last_question_intent in required or flow.last_question_intent == "establish_context"
 
 
+def test_off_topic_answer_is_not_marked_usable() -> None:
+    from products.interviewer.coverage import classify_live_answer
+
+    usability, quality, covered = classify_live_answer(
+        "I enjoy playing cricket with my friends on weekends.",
+        required_intents=["establish_context"],
+        evidence_expected=["technical implementation"],
+    )
+
+    assert usability == "off_topic"
+    assert quality == "off_topic"
+    assert covered == []
+
+
 def test_missing_intents_force_probe_instead_of_advance() -> None:
     decision = decide_next_action(
         PolicyState(

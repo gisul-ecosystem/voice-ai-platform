@@ -39,7 +39,7 @@ vi.mock("@livekit/components-react", () => ({
     },
     {
       streamInfo: { id: "a-stream", timestamp: 100 },
-      participantInfo: { identity: "agent" },
+      participantInfo: { identity: "worker-aaptor", kind: "AGENT" },
       text: "Thanks for joining. I'm your interviewer for this conversation. To get started, please introduce yourself.",
     },
   ],
@@ -150,6 +150,17 @@ describe("shared voice UI primitives", () => {
     expect(items[1]).toHaveTextContent("You");
     expect(items[1]).toHaveTextContent("And we are using VLLM and KV");
     expect(items[2]).toHaveTextContent("How did you validate it?");
+  });
+
+  it("labels agent streams correctly when the worker identity differs", async () => {
+    render(<VoiceTranscripts />);
+
+    expect(
+      await screen.findByText(
+        "Thanks for joining. I'm your interviewer for this conversation. To get started, please introduce yourself.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("AI Interviewer").length).toBeGreaterThan(0);
   });
 
   it("requires confirmation before ending an interview", () => {

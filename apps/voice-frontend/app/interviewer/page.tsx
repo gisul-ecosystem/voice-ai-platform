@@ -20,7 +20,7 @@ export default function InterviewerPage() {
             focused AI-led conversation with consent and live transcription.
           </p>
           <div className="hero-actions">
-            <Link className="button primary" href="/interviewer/setup">
+            <Link className="button primary" href="/interviewer/admin">
               Create an interview
             </Link>
             <span>Candidates join through their secure invitation link.</span>

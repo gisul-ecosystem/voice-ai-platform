@@ -25,7 +25,14 @@ from products.interviewer.brain_runtime import (
     definition_id_for_session,
     load_brain_initial_state,
 )
-from products.interviewer.flow import build_candidate_profile, extract_resume_projects
+from products.interviewer.policy import outline_from_definition
+from products.interviewer.flow import (
+    build_candidate_profile,
+    extract_jd_requirements,
+    extract_resume_projects,
+    infer_phase_intent,
+    order_job_topics,
+)
 from voice_platform.runtime import (
     attach_session_metrics,
     build_agent_session,
@@ -41,24 +48,28 @@ GENERIC_OUTLINE = {
             "duration_minutes": 2,
             "topics": ["background", "introduction"],
             "source": "generic",
+            "intent": "intro",
         },
         {
             "name": "project deep-dive",
             "duration_minutes": 10,
             "topics": ["resume projects", "architecture", "implementation"],
             "source": "resume",
+            "intent": "resume_project",
         },
         {
-            "name": "skills",
+            "name": "job requirements",
             "duration_minutes": 8,
             "topics": ["role skills", "problem solving"],
             "source": "jd",
+            "intent": "jd_requirement",
         },
         {
             "name": "role fit",
             "duration_minutes": 7,
             "topics": ["why this role", "motivation"],
             "source": "jd",
+            "intent": "role_fit",
         },
     ]
 }
@@ -141,6 +152,65 @@ def enrich_outline_with_resume(outline: dict, resume_text: str) -> dict:
         seen.add(key.lower())
         merged.append(key)
     target["topics"] = merged
+    return {**outline, "phases": phases}
+
+
+def enrich_outline_with_jd(
+    outline: dict,
+    job_description: str,
+    competencies: list[str] | None = None,
+) -> dict:
+    required = extract_jd_requirements(job_description, competencies)
+    if not required:
+        return outline
+    phases = [dict(phase) for phase in (outline or {}).get("phases") or []]
+    mentioned = " ".join(
+        f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}"
+        for phase in phases
+    ).lower()
+    missing = [name for name in required if name.lower() not in mentioned]
+    if not missing:
+        return {**outline, "phases": phases} if phases else outline
+    target = None
+    for phase in phases:
+        if infer_phase_intent(phase) == "jd_requirement":
+            target = phase
+            break
+    if target is None:
+        insert_at = len(phases)
+        for index, phase in enumerate(phases):
+            if infer_phase_intent(phase) == "role_fit":
+                insert_at = index
+                break
+        phases.insert(
+            insert_at,
+            {
+                "name": "job requirements",
+                "duration_minutes": 8,
+                "topics": order_job_topics(missing),
+                "source": "jd",
+                "intent": "jd_requirement",
+            },
+        )
+        return {**outline, "phases": phases}
+    topics = list(target.get("topics") or [])
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in missing + topics:
+        key = str(item).strip()
+        if not key or key.lower() in seen:
+            continue
+        seen.add(key.lower())
+        merged.append(key)
+    target["topics"] = order_job_topics(merged)
+    target["intent"] = "jd_requirement"
+    return {**outline, "phases": phases}
+
+
+def stamp_phase_intents(outline: dict) -> dict:
+    phases = [dict(phase) for phase in (outline or {}).get("phases") or []]
+    for phase in phases:
+        phase["intent"] = infer_phase_intent(phase)
     return {**outline, "phases": phases}
 
 
@@ -302,16 +372,6 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.add_shutdown_callback(shutdown_session)
 
     clients = load_inference_clients(ctx, logger)
-    outline = await build_outline(ctx)
-    logger.info(
-        "stage1_outline",
-        extra={
-            "event": "stage1_outline",
-            "phase_count": len(outline.get("phases") or []),
-            "phases": [phase.get("name") for phase in (outline.get("phases") or [])],
-        },
-    )
-
     session = build_agent_session(clients)
     attach_session_metrics(session, logger)
     initial_state: dict = {}
@@ -488,8 +548,6 @@ async def entrypoint(ctx: JobContext) -> None:
                 extra={"event": "interview_setup_unavailable"},
             )
 
-    outline = enrich_outline_with_resume(outline, resume_text)
-    outline = scale_outline_to_duration(outline, target_duration_minutes)
     interview_definition: dict | None = None
     if explicit_definition_id:
         try:
@@ -509,6 +567,25 @@ async def entrypoint(ctx: JobContext) -> None:
                 "interview_definition_unavailable",
                 extra={"event": "interview_definition_unavailable"},
             )
+    if interview_definition:
+        outline = outline_from_definition(interview_definition) or GENERIC_OUTLINE
+        outline_source = "published_definition"
+    else:
+        outline = await build_outline(ctx)
+        outline = enrich_outline_with_resume(outline, resume_text)
+        outline = enrich_outline_with_jd(outline, job_description, competencies)
+        outline = stamp_phase_intents(outline)
+        outline = scale_outline_to_duration(outline, target_duration_minutes)
+        outline_source = "generated_plan"
+    logger.info(
+        "stage1_outline",
+        extra={
+            "event": "stage1_outline",
+            "phase_count": len(outline.get("phases") or []),
+            "phases": [phase.get("name") for phase in (outline.get("phases") or [])],
+            "source": outline_source,
+        },
+    )
     candidate_profile = build_candidate_profile(
         resume_text=resume_text,
         interview_setup=context.get("interview_setup") if isinstance(context, dict) else None,
@@ -550,6 +627,10 @@ def run() -> None:
             entrypoint_fnc=entrypoint,
             agent_name=os.getenv("LIVEKIT_AGENT_NAME", "aaptor"),
             port=int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
+            # Default 0.7 is based on whole-machine CPU; on a dev box with
+            # unrelated apps running, that falsely marks the worker "at
+            # capacity" and it refuses to join new interview rooms.
+            load_threshold=float(os.getenv("AAPTOR_LOAD_THRESHOLD", "0.95")),
         )
     )
 

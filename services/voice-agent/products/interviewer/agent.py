@@ -38,10 +38,9 @@ class AaptorAgent(Agent):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are a professional structured interviewer. Speak slowly and "
-                "clearly. Follow the supplied interview plan. Deep-dive from the "
-                "last answer using the candidate's own context. Do not invent "
-                "facts. Do not use markdown."
+                "You are Aaptor, a live technical interviewer. Invent each "
+                "spoken question from the resume, job, and the candidate's last "
+                "answer. Sound like a person in the room."
             )
         )
         flow_kwargs: dict = {}
@@ -168,13 +167,17 @@ class AaptorAgent(Agent):
         if self._opened:
             # Rejoin/restore: do not re-speak the opening or double-write brain.
             return
-        await self.session.say(FALLBACK_OPENING, allow_interruptions=False)
+        parts: list[str] = []
+        async for chunk in self.flow.generate_next_question_stream(None):
+            parts.append(chunk)
+        opening = "".join(parts).strip() or FALLBACK_OPENING
+        await self.session.say(opening, allow_interruptions=False)
         self._opened = True
-        self._last_agent_text = FALLBACK_OPENING
-        turn_id = await self._record("agent", FALLBACK_OPENING)
+        self._last_agent_text = opening
+        turn_id = await self._record("agent", opening)
         await self._persist_brain_after_exchange(
             speaker="agent",
-            text=FALLBACK_OPENING,
+            text=opening,
             turn_id=turn_id,
         )
 

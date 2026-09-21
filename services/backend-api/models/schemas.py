@@ -5,11 +5,15 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+InterviewIntent = Literal["intro", "resume_project", "jd_requirement", "role_fit"]
+
+
 class InterviewPhase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     duration_minutes: int = Field(ge=1, le=60)
     topics: list[str] = Field(min_length=1, max_length=20)
     source: Literal["resume", "jd", "generic"]
+    intent: InterviewIntent = "resume_project"
 
 
 class InterviewOutline(BaseModel):
@@ -77,6 +81,7 @@ class InterviewContextResponse(BaseModel):
     resume_text: str
     interview_setup: InterviewSetupConfig | None = None
     definition_id: str | None = None
+    candidate_profile: dict | None = None
 
 
 class CreateInvitationRequest(BaseModel):
@@ -107,12 +112,13 @@ class CreateScheduledInterviewRequest(BaseModel):
         max_length=320,
         pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
     )
+    candidate_id: str | None = Field(default=None, min_length=3, max_length=128)
     starts_at: datetime
     timezone: str = Field(min_length=1, max_length=64)
     join_early_minutes: int = Field(default=15, ge=0, le=120)
     late_grace_minutes: int = Field(default=15, ge=0, le=120)
     job_description: str = Field(min_length=1, max_length=100_000)
-    resume_text: str = Field(min_length=1, max_length=100_000)
+    resume_text: str | None = Field(default=None, max_length=100_000)
     interview_setup: InterviewSetupConfig
     definition_id: str | None = Field(default=None, min_length=8, max_length=64)
 
@@ -133,6 +139,7 @@ class InvitationPreviewRequest(BaseModel):
 
 class InvitationPreviewResponse(BaseModel):
     interview_id: str
+    definition_id: str | None = None
     candidate_name: str
     title: str
     role: str

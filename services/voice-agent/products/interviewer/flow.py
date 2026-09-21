@@ -44,59 +44,66 @@ logger = logging.getLogger("voice-agent.aaptor")
 
 MAX_PROBES_PER_PHASE = int(os.getenv("MAX_PROBES_PER_PHASE", "8"))
 FALLBACK_OPENING = (
-    "Thanks for joining. I'm your interviewer for this conversation. "
-    "To get started, please introduce yourself — a short overview of your "
-    "background, and the work that is most relevant to this role."
+    "Hi — thanks for coming in. I'm Aaptor, and I'll be speaking with you today. "
+    "Who are you, and what work from the last couple of years are you most proud of?"
 )
 CLOSING_MESSAGE = (
     "Thank you for your time and for sharing your experience. "
     "This concludes the interview."
 )
 FALLBACK_FOLLOWUP = (
-    "Thank you. On that same piece of work, what was the main API or data store "
-    "you owned, and what happened when it failed?"
+    "What was the hardest decision on that work, and what would have gone wrong "
+    "if you chose the other option?"
 )
 FALLBACK_FOLLOWUP_NEUTRAL = (
     "Thank you. Could you share one specific example of work you personally "
     "handled, and what happened as a result?"
 )
 
-STAGE2_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Sound like a calm, clear human in the room. Speak slowly: one idea at a time, short sentences, easy for anyone who uses Indian English at work. Invent every question from this resume, this job, and their last answer.
+INTERVIEWER_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Behave like a thoughtful human in the room, not a script or a form. Invent every spoken line yourself from the materials below.
 
-Interview length: about {target_minutes} minutes. Elapsed: {elapsed_minutes} min. Remaining: {remaining_minutes} min.
-Current thread: {phase_name} (guide {duration_minutes} min, {phase_elapsed_minutes} used). Topics: {topics}
-Follow-ups here: {probe_count}
-Later (only after every resume project has had a technical question, unless time is almost gone): {next_phase}
+How you interview:
+- Listen to the candidate's last answer as a whole story (what they did, why, how, what happened). Do not pick a keyword and bounce it back.
+- Project questions must come from BOTH that last answer and the resume facts for the current project. If they skipped a resume detail, ask how it fits what they just said. If they already covered it, go one layer deeper in their answer.
+- Keep this order, without announcing it: intro, then resume projects one by one, then job skills as their own questions (not hung on a project), then DSA as standalone algorithm/coding questions if the job needs it, then role-fit only if time remains.
+- One or two questions per project or skill, then ADVANCE to the next uncovered item. Do not keep circling the same project. Skills and DSA are independent of projects. If CURRENT SECTION is jd_requirement and the topic is DSA, invent a coding or algorithm question. Do not mention their projects. Do not connect it to a project.
+- Transitions should feel like a person changing subject, not a labeled next round. Do not say moving on, next section, walk me through, you mentioned, tell me more, or what challenges.
+- Invent a new question every turn. Do not repeat or rephrase a question you already asked.
+- Speak simply, one or two sentences. No markdown. Never say phase, outline, probe, or advance.
+- Do not invent employers, projects, or skills. Anti-bias: no age, family, nationality, or health.
+
+If Follow-ups on this thread is 1 or more, ADVANCE. Ask about the next uncovered project, skill, or DSA item — not another angle on the same one.
+
+CURRENT SECTION: {intent}
+CURRENT PROJECT OR TOPIC: {focus_item}
+AGENDA (internal only — do not read this aloud):
+{agenda}
+Time: about {target_minutes} minutes total, {elapsed_minutes} elapsed, {remaining_minutes} left. Follow-ups on this thread: {probe_count}. Later: {next_phase}
 
 {resume_brief}
+
+Resume facts for the current project ({focus_item}):
+{resume_project_context}
 
 Job description:
 {jd_excerpt}
 
 Role competencies: {competencies}
-
-Projects still missing a technical question: {uncovered_projects}
+Job skills still missing: {uncovered_skills}
+DSA still missing: {uncovered_dsa}
+Projects still missing: {uncovered_projects}
 Projects already touched: {covered_projects}
 
-Recent candidate turns:
+Recent candidate answers:
 {recent_turns}
 
-Questions you already asked — do not copy the wording, the stem, or the pattern:
+Questions you already asked:
 {recent_questions}
 
-Last answer:
+Last candidate answer:
 {last_turn}
 
-Think, then choose PROBE or ADVANCE.
-{phase_pacing}
-- Deep-dive slowly. Stay on the same answer. Ask the next layer: first what they built, then how it worked, then one technical detail (API, schema, queue, lock, index, timeout, retry), then a failure or tradeoff. Do not jump to a new project until that thread has a real technical example.
-- Use proper technical terms, but always attach context from their words. Example: "You mentioned the payments API — when the downstream timed out, did you retry at the HTTP client or with a queue?" Do not dump jargon they did not mention.
-- Prefer PROBE. ADVANCE only after two or three connected technical follow-ups, unless time is almost gone.
-- Never repeat an asking style (no looping walk-me-through / challenges / tell-me-more).
-- You must still reach every listed resume project. If time is short, one clear technical question per remaining project.
-- Do not invent employers, projects, or skills. Anti-bias: no age, family, nationality, or health.
-
-Speak 1-2 short sentences: a brief reaction, then one original question. Simple English. No markdown, lists, or quotation marks. Never say phase, outline, probe, or advance.
+Choose PROBE only for the first follow-up on this topic. Otherwise ADVANCE to the next uncovered project, skill, or DSA item.
 
 Output format (strict):
 Line 1: DECISION: probe
@@ -105,45 +112,16 @@ Line 1: DECISION: advance
 Then a blank line, then the spoken words only.
 """
 
-INTRO_FOLLOWUP_SYSTEM = """You are Aaptor, a senior technical interviewer. Speak slowly and clearly. The candidate just introduced themselves.
+STAGE2_SYSTEM = INTERVIEWER_SYSTEM
+
+OPENING_SYSTEM = """You are Aaptor, a live technical interviewer. Invent a short, warm opening in your own words. Do not use a memorized script.
 
 {resume_brief}
 
 Job description:
 {jd_excerpt}
 
-Role competencies: {competencies}
-
-Projects you must eventually cover: {uncovered_projects}
-
-Their introduction:
-{last_turn}
-
-- Always DECISION: probe.
-- Start a slow deep-dive: pick one project or system they named (or the first uncovered resume project) and ask one technical question in context — for example the API, data store, or their ownership. Do not jump to a hard design puzzle yet.
-- Use a technical term and explain it in the same sentence with their context.
-- 1-2 short spoken sentences. No markdown, lists, or quotation marks. Never say phase, outline, probe, or advance.
-- Do not invent employers, projects, or skills. Anti-bias: no age, family, nationality, or health.
-
-Output format (strict):
-Line 1: DECISION: probe
-
-Then a blank line, then the spoken words only.
-"""
-
-OPENING_SYSTEM = """You are Aaptor, a live technical interviewer. Speak slowly and clearly, in simple English. Write a fresh opening. Do not use a memorized script.
-
-{resume_brief}
-
-Job description:
-{jd_excerpt}
-
-Role competencies: {competencies}
-First thread (guide only): {phase_name}. Topics: {topics}
-
-Greet them, say you are the interviewer, and invite a short introduction. If the resume names projects, you may say you looked over their work and will go through those projects one by one, in some technical depth — without starting the grilling yet.
-
-2-3 short spoken sentences. Warm and easy to follow. No markdown, lists, or quotation marks. Do not mention phases, outlines, or probes. Do not invent projects. Anti-bias: no identity or accent comments.
+Greet them, say you are the interviewer, and invite a natural introduction — who they are and the work they are proud of. Do not start grilling a project yet. Two or three short spoken sentences. No markdown. Do not invent projects.
 
 Output the spoken words only. No DECISION line.
 """
@@ -164,6 +142,7 @@ _NEXT_HEADING = re.compile(
 _PROJECT_LABEL = re.compile(
     r"(?i)^\s*(?:project(?:\s+name)?|title)\s*[:\-–]\s*(.+)$"
 )
+_INLINE_PROJECTS = re.compile(r"(?i)^\s*projects?\s*[:\-–]\s+(.+)$")
 _BULLET = re.compile(r"^\s*(?:[-•*]|\d+[.)])\s+(.+)$")
 
 
@@ -199,6 +178,18 @@ def extract_resume_projects(resume_text: str) -> list[str]:
         if _SECTION_HEADINGS.match(line):
             in_section = True
             continue
+        inline = _INLINE_PROJECTS.match(line)
+        if inline:
+            rest = re.split(
+                r"(?i)\b(skills|education|experience|certifications)\b",
+                inline.group(1),
+                maxsplit=1,
+            )[0]
+            for part in re.split(r"[;•]|\s+\|\s+", rest):
+                title = _project_title(part)
+                if title and title.lower() not in {"project", "projects"}:
+                    titles.append(title)
+            continue
         if in_section and _NEXT_HEADING.match(line):
             in_section = False
             continue
@@ -227,6 +218,123 @@ def extract_resume_projects(resume_text: str) -> list[str]:
     return unique
 
 
+INTENT_VALUES = {"intro", "resume_project", "jd_requirement", "role_fit"}
+_JD_TOPIC_PATTERNS = (
+    (
+        re.compile(
+            r"\b(dsa|data[- ]structures?(?:\s+and\s+algorithms?)?|"
+            r"algorithms?|leetcode|coding (?:round|interview|problem)s?)\b",
+            re.I,
+        ),
+        "DSA",
+    ),
+    (re.compile(r"\bsystem design\b", re.I), "System design"),
+    (re.compile(r"\b(sql|postgresql|mysql)\b", re.I), "SQL"),
+)
+
+
+def is_dsa_topic(name: str) -> bool:
+    blob = (name or "").lower()
+    return any(
+        token in blob
+        for token in (
+            "dsa",
+            "algorithm",
+            "data structure",
+            "leetcode",
+            "coding round",
+            "coding problem",
+        )
+    )
+
+
+def order_job_topics(names: list[str]) -> list[str]:
+    skills = [item for item in names if not is_dsa_topic(item)]
+    dsa = [item for item in names if is_dsa_topic(item)]
+    return skills + dsa
+
+
+def infer_phase_intent(phase: dict) -> str:
+    listed = str(phase.get("intent") or "").strip().lower()
+    if listed in INTENT_VALUES:
+        return listed
+    blob = (
+        f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}"
+    ).lower()
+    source = str(phase.get("source") or "").lower()
+    if any(token in blob for token in ("warm", "intro", "opening")):
+        return "intro"
+    if any(token in blob for token in ("role", "fit", "behav", "motiv", "close")):
+        return "role_fit"
+    if "project" in blob or source == "resume":
+        return "resume_project"
+    return "jd_requirement"
+
+
+def extract_jd_requirements(
+    job_description: str, competencies: list[str] | None = None
+) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(label: str) -> None:
+        key = (label or "").strip()
+        if not key or key.lower() in seen:
+            return
+        seen.add(key.lower())
+        found.append(key)
+
+    for item in competencies or []:
+        add(str(item))
+    text = job_description or ""
+    for pattern, label in _JD_TOPIC_PATTERNS:
+        if pattern.search(text):
+            add(label)
+    return order_job_topics(found[:12])
+
+
+def _item_mentioned(name: str, text: str) -> bool:
+    blob = (text or "").lower()
+    full = (name or "").strip().lower()
+    if not full:
+        return False
+    if full in blob:
+        return True
+    tokens = [token for token in re.split(r"\W+", full) if len(token) > 3]
+    if not tokens:
+        return False
+    return all(token in blob for token in tokens[:2])
+
+
+def resume_project_excerpt(resume_text: str, project_name: str, *, limit: int = 900) -> str:
+    """Pull resume lines around a named project so follow-ups can use real facts."""
+    cleaned = (resume_text or "").strip()
+    name = (project_name or "").strip()
+    if not cleaned:
+        return "(resume not provided)"
+    if not name:
+        return clip_source_text(cleaned, limit)
+    lines = cleaned.splitlines()
+    hits: list[int] = []
+    for index, line in enumerate(lines):
+        if _item_mentioned(name, line):
+            hits.append(index)
+    if not hits:
+        return clip_source_text(cleaned, limit)
+    chunks: list[str] = []
+    seen: set[int] = set()
+    for hit in hits[:3]:
+        start = max(0, hit - 1)
+        end = min(len(lines), hit + 4)
+        for index in range(start, end):
+            if index in seen:
+                continue
+            seen.add(index)
+            text = lines[index].strip()
+            if text:
+                chunks.append(text)
+    excerpt = " ".join(chunks)
+    return clip_source_text(excerpt, limit) if excerpt else clip_source_text(cleaned, limit)
 def build_candidate_profile(
     *,
     resume_text: str = "",
@@ -420,6 +528,11 @@ class InterviewFlow:
             ]
             self.competencies = [name for name in names if name] or self.competencies
         self.resume_projects = extract_resume_projects(resume_text)
+        self.jd_requirements = extract_jd_requirements(
+            job_description, self.competencies
+        )
+        self.focus_item = ""
+        self._touched_topics: set[str] = set()
         self.candidate_profile = build_candidate_profile(
             resume_text=resume_text,
             interview_setup=None,
@@ -450,6 +563,7 @@ class InterviewFlow:
         self.clarify_after = non_answer["clarify_after"]
         self.rephrase_after = non_answer["rephrase_after"]
         self.change_topic_after = non_answer["change_topic_after"]
+        self.close_after_unusable = non_answer["close_after"]
         phase_minutes = sum(
             max(int(phase.get("duration_minutes", 0)), 0) for phase in self.phases
         )
@@ -506,28 +620,43 @@ class InterviewFlow:
     def apply_decision(self, decision: str) -> None:
         at_last = self.phase_index >= max(len(self.phases) - 1, 0)
         must_advance = self._should_leave_phase()
-        if at_last:
+        if decision != "advance" and not must_advance:
             self.probe_count += 1
-            if self._time_up():
-                self.completed = True
-                logger.info(
-                    "interview_completed",
-                    extra={
-                        "event": "interview_completed",
-                        "phase_index": self.phase_index,
-                    },
-                )
+            if self.policy_mode or self.probe_count < self._topic_probe_limit():
+                return
+            must_advance = True
+        if not self.policy_mode and self._rotate_focus():
+            return
+        if at_last:
+            if decision == "advance" or must_advance:
+                if self._time_up():
+                    self.completed = True
+                    logger.info(
+                        "interview_completed",
+                        extra={
+                            "event": "interview_completed",
+                            "phase_index": self.phase_index,
+                        },
+                    )
+            else:
+                self.probe_count += 1
             return
         next_phase = self.next_phase()
-        skip_soft = (
-            decision == "advance"
+        skip_ahead = False
+        if (
+            not self.policy_mode
             and next_phase is not None
-            and self._is_soft_phase_name(str(next_phase.get("name") or ""))
-            and bool(self._uncovered_projects())
-            and self._time_remaining_minutes() > 2
             and not must_advance
-        )
-        if skip_soft:
+            and self._time_remaining_minutes() > 2
+        ):
+            next_intent = infer_phase_intent(next_phase)
+            if next_intent == "role_fit" and (
+                self._uncovered_projects() or self._uncovered_requirements()
+            ):
+                skip_ahead = True
+            elif next_intent == "jd_requirement" and self._uncovered_projects():
+                skip_ahead = True
+        if skip_ahead:
             self.probe_count += 1
             return
         if decision == "advance" or must_advance:
@@ -535,6 +664,8 @@ class InterviewFlow:
             self.phase_index += 1
             self.probe_count = 0
             self.phase_started_at = time.monotonic()
+            self.focus_item = ""
+            self._ensure_focus(None)
             logger.info(
                 "phase_advanced",
                 extra={
@@ -542,6 +673,7 @@ class InterviewFlow:
                     "from_phase": previous,
                     "to_phase": self.current_phase().get("name"),
                     "forced": must_advance and decision != "advance",
+                    "intent": self._phase_intent(),
                 },
             )
             return
@@ -556,6 +688,11 @@ class InterviewFlow:
             return max(1, min(self.max_probes_per_phase, phase_cap))
         flow_limit = max(3, self._phase_minutes() // 2)
         return min(self.max_probes_per_phase, flow_limit)
+
+    def _topic_probe_limit(self) -> int:
+        if self._phase_intent() == "resume_project":
+            return 2
+        return 1
 
     def _policy_state(self, *, pending_candidate_turn: bool = False) -> PolicyState:
         phase = self.current_phase()
@@ -612,22 +749,41 @@ class InterviewFlow:
             clarify_after=self.clarify_after,
             rephrase_after=self.rephrase_after,
             change_topic_after=self.change_topic_after,
+            close_after=self.close_after_unusable,
         )
 
     def _current_policy_decision(
-        self, *, pending_candidate_turn: bool = False
+        self,
+        *,
+        pending_candidate_turn: bool = False,
+        advance_if_ready: bool = False,
     ) -> PolicyDecision | None:
         if not self.policy_mode:
             return None
         decision = decide_next_action(
             self._policy_state(pending_candidate_turn=pending_candidate_turn)
         )
+        if advance_if_ready and decision.forced_flow_decision == "advance" and not self.completed:
+            # Hop the phase we're leaving now (once), so the prompt built from this
+            # decision reflects the competency we're entering (real name, ladder
+            # objective, missing intents) instead of the one we just left. Only a
+            # single hop — cascading through multiple phases in one turn would let
+            # a trivially "complete" competency get skipped without ever being asked.
+            self.apply_decision("advance")
+            decision = decide_next_action(
+                self._policy_state(pending_candidate_turn=pending_candidate_turn)
+            )
         self.last_policy_decision = decision
         return decision
 
     def _is_warmup_phase(self) -> bool:
+        if self._phase_intent() == "intro":
+            return True
         name = str(self.current_phase().get("name") or "").lower()
-        return any(token in name for token in ("warm", "intro", "opening", "map", "candidate"))
+        return any(
+            token in name
+            for token in ("warm", "intro", "opening", "map", "candidate")
+        )
 
     @staticmethod
     def _is_soft_phase_name(name: str) -> bool:
@@ -637,23 +793,127 @@ class InterviewFlow:
             for token in ("role", "fit", "behav", "motiv", "close", "culture")
         )
 
+    def _phase_intent(self) -> str:
+        return infer_phase_intent(self.current_phase())
+
+    def _turn_intent(self, *, is_intro_reply: bool) -> str:
+        if is_intro_reply:
+            return "intro"
+        return self._phase_intent()
+
     def _is_project_phase(self) -> bool:
+        if self._phase_intent() == "resume_project":
+            return True
         phase = self.current_phase()
         blob = f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}".lower()
         if "project" in blob:
             return True
         return any(project.lower() in blob for project in self.resume_projects)
 
-    def _spoken_so_far(self) -> str:
-        return " ".join(self.interviewer_turns + self.candidate_turns).lower()
+    def _covered_items(self, names: list[str]) -> list[str]:
+        return [name for name in names if name.lower() in self._touched_topics]
+
+    def _uncovered_items(self, names: list[str]) -> list[str]:
+        return [name for name in names if name.lower() not in self._touched_topics]
 
     def _covered_projects(self) -> list[str]:
-        spoken = self._spoken_so_far()
-        return [name for name in self.resume_projects if name.lower() in spoken]
+        return self._covered_items(self.resume_projects)
 
     def _uncovered_projects(self) -> list[str]:
-        spoken = self._spoken_so_far()
-        return [name for name in self.resume_projects if name.lower() not in spoken]
+        return self._uncovered_items(self.resume_projects)
+
+    def _covered_requirements(self) -> list[str]:
+        return self._covered_items(self.jd_requirements)
+
+    def _uncovered_requirements(self) -> list[str]:
+        return self._uncovered_items(self.jd_requirements)
+
+    def _project_from_text(self, text: str | None) -> str:
+        blob = text or ""
+        for name in self.resume_projects:
+            if _item_mentioned(name, blob):
+                return name
+        return ""
+
+    def _ensure_focus(self, last_turn: str | None, *, is_intro_reply: bool = False) -> None:
+        intent = self._turn_intent(is_intro_reply=is_intro_reply)
+        if intent == "intro":
+            self.focus_item = (
+                self._project_from_text(last_turn)
+                or (self._uncovered_projects() or self.resume_projects or ["your recent work"])[0]
+            )
+            return
+        if intent == "resume_project":
+            if self.focus_item and self.focus_item.lower() not in self._touched_topics:
+                return
+            uncovered = self._uncovered_projects()
+            named = self._project_from_text(last_turn)
+            if named and named in uncovered:
+                self.focus_item = named
+                return
+            self.focus_item = (
+                uncovered or self.resume_projects or [self.focus_item or "this project"]
+            )[0]
+            return
+        if intent == "jd_requirement":
+            if self.focus_item and self.focus_item.lower() not in self._touched_topics:
+                return
+            uncovered = (
+                self._uncovered_items(self._skill_requirements())
+                or self._uncovered_items(self._dsa_requirements())
+            )
+            self.focus_item = (
+                uncovered or self.jd_requirements or ["this job requirement"]
+            )[0]
+            return
+        self.focus_item = "why this role fits your experience"
+
+    def _rotate_focus(self) -> bool:
+        if self.focus_item:
+            self._touched_topics.add(self.focus_item.lower())
+        intent = self._phase_intent()
+        if intent == "resume_project":
+            remaining = [
+                name
+                for name in self._uncovered_projects()
+                if name.lower() != (self.focus_item or "").lower()
+            ]
+            if remaining and self._time_remaining_minutes() > 2:
+                self.focus_item = remaining[0]
+                self.probe_count = 0
+                return True
+        if intent == "jd_requirement":
+            remaining = [
+                name
+                for name in (
+                    self._uncovered_items(self._skill_requirements())
+                    + self._uncovered_items(self._dsa_requirements())
+                )
+                if name.lower() != (self.focus_item or "").lower()
+            ]
+            if remaining and self._time_remaining_minutes() > 2:
+                self.focus_item = remaining[0]
+                self.probe_count = 0
+                return True
+        return False
+
+    def _skill_requirements(self) -> list[str]:
+        return [name for name in self.jd_requirements if not is_dsa_topic(name)]
+
+    def _dsa_requirements(self) -> list[str]:
+        return [name for name in self.jd_requirements if is_dsa_topic(name)]
+
+    def _agenda_text(self) -> str:
+        projects = ", ".join(self.resume_projects) or "(none parsed)"
+        skills = ", ".join(self._skill_requirements()) or "(none parsed from JD)"
+        dsa = ", ".join(self._dsa_requirements()) or "(none — skip this section)"
+        return (
+            "1. Intro — candidate background.\n"
+            f"2. Resume projects, one by one (project context only): {projects}\n"
+            f"3. Required job skills, independent of those projects: {skills}\n"
+            f"4. DSA / algorithms as standalone questions, not about a project: {dsa}\n"
+            "5. Role fit only if time remains."
+        )
 
     def _time_remaining_minutes(self) -> int:
         return max(0, self.target_duration_minutes - self._elapsed_minutes())
@@ -669,30 +929,13 @@ class InterviewFlow:
     def _ready_to_close(self) -> bool:
         return self._time_up() and len(self.candidate_turns) >= self.min_turns_before_close
 
-    def _phase_pacing(self) -> str:
-        uncovered = ", ".join(self._uncovered_projects()) or "none"
-        if self._is_warmup_phase():
-            return (
-                "- Warm-up is a short bridge. After the intro, start a slow "
-                "technical deep-dive on one named resume project. ADVANCE later "
-                f"toward uncovered projects: {uncovered}."
-            )
-        return (
-            "- Stay on this answer and go one layer deeper with a technical term "
-            "in context. When you ADVANCE, go to the next uncovered resume "
-            f"project ({uncovered}), not generic motivation."
-        )
 
     def _too_early_to_advance(self) -> bool:
         if self._is_warmup_phase():
             return False
         if self._should_leave_phase():
             return False
-        remaining = self._time_remaining_minutes()
-        uncovered = self._uncovered_projects()
-        if uncovered and remaining <= max(4, len(uncovered) * 2):
-            return self.probe_count < 1
-        return self.probe_count < 3
+        return self.probe_count < 1
 
     def _normalize_decision(self, decision: str, *, is_intro_reply: bool) -> str:
         if self.policy_mode:
@@ -735,17 +978,20 @@ class InterviewFlow:
                 return True
             return self.probe_count >= self._phase_probe_limit()
         if self._is_warmup_phase():
-            return self.probe_count >= min(2, self.max_probes_per_phase)
-        if (
-            self._is_project_phase()
-            and self._uncovered_projects()
-            and self._time_remaining_minutes() > 3
-            and self.probe_count < self._phase_probe_limit()
-        ):
-            return False
+            return self.probe_count >= 1
+        remaining_topics = (
+            self._uncovered_projects()
+            if self._is_project_phase()
+            else self._uncovered_items(self._skill_requirements())
+            + self._uncovered_items(self._dsa_requirements())
+            if self._phase_intent() == "jd_requirement"
+            else []
+        )
+        if remaining_topics and self._time_remaining_minutes() > 2:
+            return self.probe_count >= self._phase_probe_limit()
         phase_elapsed = time.monotonic() - self.phase_started_at
         return (
-            self.probe_count >= self._phase_probe_limit()
+            self.probe_count >= self._topic_probe_limit()
             or phase_elapsed >= self._phase_minutes() * 60
         )
 
@@ -776,6 +1022,30 @@ class InterviewFlow:
             self.completed = True
             return CLOSING_MESSAGE
         return None
+
+    def _resume_project_context(self) -> str:
+        return resume_project_excerpt(self.resume_text, self.focus_item)
+
+    def _user_turn_content(self, last_candidate_turn: str, *, is_intro_reply: bool) -> str:
+        previous = self.interviewer_turns[-1] if self.interviewer_turns else ""
+        earlier = self.candidate_turns[-3:]
+        parts = []
+        if is_intro_reply:
+            parts.append("The candidate just introduced themselves. Use the whole intro.")
+        if previous:
+            parts.append(f"Your previous question:\n{previous}")
+        if earlier:
+            parts.append(
+                "Earlier answers in this thread:\n"
+                + "\n".join(f"- {turn}" for turn in earlier)
+            )
+        parts.append(f"Latest answer, in full:\n{last_candidate_turn.strip()}")
+        if self._phase_intent() in {"intro", "resume_project"} or is_intro_reply:
+            parts.append(
+                f"Resume facts for {self.focus_item or 'this project'}:\n"
+                f"{self._resume_project_context()}"
+            )
+        return "\n\n".join(parts)
 
     def _record_answer_quality(self, last_candidate_turn: str, *, is_intro_reply: bool) -> None:
         competency_id = (
@@ -883,6 +1153,8 @@ class InterviewFlow:
             )
             or "(use the last answer)",
             "allowed_probes": "; ".join(self._allowed_probes()) or "(STAR probes)",
+            "interview_structure": self._interview_structure_text(),
+            "published_context": self._published_context_text(),
             "job_target_level": self._job_target_level(),
             "candidate_framing": self._profile_type(),
             "claim_brief": claim_brief(self.candidate_profile),
@@ -892,6 +1164,8 @@ class InterviewFlow:
             "recent_questions": "\n".join(f"- {q}" for q in self.interviewer_turns[-8:])
             or "(none yet)",
             "last_turn": last_candidate_turn or "(interview opening)",
+            "answer_quality": self.last_answer_quality,
+            "answer_adaptation": self._answer_adaptation_hint(),
             "framing_notes": framing_notes(self._profile_type(), self._job_target_level()),
             "role_title": str(role.get("title") or ""),
         }
@@ -901,6 +1175,90 @@ class InterviewFlow:
         return system + "\n\n" + OPENING_INSTRUCTIONS_V2.format(**briefing), (
             "Open the interview in your own words and invite them to introduce themselves."
         )
+
+    def _answer_adaptation_hint(self) -> str:
+        if self.last_answer_quality in {"off_topic", "unsupported"}:
+            return "stay in the same competency, acknowledge briefly, and ask an easier adjacent question"
+        if self.last_answer_quality in {"unclear", "partial"}:
+            return "ask for the specific missing evidence before changing topic"
+        if self.last_answer_quality == "sufficient":
+            return "increase depth by at most one level or move to the next uncovered topic"
+        return "continue with the policy-required intent"
+
+    def _interview_structure_text(self) -> str:
+        lines: list[str] = []
+        for index, phase in enumerate(self.phases, start=1):
+            name = str(phase.get("name") or "section").strip()
+            topics = ", ".join(str(item) for item in (phase.get("topics") or [])[:4])
+            depth = phase.get("max_depth") or "standard"
+            probes = phase.get("max_probes") or "standard"
+            lines.append(
+                f"{index}. {name}: topics={topics or '(none)'}, "
+                f"max_depth={depth}, max_follow_ups={probes}"
+            )
+        return "\n".join(lines) or "(structure unavailable)"
+
+    def _published_context_text(self) -> str:
+        definition = self.interview_definition
+        if not isinstance(definition, dict):
+            return "(published definition unavailable)"
+
+        def values(items: Any, limit: int = 12) -> str:
+            result: list[str] = []
+            for item in items if isinstance(items, list) else []:
+                if isinstance(item, dict):
+                    text = str(item.get("text") or "").strip()
+                else:
+                    text = str(item).strip()
+                if text:
+                    result.append(text[:300])
+            return "; ".join(result[:limit]) or "(none)"
+
+        intelligence = definition.get("job_intelligence")
+        role = intelligence.get("role") if isinstance(intelligence, dict) else {}
+        lines = [
+            "REFERENCE CONTEXT (use for technical grounding; policy remains authoritative):",
+            f"Role: {role.get('title', '')} | Domain: {role.get('domain', '')} | Level: {role.get('target_level', '')}",
+        ]
+        if isinstance(intelligence, dict):
+            for label, key in (
+                ("Responsibilities", "responsibilities"),
+                ("Mandatory requirements", "mandatory_requirements"),
+                ("Preferred requirements", "preferred_requirements"),
+                ("Knowledge", "knowledge"),
+                ("Skills", "skills"),
+                ("Tools", "tools"),
+                ("Expected outcomes", "expected_outcomes"),
+            ):
+                lines.append(f"{label}: {values(intelligence.get(key))}")
+
+        ladders = {
+            str(item.get("competency_id")): item
+            for item in definition.get("question_ladders") or []
+            if isinstance(item, dict)
+        }
+        lines.append("Competencies and technical coverage:")
+        for item in (definition.get("competencies") or [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            competency_id = str(item.get("id") or "")
+            lines.append(
+                f"- {item.get('name', competency_id)}: {str(item.get('definition') or '')[:500]}"
+            )
+            lines.append(f"  Evidence: {values(item.get('evidence_expected'), 8)}")
+            ladder = ladders.get(competency_id) or {}
+            for step in (ladder.get("levels") or [])[:5]:
+                if isinstance(step, dict):
+                    lines.append(
+                        f"  Depth {step.get('depth')}, {step.get('intent')}: "
+                        f"{str(step.get('objective') or '')[:240]} | "
+                        f"Example: {str(step.get('example_question') or '')[:300]}"
+                    )
+        lines.append("Resume facts:")
+        lines.append(claim_brief(self.candidate_profile, limit=30))
+        lines.append("Raw JD excerpt:")
+        lines.append(clip_source_text(self.job_description, 3000))
+        return "\n".join(lines)[:20000]
 
     def _fallback_spoken_question(self, policy: PolicyDecision | None) -> str:
         intent = policy.intent if policy else "opening"
@@ -912,6 +1270,17 @@ class InterviewFlow:
             competency_id=competency_id,
             intent=intent,
         )
+
+    def _configured_ladder_question(self, policy: PolicyDecision | None) -> str:
+        if not policy or not policy.competency_id:
+            return ""
+        for step in ladder_steps(self.interview_definition, policy.competency_id):
+            if (
+                str(step.get("intent") or "").strip() == policy.intent
+                and str(step.get("example_question") or "").strip()
+            ):
+                return str(step["example_question"]).strip()
+        return ""
 
     def _coerce_generated(
         self,
@@ -946,6 +1315,9 @@ class InterviewFlow:
         )
         self._capture_replay(raw, validator_ok=result.ok, reasons=result.reasons)
         if result.ok:
+            configured_question = self._configured_ladder_question(policy)
+            if configured_question:
+                result.question.question = configured_question
             return result.question
         logger.info(
             "question_validation_failed",
@@ -970,7 +1342,8 @@ class InterviewFlow:
             return self._structured_system_prompt(
                 last_candidate_turn,
                 self._current_policy_decision(
-                    pending_candidate_turn=bool(last_candidate_turn)
+                    pending_candidate_turn=bool(last_candidate_turn),
+                    advance_if_ready=True,
                 ),
             )
         phase = self.current_phase()
@@ -980,8 +1353,8 @@ class InterviewFlow:
             if next_phase
             else "none (closing)"
         )
-        recent = self.candidate_turns[-2:]
-        recent_questions = self.interviewer_turns[-3:]
+        recent = self.candidate_turns[-4:]
+        recent_questions = self.interviewer_turns[-8:]
         briefing = source_briefing(
             job_description=self.job_description,
             resume_text=self.resume_text,
@@ -992,7 +1365,17 @@ class InterviewFlow:
             "uncovered_projects": ", ".join(self._uncovered_projects())
             or "(none left)",
             "covered_projects": ", ".join(self._covered_projects()) or "(none yet)",
+            "uncovered_skills": ", ".join(
+                self._uncovered_items(self._skill_requirements())
+            )
+            or "(none left)",
+            "uncovered_dsa": ", ".join(self._uncovered_items(self._dsa_requirements()))
+            or "(none left)",
+            "covered_requirements": ", ".join(self._covered_requirements())
+            or "(none yet)",
         }
+        is_intro_reply = bool(last_candidate_turn) and not self.candidate_turns
+        self._ensure_focus(last_candidate_turn, is_intro_reply=is_intro_reply)
         policy = (
             self._current_policy_decision(
                 pending_candidate_turn=bool(last_candidate_turn)
@@ -1002,38 +1385,34 @@ class InterviewFlow:
         )
         policy_block = f"\n{policy_prompt_block(policy)}\n" if policy else ""
         if last_candidate_turn:
-            if not self.candidate_turns:
-                prompt = INTRO_FOLLOWUP_SYSTEM.format(
-                    last_turn=last_candidate_turn,
-                    **briefing,
-                    **coverage,
+            last_turn = last_candidate_turn
+            if is_intro_reply:
+                last_turn = (
+                    "The candidate just introduced themselves:\n"
+                    f"{last_candidate_turn}"
                 )
-                return policy_block + prompt, last_candidate_turn
-            prompt = STAGE2_SYSTEM.format(
-                phase_name=phase.get("name", "unnamed"),
-                duration_minutes=phase.get("duration_minutes", 0),
-                topics=phase_topics(phase),
+            prompt = INTERVIEWER_SYSTEM.format(
+                intent=self._phase_intent(),
+                focus_item=self.focus_item or phase.get("name", "this topic"),
+                agenda=self._agenda_text(),
                 probe_count=self.probe_count,
                 next_phase=next_phase_label,
                 target_minutes=self.target_duration_minutes,
                 elapsed_minutes=self._elapsed_minutes(),
                 remaining_minutes=self._time_remaining_minutes(),
-                phase_elapsed_minutes=max(
-                    0, int((time.monotonic() - self.phase_started_at) / 60)
-                ),
-                phase_pacing=self._phase_pacing(),
                 recent_turns="\n".join(f"- {turn}" for turn in recent)
                 or "(none yet)",
                 recent_questions="\n".join(f"- {q}" for q in recent_questions)
                 or "(none yet)",
-                last_turn=last_candidate_turn,
+                resume_project_context=self._resume_project_context(),
+                last_turn=last_turn,
                 **briefing,
                 **coverage,
             )
-            return policy_block + prompt, last_candidate_turn
+            return policy_block + prompt, self._user_turn_content(
+                last_candidate_turn, is_intro_reply=is_intro_reply
+            )
         prompt = OPENING_SYSTEM.format(
-            phase_name=phase.get("name", "unnamed"),
-            topics=phase_topics(phase),
             **briefing,
         )
         return policy_block + prompt, (
@@ -1047,23 +1426,24 @@ class InterviewFlow:
         if closing:
             return closing
         if last_candidate_turn is None:
-            started = time.perf_counter()
-            opening = FALLBACK_OPENING
-            self.last_question_competency_id = None
-            self.last_question_intent = "opening"
-            self.last_question_depth = 1
-            self.last_question_claim_ids = []
-            self.last_raw_model_output = None
-            self.last_validator_ok = None
-            self.last_validator_reasons = []
-            self._commit_turn(
-                None,
-                "probe",
-                started=started,
-                is_opening=True,
-                question=opening,
-            )
-            return opening
+            if not self.policy_mode:
+                started = time.perf_counter()
+                opening = FALLBACK_OPENING
+                self.last_question_competency_id = None
+                self.last_question_intent = "opening"
+                self.last_question_depth = 1
+                self.last_question_claim_ids = []
+                self.last_raw_model_output = None
+                self.last_validator_ok = None
+                self.last_validator_reasons = []
+                self._commit_turn(
+                    None,
+                    "probe",
+                    started=started,
+                    is_opening=True,
+                    question=opening,
+                )
+                return opening
         if last_candidate_turn and self.policy_mode:
             is_intro_reply = not self.candidate_turns
             self._record_answer_quality(
@@ -1267,41 +1647,37 @@ class InterviewFlow:
         stream = getattr(self.llm_client, "generate_reply_stream", None) or getattr(
             self.llm_client, "stream_reply", None
         )
-        if last_candidate_turn is None:
-            started = time.perf_counter()
-            yield FALLBACK_OPENING
-            self._commit_turn(
-                None,
-                "probe",
-                started=started,
-                is_opening=True,
-                question=FALLBACK_OPENING,
-            )
-            return
-
         if stream is None:
             yield await self.generate_next_question(last_candidate_turn)
             return
 
         prompt, user_content = self._prompt_for_turn(last_candidate_turn)
         started = time.perf_counter()
+        is_opening = last_candidate_turn is None
         parser = SpokenQuestionStream()
         spoken_parts: list[str] = []
         try:
-            async for delta in stream(
-                [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": user_content},
-                ]
-            ):
-                spoken = parser.push(delta)
-                if spoken:
+            if is_opening:
+                async for spoken in self._iter_opening_speech(
+                    stream, prompt, user_content
+                ):
                     spoken_parts.append(spoken)
                     yield spoken
-            leftover = parser.finish()
-            if leftover:
-                spoken_parts.append(leftover)
-                yield leftover
+            else:
+                async for delta in stream(
+                    [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": user_content},
+                    ]
+                ):
+                    spoken = parser.push(delta)
+                    if spoken:
+                        spoken_parts.append(spoken)
+                        yield spoken
+                leftover = parser.finish()
+                if leftover:
+                    spoken_parts.append(leftover)
+                    yield leftover
         except Exception:
             logger.exception(
                 "stage2_question_failed",
@@ -1309,12 +1685,12 @@ class InterviewFlow:
             )
         question = "".join(spoken_parts).strip()
         if not question:
-            question = FALLBACK_FOLLOWUP
+            question = FALLBACK_OPENING if is_opening else FALLBACK_FOLLOWUP
             yield question
         self._commit_turn(
             last_candidate_turn,
             parser.decision or "probe",
             started=started,
-            is_opening=False,
+            is_opening=is_opening,
             question=question,
         )

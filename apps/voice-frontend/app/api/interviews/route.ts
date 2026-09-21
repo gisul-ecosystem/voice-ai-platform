@@ -52,6 +52,7 @@ export async function POST(request: Request) {
             : `demo_${crypto.randomUUID()}`,
         candidate_name: body.candidateName,
         candidate_email: body.candidateEmail,
+        candidate_id: body.candidateId,
         starts_at: body.startsAt,
         timezone: body.timezone,
         join_early_minutes: body.joinEarlyMinutes ?? 15,
@@ -59,6 +60,7 @@ export async function POST(request: Request) {
         job_description: body.jobDescription,
         resume_text: body.resumeText,
         interview_setup: body.interviewSetup,
+        definition_id: body.definitionId,
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(15_000),
@@ -79,8 +81,9 @@ export async function POST(request: Request) {
       {
         interviewId: data.interview_id,
         invitationToken: data.invitation_token,
-        candidatePath: `/interviewer/attend?invitation=${encodeURIComponent(data.invitation_token)}`,
+          candidatePath: `/interview/invite/${encodeURIComponent(data.invitation_token)}`,
         startsAt: data.starts_at,
+          definitionId: data.definition_id,
       },
       { headers: { "cache-control": "no-store" } },
     );

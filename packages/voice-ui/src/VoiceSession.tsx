@@ -331,6 +331,15 @@ export function normalizeTranscriptText(text: string): string {
   return text.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function wordOverlapRatio(a: string, b: string): number {
+  const aWords = new Set(a.split(" ").filter((w) => w.length > 1));
+  const bWords = new Set(b.split(" ").filter((w) => w.length > 1));
+  if (aWords.size === 0 || bWords.size === 0) return 0;
+  let shared = 0;
+  for (const word of aWords) if (bWords.has(word)) shared += 1;
+  return shared / Math.min(aWords.size, bWords.size);
+}
+
 export function isLikelyAgentIdentity(
   identity: string,
   agentIdentity = "",
@@ -388,7 +397,7 @@ export function isLikelyEchoFragment(text: string): boolean {
   return false;
 }
 
-/** Merge growing STT fragments (e.g. "hello" → "hello world") into one line. */
+/** Merge growing/corrected STT fragments into one line per underlying segment. */
 export function coalesceTranscriptLines(
   lines: VoiceTranscriptLine[],
 ): VoiceTranscriptLine[] {
@@ -397,43 +406,41 @@ export function coalesceTranscriptLines(
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
 
   const result: VoiceTranscriptLine[] = [];
+  const indexById = new Map<string, number>();
   for (const line of chronological) {
+    if (!line.text) continue;
+    const existingIndex = indexById.get(line.id);
+    if (existingIndex !== undefined) {
+      // Same underlying STT segment revised (e.g. interim guess -> corrected
+      // final text) — replace in place rather than opening a new box.
+      result[existingIndex] = line;
+      continue;
+    }
     const last = result[result.length - 1];
-    if (!last || last.who !== line.who) {
-      result.push(line);
-      continue;
-    }
-    const prev = normalizeTranscriptText(last.text);
-    const next = normalizeTranscriptText(line.text);
-    const prevWords = prev.split(" ").filter(Boolean);
-    const nextWords = next.split(" ").filter(Boolean);
-    const sharedPrefix = (() => {
-      let count = 0;
-      while (
-        count < prevWords.length &&
-        count < nextWords.length &&
-        prevWords[count] === nextWords[count]
+    if (last && last.who === line.who) {
+      const prev = normalizeTranscriptText(last.text);
+      const next = normalizeTranscriptText(line.text);
+      if (
+        next === prev ||
+        next.startsWith(prev) ||
+        prev.startsWith(next) ||
+        next.includes(prev) ||
+        // Late-arriving corrected transcript on a new stream id, but clearly
+        // the same spoken utterance (e.g. STT rewrote wording after commit).
+        wordOverlapRatio(prev, next) >= 0.7
       ) {
-        count += 1;
+        const mergedIndex = result.length - 1;
+        result[mergedIndex] = {
+          ...line,
+          id: last.id,
+          text: line.text.length >= last.text.length ? line.text : last.text,
+          final: last.final || line.final,
+        };
+        indexById.set(last.id, mergedIndex);
+        continue;
       }
-      return count;
-    })();
-    if (
-      next === prev ||
-      next.startsWith(prev) ||
-      prev.startsWith(next) ||
-      next.includes(prev) ||
-      (sharedPrefix >= 3 && last.who === "candidate")
-    ) {
-      result[result.length - 1] = {
-        ...line,
-        id: last.id,
-        at: last.at ?? line.at,
-        text: line.text.length >= last.text.length ? line.text : last.text,
-        final: last.final || line.final,
-      };
-      continue;
     }
+    indexById.set(line.id, result.length);
     result.push(line);
   }
 

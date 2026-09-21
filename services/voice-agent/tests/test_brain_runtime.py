@@ -41,6 +41,7 @@ def test_brain_bundle_restore_prefers_questions_and_answers() -> None:
             "state": {
                 "session_id": "ses_test01",
                 "state_version": 4,
+                "phase_index": 3,
                 "current_depth": 3,
                 "active_question_id": "q_abc",
             },
@@ -59,6 +60,7 @@ def test_brain_bundle_restore_prefers_questions_and_answers() -> None:
     assert restored["candidate_turns"] == ["I built a billing API."]
     assert restored["brain_state_version"] == 4
     assert restored["brain_active_question_id"] == "q_abc"
+    assert restored["initial_phase_index"] == 3
     assert restored["initial_probe_count"] == 2
 
 
@@ -80,5 +82,6 @@ def test_flow_to_brain_state_is_session_isolated() -> None:
     assert payload["session_id"] == "ses_alpha01"
     assert payload["state_version"] == 2
     assert payload["active_question_id"] == "q_1"
+    assert payload["phase_index"] == 0
     assert payload["coverage"] == {}
     assert payload["consecutive_unusable_answers"] == 0
