@@ -1,6 +1,7 @@
 """LiveKit adapter for the provider-neutral interview flow."""
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -9,6 +10,8 @@ from livekit.agents import Agent, ModelSettings, llm
 from products.interviewer.brain_runtime import BrainSessionBridge
 from products.interviewer.flow import CLOSING_MESSAGE, FALLBACK_FOLLOWUP, InterviewFlow
 from voice_platform.chat import is_usable_candidate_turn, last_text
+
+logger = logging.getLogger("voice-agent.interviewer")
 
 CLARIFY_TURN = (
     "Sorry, I did not catch that. Please say a bit more, in a full sentence."
@@ -170,10 +173,26 @@ class AaptorAgent(Agent):
             # Rejoin/restore: do not re-speak the opening or double-write brain.
             return
         parts: list[str] = []
-        async for chunk in self.flow.generate_next_question_stream(None):
-            parts.append(chunk)
+        try:
+            async for chunk in self.flow.generate_next_question_stream(None):
+                parts.append(chunk)
+        except Exception:
+            logger.exception(
+                "opening_stream_failed",
+                extra={"event": "opening_stream_failed"},
+            )
         opening = "".join(parts).strip() or self.flow._fallback_opening()
-        await self.session.say(opening, allow_interruptions=False)
+        try:
+            await self.session.say(opening, allow_interruptions=False)
+        except Exception:
+            logger.exception(
+                "opening_say_failed",
+                extra={"event": "opening_say_failed", "opening_len": len(opening)},
+            )
+            # Still mark opened so we do not loop a broken TTS path forever.
+            self._opened = True
+            self._last_agent_text = opening
+            raise
         self._opened = True
         self._last_agent_text = opening
         turn_id = await self._record("agent", opening)

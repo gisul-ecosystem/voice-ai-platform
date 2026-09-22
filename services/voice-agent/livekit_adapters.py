@@ -426,7 +426,11 @@ class LaptopTTS(tts.TTS):
 class _LaptopChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            audio_bytes = await self._tts._client.synthesize(self.input_text)
+            from clients.tts.voice_policy import synthesize_same_voice
+
+            audio_bytes = await synthesize_same_voice(
+                self._tts._client, self.input_text
+            )
         except ServiceUnavailableError as exc:
             raise _to_api_error(exc) from exc
 

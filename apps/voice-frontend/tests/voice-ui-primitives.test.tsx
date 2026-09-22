@@ -9,12 +9,35 @@ vi.mock("@livekit/components-react", () => ({
   LiveKitRoom: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   MediaDeviceMenu: () => <button type="button" aria-label="Choose microphone" />,
   RoomAudioRenderer: () => null,
+  // LiveKit defaults to <button> without type; was submitting the old <form>.
   TrackToggle: ({ children }: { children: ReactNode }) => (
-    <button type="button">{children}</button>
+    <button type="submit">{children}</button>
   ),
   VideoTrack: () => null,
   useConnectionState: () => "connected",
   useTracks: () => [],
+  usePersistentUserChoices: () => ({
+    userChoices: {
+      username: "Candidate",
+      audioEnabled: true,
+      videoEnabled: false,
+      audioDeviceId: "mic-1",
+      videoDeviceId: "cam-1",
+    },
+    saveAudioInputDeviceId: () => undefined,
+    saveAudioInputEnabled: () => undefined,
+    saveVideoInputDeviceId: () => undefined,
+    saveVideoInputEnabled: () => undefined,
+    saveUsername: () => undefined,
+  }),
+  usePreviewTracks: () => [
+    {
+      kind: "audio",
+      unmute: async () => undefined,
+      attach: () => undefined,
+      detach: () => undefined,
+    },
+  ],
   useRoomContext: () => ({
     remoteParticipants: new Map(),
     on: () => undefined,
@@ -66,6 +89,7 @@ vi.mock("@livekit/components-react", () => ({
 }));
 
 import {
+  VoicePreJoin,
   VoiceSessionControls,
   VoiceTranscripts,
   coalesceTranscriptLines,
@@ -74,6 +98,33 @@ import {
 } from "@gisul/voice-ui";
 
 describe("shared voice UI primitives", () => {
+  it("starts the interview only from the join button", async () => {
+    const onSubmit = vi.fn();
+    render(
+      <VoicePreJoin
+        participantName="Ujwal"
+        cameraAllowed
+        allowNameEditing={false}
+        joinLabel="I am ready — Start interview"
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Off/i }));
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "I am ready — Start interview" }),
+    );
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: "Ujwal",
+        audioEnabled: true,
+      }),
+    );
+  });
+
   it("coalesces growing candidate STT fragments into one line", () => {
     const lines = coalesceTranscriptLines([
       {

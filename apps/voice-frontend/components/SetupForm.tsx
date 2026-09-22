@@ -244,6 +244,14 @@ export function SetupForm({
   const [resumeSummary, setResumeSummary] = useState<IngestSummary | null>(null);
   const [jdReviewed, setJdReviewed] = useState(false);
   const [resumeReviewed, setResumeReviewed] = useState(false);
+  const [candidateProfile, setCandidateProfile] = useState<
+    Record<string, unknown> | undefined
+  >(
+    initialValue?.candidateProfile &&
+      typeof initialValue.candidateProfile === "object"
+      ? initialValue.candidateProfile
+      : undefined,
+  );
   const timezone =
     initialValue?.timezone ??
     Intl.DateTimeFormat().resolvedOptions().timeZone ??
@@ -261,6 +269,9 @@ export function SetupForm({
         setCandidateEmail(draft.candidateEmail || "");
         setJobDescription(draft.jobDescription || "");
         setResumeText(draft.resumeText || "");
+        if (draft.candidateProfile && typeof draft.candidateProfile === "object") {
+          setCandidateProfile(draft.candidateProfile);
+        }
         if (draft.startsAt) {
           const date = new Date(draft.startsAt);
           const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
@@ -299,6 +310,7 @@ export function SetupForm({
         timezone,
         jobDescription,
         resumeText,
+        candidateProfile,
         interviewSetup: {
           title,
           role,
@@ -330,6 +342,7 @@ export function SetupForm({
     product.id,
     recordingEnabled,
     resumeText,
+    candidateProfile,
     role,
     seniority,
     startsAt,
@@ -345,6 +358,7 @@ export function SetupForm({
       participantName: participantName.trim(),
       jobDescription: jobDescription.trim() || undefined,
       resumeText: resumeText.trim() || undefined,
+      candidateProfile: candidateProfile,
       candidateEmail: candidateEmail.trim() || undefined,
       startsAt: safeStartsAt ? new Date(safeStartsAt).toISOString() : undefined,
       timezone,
@@ -427,6 +441,16 @@ export function SetupForm({
         setResumeText(payload.text);
         setResumeSummary(summary);
         setResumeReviewed(false);
+        if (
+          payload.candidateProfile &&
+          typeof payload.candidateProfile === "object"
+        ) {
+          setCandidateProfile(
+            payload.candidateProfile as Record<string, unknown>,
+          );
+        } else {
+          setCandidateProfile(undefined);
+        }
       }
     } catch (error) {
       setIngestError(

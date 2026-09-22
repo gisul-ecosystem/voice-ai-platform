@@ -18,6 +18,8 @@ export type PublicSessionRequest = {
   participantName: string;
   jobDescription?: string;
   resumeText?: string;
+  /** Structured claims from resume ingest; personalizes opening, does not change job bar. */
+  candidateProfile?: Record<string, unknown>;
   invitationToken?: string;
   idempotencyKey?: string;
   candidateEmail?: string;

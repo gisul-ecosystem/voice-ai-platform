@@ -12,6 +12,26 @@ frontend CI jobs pass.
 4. Docker Compose pulls the images and waits for service health checks.
 5. A failed update automatically attempts to restore the last successful tag.
 
+## Self-hosted runner (always on)
+
+On the staging VM (`10.110.50.10`), the runner lives at `/opt/actions-runner`
+and runs as systemd unit
+`actions.runner.gisul-ecosystem-voice-ai-platform.voice-ai-staging.service`
+(user `voiceai-runner`). It is **enabled** and uses a drop-in
+`always-on.conf` with `Restart=always` / `RestartSec=10` so the process
+survives crashes and reboots.
+
+```bash
+sudo systemctl status actions.runner.gisul-ecosystem-voice-ai-platform.voice-ai-staging.service
+sudo journalctl -u actions.runner.gisul-ecosystem-voice-ai-platform.voice-ai-staging.service -n 50 --no-pager
+```
+
+GitHub shows the runner **offline** when the VM cannot reach Actions egress
+(`*.actions.githubusercontent.com:443` and public DNS). Local LAN to
+`10.110.0.1` / `10.110.0.10` can still work while outbound HTTPS/DNS is
+broken — fix NAT/firewall on the gateway, then restart the unit if needed.
+A local `active (running)` service alone is not enough.
+
 The stack contains MongoDB, **Redis (hot interview brain)**, the context engine, backend API, interviewer worker,
 reference frontend, and Caddy gateway. Only ports 80 and 443 are externally
 bound. Backend and worker health ports bind to loopback.
@@ -35,6 +55,17 @@ Rules:
    `/etc/voice-ai-platform/backend-api.env` and `voice-agent.env`).
 3. After changing agent name or keys: redeploy / recreate those two containers
    and confirm logs show `registered worker` with `agent_name=aaptor-staging`.
+
+
+## LiveKit / ElevenLabs DNS pin (staging VM)
+
+If containers cannot resolve public names (host DNS broken), Compose pins:
+
+- `livekit.gisul.co.in` → `103.99.38.226`
+- `api.elevenlabs.io` → `34.8.184.191` (voice-agent only; re-resolve after DNS changes)
+
+DNS pins do **not** replace outbound NAT. If the VM cannot reach those IPs on
+`:443`, greeting/TTS and LiveKit still fail until gateway egress is restored.
 
 ## VM secret files
 

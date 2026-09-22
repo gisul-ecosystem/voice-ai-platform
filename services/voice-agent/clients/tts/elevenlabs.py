@@ -210,5 +210,7 @@ class ElevenLabsTts:
                 "audio_bytes": audio_bytes,
                 "provider": "elevenlabs",
                 "streaming": True,
+                "voice_id": voice_id,
+                "model_id": self.model_id,
             },
         )
