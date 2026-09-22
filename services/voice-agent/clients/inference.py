@@ -1,4 +1,4 @@
-"""Room-metadata inference overrides. Keys are never logged from this module."""
+﻿"""Room-metadata inference overrides. Keys are never logged from this module."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,7 @@ from clients.llm import get_llm_client
 from clients.llm.openai_compat import OpenAICompatLlm
 from clients.stt import SttClient, get_stt_client
 from clients.tts import TtsClient, get_tts_client
+from clients.tts.voice_policy import ResolvedVoicePolicy, resolve_voice_policy
 
 logger = logging.getLogger("voice-agent.inference")
 
@@ -62,13 +63,31 @@ def inference_overrides_from_metadata(meta: dict[str, Any]) -> InferenceOverride
 
 def clients_from_overrides(
     overrides: InferenceOverrides,
+    *,
+    voice_policy: ResolvedVoicePolicy | dict[str, Any] | None = None,
 ) -> tuple[OpenAICompatLlm, SttClient, TtsClient]:
     """Build LLM/STT/TTS clients. Raises ProviderConfigError before the first turn."""
+    policy = (
+        voice_policy
+        if isinstance(voice_policy, ResolvedVoicePolicy)
+        else resolve_voice_policy(
+            voice_policy if isinstance(voice_policy, dict) else None,
+            provider_override=overrides.tts_provider,
+        )
+    )
     llm = get_llm_client(overrides.llm_provider)
     stt = get_stt_client(overrides.stt_provider)
-    tts = get_tts_client(overrides.tts_provider)
+    tts = get_tts_client(
+        overrides.tts_provider or policy.provider,
+        voice_policy=policy,
+    )
     logger.info(
         "inference_overrides_applied",
-        extra={"event": "inference_overrides_applied", **overrides.log_safe()},
+        extra={
+            "event": "inference_overrides_applied",
+            **overrides.log_safe(),
+            "tts_voice_id": policy.voice_id,
+            "tts_fallback_policy": policy.fallback_policy,
+        },
     )
     return llm, stt, tts

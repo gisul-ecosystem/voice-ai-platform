@@ -134,6 +134,8 @@ Job target level (assessment bar): {job_target_level}
 Candidate framing: {candidate_framing}
 Role title: {role_title}
 
+{framing_notes}
+
 Allowed resume claims you may reference:
 {claim_brief}
 

@@ -75,6 +75,9 @@ services:
       # Keep current LiveKit credentials (including shared staging keys) allowed to start.
       LIVEKIT_ALLOW_WEAK_API_KEY: ${LIVEKIT_ALLOW_WEAK_API_KEY:-true}
       LIVEKIT_TOKEN_TTL_MINUTES: ${LIVEKIT_TOKEN_TTL_MINUTES:-45}
+    # Staging VM DNS is unreliable for public names; pin LiveKit host.
+    extra_hosts:
+      - "livekit.gisul.co.in:103.99.38.226"
     depends_on:
       mongo:
         condition: service_healthy
@@ -111,6 +114,11 @@ services:
       # Must match backend LIVEKIT_AGENT_NAME so dispatches hit this worker.
       LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-aaptor-staging}
       LIVEKIT_ALLOW_WEAK_API_KEY: ${LIVEKIT_ALLOW_WEAK_API_KEY:-true}
+    # Staging VM DNS is unreliable for public names; pin LiveKit + TTS API hosts.
+    # Re-check IP after DNS changes: python -c "import socket; print(socket.getaddrinfo('api.elevenlabs.io',443)[0][4][0])"
+    extra_hosts:
+      - "livekit.gisul.co.in:103.99.38.226"
+      - "api.elevenlabs.io:34.8.184.191"
     depends_on:
       backend-api:
         condition: service_healthy

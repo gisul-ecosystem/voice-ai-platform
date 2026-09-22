@@ -34,9 +34,14 @@ async def create_interview_context(
             *args,
             req.interview_setup.model_dump(mode="python"),
             definition_id=req.definition_id,
+            candidate_profile=req.candidate_profile,
         )
         if req.interview_setup
-        else await interviews.create_context(*args, definition_id=req.definition_id)
+        else await interviews.create_context(
+            *args,
+            definition_id=req.definition_id,
+            candidate_profile=req.candidate_profile,
+        )
     )
     return CreateInterviewContextResponse(**stored)
 
