@@ -390,11 +390,17 @@ async def append_turn(session_id: str, turn: dict[str, Any]) -> str:
     )
     comparable = ("speaker", "text", "phase_index", "sequence_number", "is_final")
     if existing:
-        return (
-            "duplicate"
-            if all(existing.get(key) == turn.get(key) for key in comparable)
-            else "conflict"
-        )
+        if not all(existing.get(key) == turn.get(key) for key in comparable):
+            return "conflict"
+        # Same turn re-posted to attach the LLM verdict that was not yet known
+        # on the first write.
+        evaluation = turn.get("answer_evaluation")
+        if evaluation and not existing.get("answer_evaluation"):
+            await db.interview_turns.update_one(
+                {"session_id": session_id, "turn_id": turn["turn_id"]},
+                {"$set": {"answer_evaluation": evaluation}},
+            )
+        return "duplicate"
     try:
         await db.interview_turns.insert_one({**turn, "session_id": session_id})
     except DuplicateKeyError:

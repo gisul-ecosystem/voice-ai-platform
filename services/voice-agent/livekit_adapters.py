@@ -427,7 +427,11 @@ class LaptopTTS(tts.TTS):
 
     def __init__(self, client=None) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            # Streaming keeps one continuous audio segment per reply. With this
+            # off, livekit-agents wraps us in a sentence-splitting adapter that
+            # issues a separate blocking HTTP synthesis per sentence, which is
+            # heard as gaps and stutter mid-answer.
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=TTS_SAMPLE_RATE,
             num_channels=TTS_NUM_CHANNELS,
         )

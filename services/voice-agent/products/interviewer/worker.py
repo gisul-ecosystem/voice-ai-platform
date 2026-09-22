@@ -189,8 +189,14 @@ def published_plan_required(
     *,
     definition_id: str | None,
     app_env: str | None = None,
+    context_bound: bool = False,
 ) -> bool:
     if (definition_id or "").strip():
+        return True
+    # A job that carried a context_id was scheduled against a real interview.
+    # Falling back to the generic outline here silently downgrades the whole
+    # interviewer (no competencies, no evidence ledger) with no visible error.
+    if context_bound:
         return True
     env = (app_env if app_env is not None else os.getenv("APP_ENV") or "development")
     return env.strip().lower() in {"production", "staging"}
@@ -201,20 +207,29 @@ def resolve_live_outline(
     interview_definition: dict | None,
     definition_id: str | None,
     app_env: str | None = None,
+    context_bound: bool = False,
 ) -> tuple[dict | None, str]:
     """Return (outline, source). Outline is None when a local generated plan is allowed.
 
-    Never falls back to GENERIC_OUTLINE when a published definition is bound or
-    the environment is production/staging.
+    Never falls back to GENERIC_OUTLINE when a published definition is bound, a
+    context was bound, or the environment is production/staging.
     """
-    require = published_plan_required(definition_id=definition_id, app_env=app_env)
+    require = published_plan_required(
+        definition_id=definition_id,
+        app_env=app_env,
+        context_bound=context_bound,
+    )
     if isinstance(interview_definition, dict) and interview_definition.get("competencies"):
         outline = outline_from_definition(interview_definition)
         if outline:
             return outline, "published_definition"
         raise InterviewPlanUnavailableError("definition_has_no_usable_plan")
     if require:
-        raise InterviewPlanUnavailableError("published_definition_required")
+        raise InterviewPlanUnavailableError(
+            "interview_context_unreachable"
+            if context_bound and not definition_id
+            else "published_definition_required"
+        )
     return None, "generated_plan"
 
 
@@ -541,13 +556,18 @@ async def entrypoint(ctx: JobContext) -> None:
     brain_bridge: BrainSessionBridge | None = None
     context_id = context_id_from_job(ctx)
     context: dict = {}
+    context_fetch_failed = False
     if context_id:
         try:
             context = await fetch_interview_context(context_id)
         except ServiceUnavailableError:
+            context_fetch_failed = True
             logger.warning(
                 "interview_context_unavailable",
-                extra={"event": "interview_context_unavailable"},
+                extra={
+                    "event": "interview_context_unavailable",
+                    "context_id": context_id,
+                },
             )
             context = {}
     explicit_definition_id = None
@@ -679,6 +699,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     target_duration_minutes = 30
     max_probes_per_phase = 2
+    difficulty = "applied"
     job_description = ""
     resume_text = ""
     competencies: list[str] = []
@@ -694,6 +715,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 max_probes_per_phase = normalize_probe_count(
                     setup.get("maxProbesPerPhase")
                 )
+                difficulty = str(setup.get("difficulty") or "applied").strip().lower()
                 raw_skills = setup.get("competencies") or []
                 if isinstance(raw_skills, list):
                     competencies = [
@@ -788,6 +810,7 @@ async def entrypoint(ctx: JobContext) -> None:
         outline, outline_source = resolve_live_outline(
             interview_definition=interview_definition,
             definition_id=explicit_definition_id,
+            context_bound=bool(context_id) and context_fetch_failed,
         )
     except InterviewPlanUnavailableError as exc:
         logger.error(
@@ -849,6 +872,7 @@ async def entrypoint(ctx: JobContext) -> None:
             brain_bridge=brain_bridge,
             interview_definition=interview_definition,
             candidate_profile=candidate_profile,
+            difficulty=difficulty,
         ),
         room=ctx.room,
     )

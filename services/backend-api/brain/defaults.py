@@ -81,7 +81,12 @@ def default_question_ladder(
     competency_id: str,
     competency_name: str | None = None,
 ) -> CompetencyLadder:
-    """Technical depth ladder used when no custom ladder is supplied."""
+    """Technical depth ladder used when no custom ladder is supplied.
+
+    Objectives set the evidence bar for each rung. The example questions are
+    prompt guidance and emergency fallbacks only -- the interviewer writes its
+    own wording from the candidate's actual answer.
+    """
     topic = (competency_name or competency_id or "this competency").strip()
     return CompetencyLadder(
         competency_id=competency_id,
@@ -89,32 +94,47 @@ def default_question_ladder(
             QuestionLadderStep(
                 depth=1,
                 intent="establish_context",
-                objective=f"Identify a concrete technical example involving {topic}",
-                example_question=f"Can you describe a technical problem where you used {topic}?",
+                objective=(
+                    f"Get one concrete, named piece of {topic} work — the actual "
+                    f"problem, system or dataset, not a job description"
+                ),
+                example_question=f"Which specific {topic} problem did you work on most recently?",
             ),
             QuestionLadderStep(
                 depth=2,
                 intent="establish_ownership",
-                objective=f"Clarify the candidate's hands-on ownership of {topic}",
-                example_question=f"What part of the {topic} solution did you personally implement?",
+                objective=(
+                    f"Separate what this candidate personally built or decided in "
+                    f"that {topic} work from what the team did"
+                ),
+                example_question=f"Which part of that {topic} work was your own decision?",
             ),
             QuestionLadderStep(
                 depth=3,
                 intent="applied_understanding",
-                objective=f"Assess the implementation approach for {topic}",
-                example_question=f"How did you implement the {topic} solution, and why did you choose that approach?",
+                objective=(
+                    f"Get the mechanism: the named technique used for {topic} and how "
+                    f"it works internally, step by step, not just its label"
+                ),
+                example_question=f"Walk me through how your {topic} approach actually works, step by step.",
             ),
             QuestionLadderStep(
                 depth=4,
                 intent="problem_or_complexity",
-                objective=f"Explore a technical difficulty or constraint in {topic}",
-                example_question=f"What was the hardest technical part of the {topic} solution, and how did you handle it?",
+                objective=(
+                    f"Get the cost and the breaking points: complexity, latency or "
+                    f"resource cost of the {topic} approach, and where it fails"
+                ),
+                example_question=f"What does that {topic} approach cost in time and space, and where does it break down?",
             ),
             QuestionLadderStep(
                 depth=5,
                 intent="tradeoff_or_transfer",
-                objective=f"Explore trade-offs and alternative designs for {topic}",
-                example_question=f"What trade-off did you make in the {topic} solution, and what would you change now?",
+                objective=(
+                    f"Get the trade-off against a named alternative for {topic}, and "
+                    f"the optimisation they would make next"
+                ),
+                example_question=f"What would you change to make that {topic} solution faster or cheaper, and what would it cost you?",
             ),
         ],
     )

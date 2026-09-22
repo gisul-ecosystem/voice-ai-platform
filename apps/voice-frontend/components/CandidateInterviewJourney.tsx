@@ -5,6 +5,7 @@ import {
   type ComponentType,
   type ErrorInfo,
   type ReactNode,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -236,6 +237,30 @@ function CandidateInterviewJourneyInner({
     monitoring: false,
     recording: false,
   });
+
+  // Stable identities keep LiveKitRoom from tearing down and re-arming its
+  // room listeners on every parent re-render while audio is flowing.
+  const handleConnected = useCallback(() => {
+    intentionalDisconnect.current = false;
+    setStage("live");
+  }, []);
+  const handleDisconnected = useCallback(() => {
+    if (intentionalDisconnect.current) {
+      setStage("completed");
+      return;
+    }
+    setError(
+      "The room disconnected before the interview was ended. Contact the inviting organization before retrying.",
+    );
+    setStage("failed");
+  }, []);
+  const handleRoomError = useCallback((reason: Error) => {
+    setError(reason.message);
+    setStage("failed");
+  }, []);
+  const handleEndRequested = useCallback(() => {
+    intentionalDisconnect.current = true;
+  }, []);
 
   useEffect(() => {
     try {
@@ -540,27 +565,10 @@ function CandidateInterviewJourneyInner({
         title={preview.title}
         candidateName={preview.candidate_name}
         cameraAllowed={product.cameraAllowed}
-        onConnected={() => {
-          intentionalDisconnect.current = false;
-          setStage("live");
-        }}
-        onDisconnected={() => {
-          if (intentionalDisconnect.current) {
-            setStage("completed");
-            return;
-          }
-          setError(
-            "The room disconnected before the interview was ended. Contact the inviting organization before retrying.",
-          );
-          setStage("failed");
-        }}
-        onError={(reason) => {
-          setError(reason.message);
-          setStage("failed");
-        }}
-        onEndRequested={() => {
-          intentionalDisconnect.current = true;
-        }}
+        onConnected={handleConnected}
+        onDisconnected={handleDisconnected}
+        onError={handleRoomError}
+        onEndRequested={handleEndRequested}
       />
     );
   }
