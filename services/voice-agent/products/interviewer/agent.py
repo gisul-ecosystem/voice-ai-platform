@@ -38,9 +38,10 @@ class AaptorAgent(Agent):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are Aaptor, a live technical interviewer. Invent each "
-                "spoken question from the resume, job, and the candidate's last "
-                "answer. Sound like a person in the room."
+                "You are a professional structured interviewer. A policy engine "
+                "already chose the evidence and depth for this turn. Phrase exactly "
+                "one spoken question. Do not invent employers, projects, or skills. "
+                "Do not mention phases, probes, or scores."
             )
         )
         flow_kwargs: dict = {}
@@ -234,8 +235,11 @@ class AaptorAgent(Agent):
             question = CLOSING_MESSAGE
         if not question:
             question = (
-                self.flow._fallback_spoken_question(self.flow.last_policy_decision)
-                if getattr(self.flow, "policy_mode", False)
+                self.flow._fallback_spoken_question(
+                    self.flow.last_policy_decision,
+                    last_turn=candidate_turn,
+                )
+                if not self.flow._uses_legacy_decision_flow()
                 else FALLBACK_FOLLOWUP
             )
             yield question

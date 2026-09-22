@@ -1,6 +1,7 @@
 """Question validator and structured generation parsing."""
 from __future__ import annotations
 
+from products.interviewer.prompts import ACTION_PHRASING
 from products.interviewer.validator import (
     AnswerEvaluation,
     GeneratedQuestion,
@@ -170,3 +171,105 @@ def test_validator_preserves_evaluation_and_tags_on_success() -> None:
     assert result.question.answer_evaluation is evaluation
     assert result.question.depth_tag == "applied"
     assert result.question.probe_shape == "trade_off"
+
+
+def test_probe_action_phrasing_is_unique() -> None:
+    keys = [
+        "PROBE_FOR_CONTEXT",
+        "PROBE_FOR_OWNERSHIP",
+        "PROBE_FOR_METHOD",
+        "PROBE_FOR_REASONING",
+        "PROBE_FOR_RESULT",
+        "PROBE_FOR_REFLECTION",
+    ]
+    notes = [ACTION_PHRASING[key] for key in keys]
+    assert len(set(notes)) == len(notes)
+
+
+def test_validator_requires_hook_stem_on_live_probes() -> None:
+    generated = GeneratedQuestion(
+        question="What would you change about the approach next time?",
+        competency_id="negotiation",
+        intent="establish_ownership",
+        depth=2,
+    )
+    missing = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="negotiation",
+        policy_intent="establish_ownership",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=_sales_definition()["allowed_probes"],
+        recent_turns=["We used Redis during that renewal."],
+        hook_fact="Redis",
+    )
+    assert missing.ok is False
+    assert "missing_hook_stem" in missing.reasons
+
+    hooked = validate_generated_question(
+        GeneratedQuestion(
+            question="What broke when Redis failed?",
+            competency_id="negotiation",
+            intent="establish_ownership",
+            depth=2,
+        ),
+        definition=_sales_definition(),
+        policy_competency_id="negotiation",
+        policy_intent="establish_ownership",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=_sales_definition()["allowed_probes"],
+        recent_turns=["We used Redis during that renewal."],
+        hook_fact="Redis",
+    )
+    assert hooked.ok is True
+
+
+def test_validator_rejects_repeated_six_word_prefix() -> None:
+    generated = GeneratedQuestion(
+        question="What part of that deal did you change afterward?",
+        competency_id="negotiation",
+        intent="establish_ownership",
+        depth=2,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="negotiation",
+        policy_intent="establish_ownership",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=["What part of that deal did you personally handle?"],
+        allowed_probes=_sales_definition()["allowed_probes"],
+    )
+    assert result.ok is False
+    assert "repeated_prefix" in result.reasons
+
+
+def test_validator_rejects_repeated_probe_shape() -> None:
+    generated = GeneratedQuestion(
+        question="Why did you choose Redis for that deal?",
+        competency_id="negotiation",
+        intent="establish_ownership",
+        depth=2,
+        probe_shape="why",
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="negotiation",
+        policy_intent="establish_ownership",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=_sales_definition()["allowed_probes"],
+        recent_turns=["We used Redis during that renewal."],
+        hook_fact="Redis",
+        required_probe_shape="failure_mode",
+        last_probe_shape="why",
+    )
+    assert result.ok is False
+    assert "repeated_probe_shape" in result.reasons
