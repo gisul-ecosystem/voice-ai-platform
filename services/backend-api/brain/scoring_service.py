@@ -209,15 +209,26 @@ def _synthesize_qa_from_turns(
             }
             questions.append(pending_question)
         elif speaker == "candidate" and pending_question is not None:
+            evaluation = turn.get("answer_evaluation")
+            evaluation = evaluation if isinstance(evaluation, dict) else None
+            # Prefer the LLM's own read of the answer; word count is only a
+            # last resort when no verdict was persisted with the turn.
+            if evaluation is not None:
+                usable = str(
+                    evaluation.get("technical_substance") or ""
+                ).strip().lower() not in {"", "not_applicable"}
+            else:
+                usable = len(text.split()) >= 3
             answers.append(
                 {
                     "answer_id": f"a_synth_{turn.get('turn_id')}",
                     "question_id": pending_question["question_id"],
                     "session_id": session_id,
                     "turn_ids": [str(turn.get("turn_id"))],
-                    "usable": len(text.split()) >= 3,
-                    "usability": "usable" if len(text.split()) >= 3 else "too_short",
+                    "usable": usable,
+                    "usability": "usable" if usable else "too_short",
                     "final_transcript": text,
+                    "answer_evaluation": evaluation,
                     "status": "answered",
                 }
             )

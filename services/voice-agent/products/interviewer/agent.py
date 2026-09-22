@@ -72,6 +72,7 @@ class AaptorAgent(Agent):
         self._status_sink = status_sink
         self._brain = brain_bridge
         self._completion_reported = False
+        self._last_candidate_turn: dict | None = None
         # Mid-session restore: any prior turn means opening already happened.
         self._opened = bool(self.flow.candidate_turns or self.flow.interviewer_turns)
         self._last_agent_text = (
@@ -84,14 +85,33 @@ class AaptorAgent(Agent):
         turn_id = f"turn_{uuid.uuid4().hex}"
         if self._turn_sink:
             self._sequence_number += 1
-            await self._turn_sink(
-                turn_id=turn_id,
-                speaker=speaker,
-                text=text.strip(),
-                phase_index=self.phase_index,
-                sequence_number=self._sequence_number,
-            )
+            payload = {
+                "turn_id": turn_id,
+                "speaker": speaker,
+                "text": text.strip(),
+                "phase_index": self.phase_index,
+                "sequence_number": self._sequence_number,
+            }
+            if speaker == "candidate":
+                self._last_candidate_turn = payload
+            await self._turn_sink(**payload)
         return turn_id
+
+    async def _attach_answer_evaluation(self, turn_id: str | None) -> None:
+        """Re-post the candidate turn once the verdict for it exists.
+
+        The verdict is produced by the same LLM call that writes the next
+        question, so it is not known when the turn is first persisted.
+        """
+        payload = self._last_candidate_turn
+        if not self._turn_sink or not turn_id or not payload:
+            return
+        if payload.get("turn_id") != turn_id:
+            return
+        evaluation = getattr(self.flow, "last_answer_evaluation", None)
+        if not evaluation:
+            return
+        await self._turn_sink(**payload, answer_evaluation=evaluation)
 
     async def _persist_brain_after_exchange(
         self,
@@ -227,6 +247,7 @@ class AaptorAgent(Agent):
             )
             yield question
         if candidate_turn and candidate_brain_turn_id:
+            await self._attach_answer_evaluation(candidate_brain_turn_id)
             await self._persist_brain_after_exchange(
                 speaker="candidate",
                 text=candidate_turn,

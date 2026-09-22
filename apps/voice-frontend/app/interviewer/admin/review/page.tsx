@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const DRAFT_KEY = "ai-interview:role-draft";
 
@@ -18,13 +18,21 @@ function readDraft(): { state?: DraftState; error: string } {
 }
 
 export default function ReviewAlignmentPage() {
-  const [boot] = useState(readDraft);
-  const [state, setState] = useState<DraftState | undefined>(boot.state);
+  const [hydrated, setHydrated] = useState(false);
+  const [state, setState] = useState<DraftState | undefined>(undefined);
   const [selected, setSelected] = useState(0);
-  const [error, setError] = useState(boot.error);
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  // sessionStorage is client-only; reading it during render breaks hydration.
+  useEffect(() => {
+    const boot = readDraft();
+    setState(boot.state);
+    setError(boot.error);
+    setHydrated(true);
+  }, []);
 
   const competencies = state?.draft && Array.isArray(state.draft.competencies) ? state.draft.competencies as Array<Record<string, unknown>> : [];
   function update(index: number, patch: Record<string, unknown>) {
@@ -81,6 +89,7 @@ export default function ReviewAlignmentPage() {
     finally { setBusy(false); }
   }
 
+  if (!hydrated) return <main className="interviewer-home admin-builder-page"><div className="center-state"><h2>Loading draft…</h2></div></main>;
   if (!state) return <main className="interviewer-home admin-builder-page"><div className="center-state"><h2>Alignment draft unavailable</h2><Link className="button secondary" href="/interviewer/admin/design">Start role design</Link></div></main>;
   const competency = competencies[selected];
   return <main className="interviewer-home admin-builder-page">

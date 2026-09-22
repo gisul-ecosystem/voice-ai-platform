@@ -289,20 +289,24 @@ async def record_session_turn(
     text: str,
     phase_index: int,
     sequence_number: int,
+    answer_evaluation: dict | None = None,
 ) -> None:
+    payload = {
+        "turn_id": turn_id,
+        "speaker": speaker,
+        "text": text,
+        "phase_index": phase_index,
+        "sequence_number": sequence_number,
+        "is_final": True,
+    }
+    if answer_evaluation:
+        payload["answer_evaluation"] = answer_evaluation
     await request(
         "backend-api",
         "POST",
         f"{BACKEND_API_URL}/internal/interview-sessions/{session_id}/turns",
         timeout=make_timeout(BACKEND_TIMEOUT_SECONDS),
         headers=_service_headers(),
-        json={
-            "turn_id": turn_id,
-            "speaker": speaker,
-            "text": text,
-            "phase_index": phase_index,
-            "sequence_number": sequence_number,
-            "is_final": True,
-        },
+        json=payload,
         retry_safe=True,
     )
