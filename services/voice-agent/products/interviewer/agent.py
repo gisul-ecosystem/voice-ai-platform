@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from livekit.agents import Agent, ModelSettings, llm
 
 from products.interviewer.brain_runtime import BrainSessionBridge
-from products.interviewer.flow import FALLBACK_FOLLOWUP, FALLBACK_OPENING, InterviewFlow
+from products.interviewer.flow import CLOSING_MESSAGE, FALLBACK_FOLLOWUP, InterviewFlow
 from voice_platform.chat import is_usable_candidate_turn, last_text
 
 CLARIFY_TURN = (
@@ -191,7 +191,7 @@ class AaptorAgent(Agent):
         parts: list[str] = []
         async for chunk in self.flow.generate_next_question_stream(None):
             parts.append(chunk)
-        opening = "".join(parts).strip() or FALLBACK_OPENING
+        opening = "".join(parts).strip() or self.flow._fallback_opening()
         await self.session.say(opening, allow_interruptions=False)
         self._opened = True
         self._last_agent_text = opening
@@ -219,9 +219,8 @@ class AaptorAgent(Agent):
             self._last_agent_text,
             min_words=1 if not self.flow.candidate_turns else 3,
         ):
-            if candidate_turn and candidate_turn.strip():
-                # Keep partial/unusable speech in the durable transcript.
-                await self._record("candidate", candidate_turn.strip())
+            # Echo / noise / too-short STT must not pollute durable transcript or scoring.
+            # Still ask for a clearer answer so the live session recovers.
             yield CLARIFY_TURN
             self._last_agent_text = CLARIFY_TURN
             turn_id = await self._record("agent", CLARIFY_TURN)
@@ -239,6 +238,20 @@ class AaptorAgent(Agent):
             parts.append(chunk)
             yield chunk
         question = "".join(parts).strip()
+        if (
+            question.endswith(CLOSING_MESSAGE)
+            and question != CLOSING_MESSAGE
+        ):
+            prelude = question[: -len(CLOSING_MESSAGE)].strip()
+            if prelude:
+                self._last_agent_text = prelude
+                turn_id = await self._record("agent", prelude)
+                await self._persist_brain_after_exchange(
+                    speaker="agent",
+                    text=prelude,
+                    turn_id=turn_id,
+                )
+            question = CLOSING_MESSAGE
         if not question:
             question = (
                 self.flow._fallback_spoken_question(self.flow.last_policy_decision)
