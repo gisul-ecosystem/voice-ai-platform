@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from typing import Any
+from typing import Any
 
 from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
 
@@ -96,6 +98,38 @@ def _release_room(room_name: str) -> None:
     finally:
         handle.close()
 
+
+async def flush_pending_session_turns(
+    session_id: str,
+    pending: list[dict[str, Any]],
+    *,
+    reason: str,
+) -> bool:
+    """Persist queued turns in order. Stop on first failure so sequence stays intact."""
+    if not session_id or not pending:
+        return True
+    while pending:
+        item = pending[0]
+        try:
+            await record_session_turn(session_id, **item)
+            pending.pop(0)
+        except ServiceUnavailableError:
+            logger.error(
+                "turn_record_unavailable",
+                extra={
+                    "event": "turn_record_unavailable",
+                    "reason": reason,
+                    "session_id": session_id,
+                    "turn_id": item.get("turn_id"),
+                    "speaker": item.get("speaker"),
+                    "sequence_number": item.get("sequence_number"),
+                    "pending_count": len(pending),
+                },
+            )
+            return False
+    return True
+
+
 GENERIC_OUTLINE = {
     "phases": [
         {
@@ -131,6 +165,43 @@ GENERIC_OUTLINE = {
 
 
 ALLOWED_DURATIONS = (15, 30, 45)
+
+
+class InterviewPlanUnavailableError(RuntimeError):
+    """Raised when a published plan is required but cannot be used."""
+
+
+def published_plan_required(
+    *,
+    definition_id: str | None,
+    app_env: str | None = None,
+) -> bool:
+    if (definition_id or "").strip():
+        return True
+    env = (app_env if app_env is not None else os.getenv("APP_ENV") or "development")
+    return env.strip().lower() in {"production", "staging"}
+
+
+def resolve_live_outline(
+    *,
+    interview_definition: dict | None,
+    definition_id: str | None,
+    app_env: str | None = None,
+) -> tuple[dict | None, str]:
+    """Return (outline, source). Outline is None when a local generated plan is allowed.
+
+    Never falls back to GENERIC_OUTLINE when a published definition is bound or
+    the environment is production/staging.
+    """
+    require = published_plan_required(definition_id=definition_id, app_env=app_env)
+    if isinstance(interview_definition, dict) and interview_definition.get("competencies"):
+        outline = outline_from_definition(interview_definition)
+        if outline:
+            return outline, "published_definition"
+        raise InterviewPlanUnavailableError("definition_has_no_usable_plan")
+    if require:
+        raise InterviewPlanUnavailableError("published_definition_required")
+    return None, "generated_plan"
 
 
 def normalize_duration_minutes(value: int | None) -> int:
@@ -424,10 +495,14 @@ async def entrypoint(ctx: JobContext) -> None:
 
     metadata = job_metadata(ctx)
     session_id = str(metadata.get("session_id") or "").strip()
+    pending_turns: list[dict[str, Any]] = []
 
     async def shutdown_session() -> None:
         try:
             if session_id:
+                await flush_pending_session_turns(
+                    session_id, pending_turns, reason="worker_shutdown"
+                )
                 await report_session_status(
                     session_id,
                     "abandoned",
@@ -571,14 +646,18 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
     async def turn_sink(**turn) -> None:
-        if session_id:
-            try:
-                await record_session_turn(session_id, **turn)
-            except ServiceUnavailableError:
-                logger.warning("turn_record_unavailable", extra={"event": "turn_record_unavailable"})
+        if not session_id:
+            return
+        pending_turns.append(dict(turn))
+        await flush_pending_session_turns(
+            session_id, pending_turns, reason="turn_sink"
+        )
 
     async def status_sink(status: str, *, reason: str | None = None) -> None:
         if session_id:
+            await flush_pending_session_turns(
+                session_id, pending_turns, reason=f"status:{status}"
+            )
             try:
                 await report_session_status(session_id, status, reason=reason)
             except ServiceUnavailableError:
@@ -637,14 +716,43 @@ async def entrypoint(ctx: JobContext) -> None:
                     },
                 )
         except ServiceUnavailableError:
-            logger.warning(
+            logger.error(
                 "interview_definition_unavailable",
-                extra={"event": "interview_definition_unavailable"},
+                extra={
+                    "event": "interview_definition_unavailable",
+                    "definition_id": explicit_definition_id,
+                    "session_id": session_id,
+                },
             )
-    if interview_definition:
-        outline = outline_from_definition(interview_definition) or GENERIC_OUTLINE
-        outline_source = "published_definition"
-    else:
+    try:
+        outline, outline_source = resolve_live_outline(
+            interview_definition=interview_definition,
+            definition_id=explicit_definition_id,
+        )
+    except InterviewPlanUnavailableError as exc:
+        logger.error(
+            "interview_plan_unavailable",
+            extra={
+                "event": "interview_plan_unavailable",
+                "reason": str(exc),
+                "definition_id": explicit_definition_id,
+                "session_id": session_id,
+            },
+        )
+        if session_id:
+            try:
+                await report_session_status(
+                    session_id,
+                    "failed",
+                    reason=str(exc)[:120],
+                )
+            except ServiceUnavailableError:
+                logger.warning(
+                    "status_report_unavailable",
+                    extra={"event": "status_report_unavailable"},
+                )
+        raise
+    if outline is None:
         outline = await build_outline(ctx)
         outline = enrich_outline_with_resume(outline, resume_text)
         outline = enrich_outline_with_jd(outline, job_description, competencies)

@@ -164,3 +164,21 @@ def test_hot_snapshot_rejects_mismatched_session_payload() -> None:
             "ses_1",
             {"session_id": "ses_2", "state_version": 1},
         )
+
+
+def test_production_refuses_memory_fallback_when_redis_url_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_brain.reset_redis_for_tests()
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:1/0")
+
+    def _no_redis():
+        return None
+
+    monkeypatch.setattr(redis_brain, "_get_redis", _no_redis)
+    with pytest.raises(RuntimeError, match="refusing memory fallback"):
+        redis_brain.put_hot_snapshot(
+            "ses_prod01",
+            {"session_id": "ses_prod01", "state_version": 1},
+        )

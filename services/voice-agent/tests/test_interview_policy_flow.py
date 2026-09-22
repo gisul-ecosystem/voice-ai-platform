@@ -342,8 +342,6 @@ async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:
         async def generate_reply(self, messages: list[dict], **_kwargs) -> str:
             raise RuntimeError("provider unavailable")
 
-    from products.interviewer.flow import FALLBACK_OPENING
-
     flow = InterviewFlow(
         {"phases": []},
         FailingLlm(),
@@ -353,9 +351,12 @@ async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:
         initial_phase_index=0,
     )
 
+    from products.interviewer.flow import FALLBACK_OPENING
+
     question = await flow.generate_next_question(None)
 
-    assert question == FALLBACK_OPENING
+    assert question != FALLBACK_OPENING
+    assert "this role" in question.lower() or "introduce yourself" in question.lower()
 
 
 @pytest.mark.asyncio

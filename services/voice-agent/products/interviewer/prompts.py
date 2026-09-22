@@ -31,7 +31,7 @@ Rules:
 - Keep a calm, clear voice suitable for any occupation. Do not assume the role is technical.
 
 Output a single JSON object with keys:
-answer_evaluation (object, see turn instructions; omit on the opening turn), question (spoken words only),
+question (spoken words only — emit this key first), answer_evaluation (object, see turn instructions; omit on the opening turn),
 competency_id, intent, depth (integer), source_claim_ids (array of strings).
 """
 
@@ -126,6 +126,7 @@ Tag the question you write: set depth_tag to "concept" for definition/context qu
 
 Respond with a single JSON object in exactly this shape:
 {{
+  "question": "...",
   "answer_evaluation": {{
     "technical_substance": "surface | partial | deep | incorrect | not_applicable",
     "key_facts_stated": ["string"],
@@ -134,7 +135,6 @@ Respond with a single JSON object in exactly this shape:
     "needs_clarification": false,
     "factually_correct": true
   }},
-  "question": "...",
   "competency_id": "...",
   "intent": "...",
   "depth": 1,
