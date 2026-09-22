@@ -378,6 +378,8 @@ async def plan_inputs_from_job(ctx: JobContext) -> tuple[str, str]:
 
 
 async def build_outline(ctx: JobContext) -> dict:
+    if published_plan_required(definition_id=None):
+        raise InterviewPlanUnavailableError("generated_plan_not_allowed")
     try:
         context_id = context_id_from_job(ctx)
         context = await fetch_interview_context(context_id) if context_id else {}
