@@ -1,0 +1,481 @@
+"""Validate generated interview questions before they are spoken."""
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+from products.interviewer.coverage import competency_by_id, ladder_steps
+from products.interviewer.evidence import SLOT_KEYS
+
+_PUNCT = re.compile(r"[^a-z0-9\s]+")
+_WS = re.compile(r"\s+")
+_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
+
+PROTECTED_MARKERS = (
+    "age",
+    "how old",
+    "married",
+    "children",
+    "family status",
+    "pregnant",
+    "religion",
+    "nationality",
+    "ethnicity",
+    "race",
+    "gender",
+    "disability",
+    "accent",
+    "native speaker",
+    "where were you born",
+    "maiden",
+)
+
+LEADING_PATTERNS = (
+    re.compile(r"\b(?:right|correct|no)\s*\?\s*$"),
+    re.compile(r",\s*(?:didn't|don't|doesn't|wasn't|weren't|isn't|aren't)\s+\w+\s*\?"),
+    re.compile(r"^\s*so\s+you\s+(?:used|chose|built|went|picked|decided)\b"),
+    re.compile(r"\bi\s+(?:assume|presume|take it)\b"),
+)
+
+TECH_TERMS = (
+    "api",
+    "schema",
+    "queue",
+    "kafka",
+    "kubernetes",
+    "redis",
+    "postgres",
+    "microservice",
+    "latency",
+    "deadlock",
+    "timeout",
+    "websocket",
+    "sharding",
+    "throughput",
+    "cache",
+    "database",
+    "algorithm",
+    "deploy",
+    "server",
+    "code",
+)
+
+# Every intent the policy engine or a published ladder may legitimately ask for.
+KNOWN_INTENTS: frozenset[str] = frozenset(
+    (
+        "establish_context",
+        "establish_ownership",
+        "applied_understanding",
+        "problem_or_complexity",
+        "tradeoff_or_transfer",
+        "opening",
+        "await_introduction",
+        "candidate_map",
+        "baseline",
+        "resume_project",
+        "consistency_check",
+        "clarify",
+        "rephrase",
+        "recovery",
+        "coverage",
+        "gap_check",
+        "final_addition",
+        "closing",
+        "live_question",
+    )
+)
+
+TechnicalSubstance = Literal[
+    "surface", "partial", "deep", "incorrect", "not_applicable"
+]
+
+SUBSTANCE_VALUES: frozenset[str] = frozenset(
+    ("surface", "partial", "deep", "incorrect", "not_applicable")
+)
+
+# Informational only — the numeric depth ladder in policy.py stays authoritative.
+DEPTH_TAG_VALUES: frozenset[str] = frozenset(("concept", "applied", "trade_off"))
+PROBE_SHAPE_VALUES: frozenset[str] = frozenset(
+    ("why", "trade_off", "failure_mode", "metric", "other")
+)
+
+
+@dataclass
+class AnswerEvaluation:
+    """LLM verdict on the candidate's previous answer, returned with the next question.
+
+    Contract:
+      technical_substance: "surface" | "partial" | "deep" | "incorrect" | "not_applicable"
+        - deep: specific, verifiable detail (numbers, mechanisms, trade-offs, decisions).
+        - partial: practical application shown but missing concrete trade-offs/metrics.
+        - surface: only names concepts / textbook definition, no applied evidence.
+        - incorrect: legacy value, kept for backward compatibility — prefer combining
+          a depth value with factually_correct=False for new evaluations.
+        - not_applicable: greeting, meta-question, or non-technical turn.
+      factually_correct: independent of depth — false whenever the answer contains a
+        claim that contradicts established fact for this domain, even if the answer is
+        otherwise deep or partial. A "deep but wrong" answer is a distinct, more
+        important signal than a shallow one and must not be hidden by the depth label.
+        True (default) when no claim is factually wrong, including surface/not_applicable
+        answers that make no verifiable claim at all.
+      key_facts_stated: concrete facts extracted from the answer, reused across turns so
+        the interviewer does not re-ask what is already known.
+      reasoning: one sentence, written so a human reviewer could paste it directly into
+        the scorecard as justification.
+      matches_evidence_expected: whether the answer satisfies the competency's
+        evidence_expected list.
+      needs_clarification: true only when the answer itself is too ambiguous to score
+        confidently (unclear pronouns, contradictions, cut-off sentences) — distinct
+        from "surface", which means a clear but shallow answer.
+
+    Score-mapping threshold (single source of truth other modules reference):
+      factually_correct == False -> unclear -> weak, regardless of technical_substance.
+      Otherwise, technical_substance -> coverage quality (coverage.quality_from_evaluation)
+                                     -> scorecard strength (scoring._strength_from_evaluation)
+        deep               -> sufficient  -> strong
+        partial            -> partial     -> sufficient
+        surface/incorrect  -> unclear      -> weak
+        not_applicable     -> None (falls back to the keyword/word-count heuristic)
+    """
+
+    technical_substance: TechnicalSubstance = "not_applicable"
+    key_facts_stated: list[str] = field(default_factory=list)
+    reasoning: str = ""
+    matches_evidence_expected: bool = False
+    needs_clarification: bool = False
+    factually_correct: bool = True
+    # Evidence dimensions (evidence.SLOT_KEYS) this answer actually proved / merely asserted.
+    slots_demonstrated: list[str] = field(default_factory=list)
+    slots_claimed: list[str] = field(default_factory=list)
+    contradicts_earlier: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "technical_substance": self.technical_substance,
+            "key_facts_stated": list(self.key_facts_stated),
+            "reasoning": self.reasoning,
+            "matches_evidence_expected": self.matches_evidence_expected,
+            "needs_clarification": self.needs_clarification,
+            "factually_correct": self.factually_correct,
+            "slots_demonstrated": list(self.slots_demonstrated),
+            "slots_claimed": list(self.slots_claimed),
+            "contradicts_earlier": self.contradicts_earlier,
+        }
+
+
+def _slot_list(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    seen: list[str] = []
+    for item in raw:
+        key = str(item).strip().lower()
+        if key in SLOT_KEYS and key not in seen:
+            seen.append(key)
+    return seen
+
+
+def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
+    """Return a validated evaluation, or None so callers fall back to heuristics."""
+    if not isinstance(payload, dict):
+        return None
+    substance = str(payload.get("technical_substance") or "").strip().lower()
+    if substance not in SUBSTANCE_VALUES:
+        return None
+    raw_facts = payload.get("key_facts_stated")
+    facts = (
+        [str(item).strip() for item in raw_facts if str(item).strip()]
+        if isinstance(raw_facts, list)
+        else []
+    )
+    return AnswerEvaluation(
+        technical_substance=substance,  # type: ignore[arg-type]
+        key_facts_stated=facts[:20],
+        reasoning=str(payload.get("reasoning") or "").strip()[:500],
+        matches_evidence_expected=bool(payload.get("matches_evidence_expected")),
+        needs_clarification=bool(payload.get("needs_clarification")),
+        factually_correct=bool(payload.get("factually_correct", True)),
+        slots_demonstrated=_slot_list(payload.get("slots_demonstrated")),
+        slots_claimed=_slot_list(payload.get("slots_claimed")),
+        contradicts_earlier=bool(payload.get("contradicts_earlier")),
+    )
+
+
+@dataclass
+class GeneratedQuestion:
+    question: str
+    competency_id: str | None = None
+    intent: str = "live_question"
+    depth: int = 1
+    source_claim_ids: list[str] = field(default_factory=list)
+    decision: str = "probe"
+    answer_evaluation: AnswerEvaluation | None = None
+    depth_tag: str | None = None
+    probe_shape: str | None = None
+
+
+@dataclass
+class ValidationResult:
+    ok: bool
+    question: GeneratedQuestion
+    reasons: list[str] = field(default_factory=list)
+
+
+def fingerprint(text: str) -> str:
+    cleaned = _PUNCT.sub(" ", (text or "").lower())
+    return _WS.sub(" ", cleaned).strip()
+
+
+def _question_tokens(text: str) -> set[str]:
+    ignored = {
+        "can", "could", "would", "you", "your", "the", "about", "me",
+        "please", "briefly", "recent", "work", "worked",
+    }
+    synonyms = {
+        "describe": "explain",
+        "discuss": "explain",
+        "share": "explain",
+        "tell": "explain",
+        "walk": "explain",
+        "overview": "explain",
+    }
+    return {
+        synonyms.get(token, token)
+        for token in fingerprint(text).split()
+        if len(token) > 2 and token not in ignored
+    }
+
+
+def _near_duplicate(left: str, right: str) -> bool:
+    left_tokens = _question_tokens(left)
+    right_tokens = _question_tokens(right)
+    if len(left_tokens) < 2 or len(right_tokens) < 2:
+        return False
+    overlap = len(left_tokens & right_tokens)
+    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.7
+
+
+def parse_generated_question(raw: str) -> GeneratedQuestion | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    candidate = text
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    if fenced:
+        candidate = fenced.group(1)
+    else:
+        match = _JSON_OBJECT.search(text)
+        if match:
+            candidate = match.group(0)
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    question = str(payload.get("question") or "").strip()
+    if not question:
+        return None
+    depth_raw = payload.get("depth") or 1
+    try:
+        depth = int(depth_raw)
+    except (TypeError, ValueError):
+        depth = 1
+    claim_ids = [
+        str(item).strip()
+        for item in (payload.get("source_claim_ids") or [])
+        if str(item).strip()
+    ]
+    competency_id = str(payload.get("competency_id") or "").strip() or None
+    depth_tag = str(payload.get("depth_tag") or "").strip().lower() or None
+    if depth_tag not in DEPTH_TAG_VALUES:
+        depth_tag = None
+    probe_shape = str(payload.get("probe_shape") or "").strip().lower() or None
+    if probe_shape not in PROBE_SHAPE_VALUES:
+        probe_shape = None
+    return GeneratedQuestion(
+        question=question,
+        competency_id=competency_id,
+        intent=str(payload.get("intent") or "live_question").strip() or "live_question",
+        depth=max(1, min(5, depth)),
+        source_claim_ids=claim_ids,
+        decision=str(payload.get("decision") or "probe").strip().lower() or "probe",
+        answer_evaluation=parse_answer_evaluation(payload.get("answer_evaluation")),
+        depth_tag=depth_tag,
+        probe_shape=probe_shape,
+    )
+
+
+def ladder_fallback_question(
+    definition: dict[str, Any] | None,
+    *,
+    competency_id: str | None,
+    intent: str,
+) -> str:
+    for step in ladder_steps(definition, competency_id):
+        if str(step.get("intent") or "").strip() == intent:
+            example = str(step.get("example_question") or "").strip()
+            if example:
+                return example
+    defaults = {
+        "establish_context": "Can you briefly describe the situation?",
+        "establish_ownership": "What part of that did you personally handle?",
+        "applied_understanding": "How did you approach that work?",
+        "problem_or_complexity": "What was difficult about that, and how did you handle it?",
+        "tradeoff_or_transfer": "Looking back, what would you change and why?",
+        "candidate_map": "Please share a short overview of the work most relevant to this role.",
+        "opening": (
+            "Thanks for joining. I'm your interviewer for this conversation. "
+            "To get started, please introduce yourself — a short overview of your "
+            "background, and the work that is most relevant to this role."
+        ),
+        "clarify": "Sorry, I did not catch that. Please say a bit more, in a full sentence.",
+        "final_addition": "Before we close, is there one example you would still like to add?",
+    }
+    return defaults.get(
+        intent,
+        "Could you share one specific example of work you personally handled, and what happened as a result?",
+    )
+
+
+def _allowed_claim_ids(profile: dict[str, Any] | None) -> set[str]:
+    ids: set[str] = set()
+    if not isinstance(profile, dict):
+        return ids
+    for item in profile.get("claims") or []:
+        if isinstance(item, dict) and item.get("claim_id"):
+            ids.add(str(item["claim_id"]).strip())
+    return ids
+
+
+def _grounding_corpus(
+    *,
+    definition: dict[str, Any] | None,
+    profile: dict[str, Any] | None,
+    job_description: str,
+    resume_text: str,
+    recent_turns: list[str],
+    competency_id: str | None,
+) -> str:
+    parts = [job_description or "", resume_text or ""]
+    parts.extend(recent_turns)
+    competency = competency_by_id(definition, competency_id)
+    parts.append(str(competency.get("name") or ""))
+    parts.append(str(competency.get("definition") or ""))
+    for item in competency.get("evidence_expected") or []:
+        parts.append(str(item))
+    if isinstance(profile, dict):
+        for item in profile.get("claims") or []:
+            if isinstance(item, dict):
+                parts.append(str(item.get("value") or ""))
+    return " ".join(parts).lower()
+
+
+def _known_intents(definition: dict[str, Any] | None) -> set[str]:
+    """Policy vocabulary plus any intent a published ladder actually declares."""
+    intents = set(KNOWN_INTENTS)
+    if isinstance(definition, dict):
+        for ladder in definition.get("question_ladders") or []:
+            if not isinstance(ladder, dict):
+                continue
+            for step in ladder.get("levels") or []:
+                if isinstance(step, dict):
+                    value = str(step.get("intent") or "").strip()
+                    if value:
+                        intents.add(value)
+        for competency in definition.get("competencies") or []:
+            if isinstance(competency, dict):
+                for value in competency.get("min_assessment_intents") or []:
+                    text = str(value).strip()
+                    if text:
+                        intents.add(text)
+    return intents
+
+
+def validate_generated_question(
+    generated: GeneratedQuestion,
+    *,
+    definition: dict[str, Any] | None,
+    policy_competency_id: str | None,
+    policy_intent: str,
+    policy_depth: int,
+    max_depth: int,
+    recent_questions: list[str],
+    allowed_probes: list[str],
+    profile: dict[str, Any] | None = None,
+    job_description: str = "",
+    resume_text: str = "",
+    recent_turns: list[str] | None = None,
+) -> ValidationResult:
+    reasons: list[str] = []
+    question = (generated.question or "").strip()
+    if not question:
+        reasons.append("empty_question")
+    if question.count("?") > 1:
+        reasons.append("compound_question")
+    lowered = question.lower()
+    if any(marker in lowered for marker in PROTECTED_MARKERS):
+        reasons.append("protected_topic")
+    if any(pattern.search(lowered) for pattern in LEADING_PATTERNS):
+        reasons.append("leading_question")
+
+    expected_competency = policy_competency_id
+    if expected_competency and generated.competency_id not in {None, "", expected_competency}:
+        reasons.append("competency_mismatch")
+    # policy_intent is authoritative and overwritten below, so a differing echo is
+    # not a defect. Only an intent outside the known vocabulary is.
+    if generated.intent and generated.intent not in _known_intents(definition):
+        reasons.append("unknown_intent")
+    if generated.depth > max(1, int(max_depth)):
+        reasons.append("depth_exceeded")
+    if generated.depth > max(1, int(policy_depth) + 1):
+        reasons.append("depth_jump")
+
+    allowed_ids = _allowed_claim_ids(profile)
+    for claim_id in generated.source_claim_ids:
+        if allowed_ids and claim_id not in allowed_ids:
+            reasons.append("unknown_claim_id")
+            break
+
+    current_fp = fingerprint(question)
+    for previous in recent_questions[-8:]:
+        prev_fp = fingerprint(previous)
+        if current_fp and prev_fp and (
+            current_fp == prev_fp
+            or current_fp in prev_fp
+            or prev_fp in current_fp
+            or _near_duplicate(current_fp, prev_fp)
+        ):
+            reasons.append("duplicate_question")
+            break
+
+    corpus = _grounding_corpus(
+        definition=definition,
+        profile=profile,
+        job_description=job_description,
+        resume_text=resume_text,
+        recent_turns=list(recent_turns or []),
+        competency_id=expected_competency or generated.competency_id,
+    )
+    # Only guard jargon for roles with no technical signal at all. Banning these
+    # words outright would stop a technical interview from ever going deep.
+    if corpus and not any(term in corpus for term in TECH_TERMS):
+        if any(term in lowered for term in TECH_TERMS):
+            reasons.append("ungrounded_term")
+
+    ok = not reasons
+    normalized = GeneratedQuestion(
+        question=question,
+        competency_id=expected_competency or generated.competency_id,
+        intent=policy_intent or generated.intent,
+        depth=max(1, min(5, int(policy_depth or generated.depth or 1))),
+        source_claim_ids=[item for item in generated.source_claim_ids if item in allowed_ids]
+        if allowed_ids
+        else list(generated.source_claim_ids),
+        decision=generated.decision if generated.decision in {"probe", "advance"} else "probe",
+        answer_evaluation=generated.answer_evaluation,
+        depth_tag=generated.depth_tag,
+        probe_shape=generated.probe_shape,
+    )
+    return ValidationResult(ok=ok, question=normalized, reasons=reasons)

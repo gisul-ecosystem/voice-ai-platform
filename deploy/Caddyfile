@@ -1,0 +1,13 @@
+interviewer-dev.gisul.ai {
+	tls /etc/letsencrypt/live/interviewer-dev.gisul.ai/fullchain.pem /etc/letsencrypt/live/interviewer-dev.gisul.ai/privkey.pem
+	encode zstd gzip
+
+	header {
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	reverse_proxy frontend:3000
+}

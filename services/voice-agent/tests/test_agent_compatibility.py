@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 import aaptor_agent
@@ -52,15 +54,105 @@ async def test_aaptor_forces_advance_after_probe_limit() -> None:
             ]
         },
         llm,
+        max_probes_per_phase=2,
+        initial_state={"candidate_turns": ["I already introduced myself."]},
     )
 
     await agent.generate_next_question("Answer one")
     await agent.generate_next_question("Answer two")
-    await agent.generate_next_question("Answer three")
 
     assert agent.phase_index == 1
     assert agent.probe_count == 0
-    assert agent.candidate_turns == ["Answer one", "Answer two", "Answer three"]
+    assert agent.candidate_turns == [
+        "I already introduced myself.",
+        "Answer one",
+        "Answer two",
+    ]
+
+
+def test_restored_agent_skips_opening_marker() -> None:
+    agent = aaptor_agent.AaptorAgent(
+        {
+            "phases": [
+                {
+                    "name": "experience",
+                    "duration_minutes": 5,
+                    "topics": ["ownership"],
+                    "source": "resume",
+                }
+            ]
+        },
+        FakeLlm(),
+        initial_state={
+            "candidate_turns": ["I built APIs."],
+            "interviewer_turns": ["Tell me about a project."],
+        },
+    )
+    assert agent._opened is True
+    assert agent._last_agent_text == "Tell me about a project."
+
+
+@pytest.mark.asyncio
+async def test_restored_agent_on_enter_does_not_respeak() -> None:
+    agent = aaptor_agent.AaptorAgent(
+        {
+            "phases": [
+                {
+                    "name": "experience",
+                    "duration_minutes": 5,
+                    "topics": ["ownership"],
+                    "source": "resume",
+                }
+            ]
+        },
+        FakeLlm(),
+        initial_state={
+            "candidate_turns": ["I built APIs."],
+            "interviewer_turns": ["Tell me about a project."],
+        },
+    )
+    spoken: list[str] = []
+
+    class _Session:
+        async def say(self, text: str, **_kwargs) -> None:
+            spoken.append(text)
+
+    agent.__dict__["session"] = _Session()
+    await agent.on_enter()
+    assert spoken == []
+
+
+@pytest.mark.asyncio
+async def test_aaptor_closes_after_last_phase_probe_limit() -> None:
+    llm = FakeLlm(
+        "DECISION: probe\n\nFirst probe?",
+        "DECISION: probe\n\nSecond probe?",
+    )
+    agent = aaptor_agent.AaptorAgent(
+        {
+            "phases": [
+                {
+                    "name": "technical",
+                    "duration_minutes": 10,
+                    "topics": ["Python"],
+                    "source": "jd",
+                }
+            ]
+        },
+        llm,
+        max_probes_per_phase=2,
+        min_turns_before_close=3,
+        initial_state={"candidate_turns": ["I already introduced myself."]},
+    )
+
+    await agent.generate_next_question("Answer one")
+    await agent.generate_next_question("Answer two")
+    agent.flow.started_at = time.monotonic() - agent.flow.max_duration_seconds - 1
+    closing = await agent.generate_next_question("Answer three")
+
+    assert closing == aaptor_agent.CLOSING_MESSAGE
+    assert agent.flow.completed is True
+    assert len(llm.messages) == 2
 
 
 def test_racko_parsers_and_id_extraction() -> None:

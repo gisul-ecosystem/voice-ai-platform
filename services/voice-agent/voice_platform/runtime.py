@@ -26,8 +26,14 @@ class InferenceClients:
 
 def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients:
     """Resolve room-level provider choices before the first conversation turn."""
+    job = getattr(ctx, "job", None)
+    raw_metadata = (
+        getattr(job, "metadata", None)
+        or getattr(ctx.room, "metadata", None)
+        or ""
+    )
     overrides = inference_overrides_from_metadata(
-        parse_room_metadata(getattr(ctx.room, "metadata", None) or "")
+        parse_room_metadata(raw_metadata)
     )
     try:
         llm_client, stt_client, tts_client = clients_from_overrides(overrides)
@@ -43,10 +49,26 @@ def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients
 def build_agent_session(clients: InferenceClients) -> AgentSession:
     """Construct the shared STT → LLM → TTS LiveKit pipeline."""
     return AgentSession(
-        vad=silero.VAD.load(),
+        # Short silence so the first reply starts soon after the candidate stops.
+        vad=silero.VAD.load(min_speech_duration=0.4, min_silence_duration=0.4),
         stt=LaptopSTT(client=clients.stt),
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
+        # Publish agent speech text so the live transcript can show interviewer lines.
+        use_tts_aligned_transcript=True,
+        # Allow real barge-in, but ignore laptop-speaker echo while the agent talks.
+        # Echo of a full opening question is long; require sustained speech + words.
+        allow_interruptions=True,
+        min_interruption_duration=2.5,
+        min_interruption_words=6,
+        min_endpointing_delay=0.35,
+        max_endpointing_delay=1.6,
+        resume_false_interruption=True,
+        false_interruption_timeout=2.0,
+        # Preemptive drafting made the agent commit to replying on partial/paused
+        # speech before the candidate finished their sentence — disabled so the
+        # full final utterance reaches the LLM before a reply is generated.
+        preemptive_generation=False,
     )
 
 

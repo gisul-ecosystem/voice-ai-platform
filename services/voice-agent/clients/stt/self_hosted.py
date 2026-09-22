@@ -5,7 +5,7 @@ import logging
 import time
 
 from clients.http_util import make_timeout, request
-from clients.settings import STT_SERVICE_URL, STT_TIMEOUT_SECONDS
+from clients.settings import STT_TIMEOUT_SECONDS
 
 logger = logging.getLogger("voice-agent.stt")
 

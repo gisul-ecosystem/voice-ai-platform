@@ -15,8 +15,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Voice AI Platform Demo",
-  description: "Reusable LiveKit demos for Voice AI Platform products.",
+  title: {
+    default: "AI Interviewer",
+    template: "%s | AI Interviewer",
+  },
+  description:
+    "Create structured interviews and deliver a focused AI-led candidate experience.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

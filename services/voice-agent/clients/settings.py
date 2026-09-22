@@ -39,6 +39,7 @@ LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://localhost:11434/v1").rstr
 STT_SERVICE_URL = os.getenv("STT_SERVICE_URL", "http://localhost:5552").rstrip("/")
 TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", "http://localhost:5553").rstrip("/")
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:5554").rstrip("/")
+VOICE_AGENT_SERVICE_TOKEN = (os.getenv("VOICE_AGENT_SERVICE_TOKEN") or "").strip()
 CONTEXT_ENGINE_URL = os.getenv("CONTEXT_ENGINE_URL", "http://localhost:5555").rstrip("/")
 
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3:4b-instruct-2507-q8_0")
@@ -54,6 +55,26 @@ STT_API_KEY = (os.getenv("STT_API_KEY") or "").strip()
 TTS_API_KEY = (os.getenv("TTS_API_KEY") or "").strip()
 OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+ELEVENLABS_API_KEY = (os.getenv("ELEVENLABS_API_KEY") or "").strip()
+ELEVENLABS_BASE_URL = os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io/v1").rstrip("/")
+ELEVENLABS_VOICE_ID = (os.getenv("ELEVENLABS_VOICE_ID") or "EXAVITQu4vr4xnSDxMaL").strip()
+ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5").strip()
+ELEVENLABS_STABILITY = _float("ELEVENLABS_STABILITY", 0.45)
+ELEVENLABS_SIMILARITY_BOOST = _float("ELEVENLABS_SIMILARITY_BOOST", 0.80)
+ELEVENLABS_STYLE = _float("ELEVENLABS_STYLE", 0.05)
+ELEVENLABS_USE_SPEAKER_BOOST = (
+    os.getenv("ELEVENLABS_USE_SPEAKER_BOOST") or "true"
+).strip().lower() in {"1", "true", "yes"}
+ELEVENLABS_LATENCY_OPTIMIZATION = _int("ELEVENLABS_LATENCY_OPTIMIZATION", 3)
+ELEVENLABS_VOICE_SPEED = _float("ELEVENLABS_VOICE_SPEED", 0.82)
+SARVAM_API_KEY = (os.getenv("SARVAM_API_KEY") or "").strip()
+SARVAM_STT_BASE_URL = (
+    os.getenv("SARVAM_STT_BASE_URL") or "https://api.sarvam.ai"
+).strip().rstrip("/")
+SARVAM_STT_MODEL = (os.getenv("SARVAM_STT_MODEL") or "saaras:v3").strip() or "saaras:v3"
+SARVAM_STT_MODE = (os.getenv("SARVAM_STT_MODE") or "transcribe").strip() or "transcribe"
+SARVAM_STT_LANGUAGE = (os.getenv("SARVAM_STT_LANGUAGE") or "unknown").strip() or "unknown"
+SARVAM_STT_STREAM_TYPE = (os.getenv("SARVAM_STT_STREAM_TYPE") or "fast").strip() or "fast"
 
 LLM_TIMEOUT_SECONDS = _float("LLM_TIMEOUT_SECONDS", 30)
 STT_TIMEOUT_SECONDS = _float("STT_TIMEOUT_SECONDS", 30)

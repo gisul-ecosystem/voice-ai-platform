@@ -1,16 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { transitionVoiceFlow } from "@gisul/voice-ui";
 import { describe, expect, it, vi } from "vitest";
 
 import { SetupForm } from "@/components/SetupForm";
 import { getProduct } from "@/lib/products";
 
 describe("setup to prejoin flow", () => {
-  it("moves from setup to prejoin only on the expected event", () => {
-    expect(transitionVoiceFlow("setup", "connected")).toBe("setup");
-    expect(transitionVoiceFlow("setup", "setup-submitted")).toBe("prejoin");
-  });
-
   it("collects required interviewer context", () => {
     const onContinue = vi.fn();
     render(
@@ -20,36 +14,89 @@ describe("setup to prejoin flow", () => {
       />,
     );
 
+    fireEvent.change(screen.getByLabelText("Role"), {
+      target: { value: "Backend Engineer" },
+    });
+    fireEvent.change(screen.getByLabelText("Interview length"), {
+      target: { value: "15" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.change(screen.getByLabelText("Job description"), {
+      target: {
+        value:
+          "Backend engineer building APIs with Python, FastAPI, and ownership of production services.",
+      },
+    });
+    fireEvent.change(screen.getByLabelText("Candidate resume"), {
+      target: {
+        value:
+          "Five years in Python backends, FastAPI services, and on-call ownership for distributed systems.",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.change(screen.getByLabelText("Candidate name"), {
       target: { value: "Priya" },
     });
-    fireEvent.change(screen.getByLabelText("Job description"), {
-      target: { value: "Backend engineer" },
-    });
-    fireEvent.change(screen.getByLabelText("Resume text"), {
-      target: { value: "Five years in Python" },
+    fireEvent.change(screen.getByLabelText("Candidate email"), {
+      target: { value: "priya@example.com" },
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Continue to device check" }),
+      screen.getByRole("button", { name: "Review interview" }),
     );
+    expect(
+      screen.getByRole("heading", { name: "Confirm the interview" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Schedule interview" }));
 
-    expect(onContinue).toHaveBeenCalledWith({
+    expect(onContinue).toHaveBeenCalledWith(expect.objectContaining({
       productId: "interviewer",
       participantName: "Priya",
-      jobDescription: "Backend engineer",
-      resumeText: "Five years in Python",
-    });
+      candidateEmail: "priya@example.com",
+      jobDescription:
+        "Backend engineer building APIs with Python, FastAPI, and ownership of production services.",
+      resumeText:
+        "Five years in Python backends, FastAPI services, and on-call ownership for distributed systems.",
+      interviewSetup: {
+        title: "Structured interview",
+        role: "Backend Engineer",
+        seniority: "mid",
+        difficulty: "applied",
+        durationMinutes: 15,
+        language: "English",
+        competencies: [
+          "Problem solving",
+          "Role expertise",
+          "Communication",
+        ],
+        maxProbesPerPhase: 2,
+        monitoringEnabled: true,
+        recordingEnabled: false,
+      },
+    }));
   });
 
-  it("omits interview context from support setup", () => {
+  it("blocks incomplete interview content before scheduling", () => {
     render(
       <SetupForm
-        product={getProduct("customer-support")}
+        product={getProduct("interviewer")}
         onContinue={vi.fn()}
       />,
     );
-
-    expect(screen.queryByLabelText("Job description")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Resume text")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Role"), {
+      target: { value: "Backend Engineer" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.change(screen.getByLabelText("Job description"), {
+      target: { value: "too short" },
+    });
+    fireEvent.change(screen.getByLabelText("Candidate resume"), {
+      target: { value: "also too short" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(
+      screen.getByText(/Paste a complete job description/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Candidate name")).not.toBeInTheDocument();
   });
+
 });
