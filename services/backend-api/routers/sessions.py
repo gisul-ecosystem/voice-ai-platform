@@ -200,12 +200,14 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     try:
         try:
             if existing_session is None:
+                # No `agents=[RoomAgentDispatch(...)]` here: that would dispatch the
+                # worker once on room creation and again below, putting two agents
+                # in the room talking over each other.
                 await lk.room.create_room(
                     api.CreateRoomRequest(
                         name=room_name,
                         metadata=metadata_json,
                         max_participants=max_participants,
-                        agents=[api.RoomAgentDispatch(agent_name=agent_name)],
                     )
                 )
                 dispatch = await lk.agent_dispatch.create_dispatch(

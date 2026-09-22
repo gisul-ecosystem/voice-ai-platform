@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from models.brain import AnswerEvaluation
+
 
 InterviewIntent = Literal["intro", "resume_project", "jd_requirement", "role_fit"]
 
@@ -179,4 +181,7 @@ class SessionTurnRequest(BaseModel):
     is_final: bool = True
     language: str | None = Field(default=None, max_length=32)
     confidence: float | None = Field(default=None, ge=0, le=1)
+    # Posted on a second, idempotent write for a candidate turn: the verdict only
+    # exists after the next question is generated.
+    answer_evaluation: AnswerEvaluation | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

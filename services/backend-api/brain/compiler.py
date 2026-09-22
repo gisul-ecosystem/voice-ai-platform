@@ -148,18 +148,26 @@ def normalize_skill_label(value: str) -> str:
 
 
 def _evidence_for(name: str, jd_hints: list[str]) -> list[str]:
+    """Technical evidence dimensions, not a STAR story template.
+
+    These are what the answer must contain for the competency to count as proven.
+    The interviewer writes its own wording; these only set the bar.
+    """
+    topic = (name or "this area").strip().lower()
     base = [
-        "context of the work",
-        "personal contribution",
-        "approach or method",
-        "result or impact",
+        f"what they personally decided or built in {topic}",
+        f"the specific method, algorithm, pattern or tool used for {topic}, named",
+        "how that approach works internally, step by step",
+        "its cost characteristics: time/space complexity, latency, throughput or spend",
+        "why that option over a named alternative, and what it cost them",
+        "where the approach breaks: edge cases, failure modes, behaviour at scale",
+        "how they would optimise it further, and the trade-off that would introduce",
+        "a measured outcome stated as from-value to to-value",
     ]
     for hint in jd_hints[:2]:
         clipped = hint.strip()
         if clipped and clipped.lower() not in {item.lower() for item in base}:
-            base.append(clipped[:120])
-    if name.lower() not in " ".join(base).lower():
-        base.append(f"example demonstrating {name.lower()}")
+            base.append(f"concrete evidence of {clipped[:100]}")
     return base[:12]
 
 
@@ -183,12 +191,12 @@ def _texts(items: Iterable[ExtractedItem]) -> list[str]:
 def _candidate_competency_seeds(
     job: JobIntelligence,
     creator_competencies: list[str] | None,
-) -> list[tuple[str, str, list[str], bool]]:
-    """Return (id_base, display_name, jd_hint_texts, required)."""
-    seeds: list[tuple[str, str, list[str], bool]] = []
+) -> list[tuple[str, str, list[str], bool, str]]:
+    """Return (id_base, display_name, jd_hint_texts, required, source)."""
+    seeds: list[tuple[str, str, list[str], bool, str]] = []
     seen_names: set[str] = set()
 
-    def add(name: str, hints: list[str], *, required: bool) -> None:
+    def add(name: str, hints: list[str], *, required: bool, source: str = "jd") -> None:
         cleaned = normalize_skill_label(name)
         if len(cleaned) < 2:
             return
@@ -199,11 +207,17 @@ def _candidate_competency_seeds(
             return
         seen_names.add(key)
         seeds.append(
-            (_slugify(cleaned, fallback="competency"), cleaned[:120], hints, required)
+            (
+                _slugify(cleaned, fallback="competency"),
+                cleaned[:120],
+                hints,
+                required,
+                source,
+            )
         )
 
     for name in creator_competencies or []:
-        add(name, [], required=True)
+        add(name, [], required=True, source="creator")
 
     def _usable(item: ExtractedItem, *, max_len: int = 60) -> bool:
         text = item.text.strip()
@@ -236,7 +250,7 @@ def _candidate_competency_seeds(
     if len(combined) < _MIN_COMPETENCIES:
         for competency_id, name, _definition in _CORE_FALLBACKS:
             if name.lower() not in seen_names:
-                combined.append((competency_id, name, [], True))
+                combined.append((competency_id, name, [], True, "fallback"))
                 seen_names.add(name.lower())
             if len(combined) >= _MIN_COMPETENCIES:
                 break
@@ -253,6 +267,7 @@ def _build_competency(
     weight: float,
     required: bool = True,
     definition: str | None = None,
+    source: str = "jd",
 ) -> CompetencyDefinition:
     return CompetencyDefinition(
         id=competency_id,
@@ -272,6 +287,7 @@ def _build_competency(
         max_probes=3 if level in {"intern", "junior"} else 4,
         rubric=_role_rubric(name, level, hints),
         weight=round(weight, 2),
+        source=source,  # type: ignore[arg-type]
     )
 
 
@@ -383,7 +399,7 @@ def compile_blueprint(
     competencies: list[CompetencyDefinition] = []
 
     core_defs = {item[0]: item[2] for item in _CORE_FALLBACKS}
-    for (id_base, name, hints, required), weight in zip(seeds, weights, strict=True):
+    for (id_base, name, hints, required, source), weight in zip(seeds, weights, strict=True):
         competency_id = _unique_id(id_base, used_ids)
         competencies.append(
             _build_competency(
@@ -394,6 +410,7 @@ def compile_blueprint(
                 weight=weight,
                 required=required,
                 definition=core_defs.get(id_base),
+                source=source,
             )
         )
 
