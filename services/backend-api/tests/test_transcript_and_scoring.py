@@ -133,6 +133,60 @@ def test_scorecard_requires_evidence_citations() -> None:
     assert scorecard.human_review_status == "pending"
 
 
+def test_scorecard_coverage_does_not_count_an_asked_but_unproven_intent() -> None:
+    definition = {
+        "definition_id": "idef_score_test_coverage_01",
+        "competencies": [
+            {
+                "id": "ownership",
+                "name": "Ownership",
+                "evidence_expected": ["personal contribution"],
+                "min_assessment_intents": [
+                    "establish_context",
+                    "establish_ownership",
+                ],
+            }
+        ],
+    }
+    scorecard, _ = build_scorecard_bundle(
+        session_id="ses_score_test_coverage_01",
+        definition=definition,
+        questions=[
+            {
+                "question_id": "q_context",
+                "competency_id": "ownership",
+                "intent": "establish_context",
+                "text": "Describe the situation.",
+            },
+            {
+                "question_id": "q_ownership",
+                "competency_id": "ownership",
+                "intent": "establish_ownership",
+                "text": "What did you personally handle?",
+            },
+        ],
+        answers=[
+            {
+                "answer_id": "a_context",
+                "question_id": "q_context",
+                "turn_ids": ["turn_context"],
+                "usable": True,
+                "final_transcript": "It was a billing incident.",
+            }
+        ],
+        coverage={
+            "ownership": {
+                "status": "partial",
+                "covered_intents": ["establish_context"],
+                "missing_intents": ["establish_ownership"],
+            }
+        },
+    )
+
+    scored = scorecard.competencies[0]
+    assert scored.missing_intents == ["establish_ownership"]
+
+
 def test_heuristic_scoring_does_not_invent_low_ratings() -> None:
     definition = {
         "definition_id": "idef_score_test_03",

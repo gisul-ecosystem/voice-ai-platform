@@ -9,12 +9,18 @@ from clients.provider_util import (
     require_key_if_needed,
     resolve_api_key,
 )
-from clients.settings import TTS_PROVIDER, TTS_SERVICE_URL
+from clients.settings import (
+    TTS_FALLBACK_PROVIDER,
+    TTS_PIN_VOICE,
+    TTS_PROVIDER,
+    TTS_SERVICE_URL,
+)
 from clients.tts.elevenlabs import ElevenLabsTts
 from clients.tts.openai import OpenAITts
+from clients.tts.resilient import ResilientTts
 from clients.tts.self_hosted import SelfHostedTts
 
-TtsClient = SelfHostedTts | OpenAITts | ElevenLabsTts
+TtsClient = ResilientTts | SelfHostedTts | OpenAITts | ElevenLabsTts
 
 
 def _build(provider: str, api_key: str) -> TtsClient:
@@ -41,4 +47,18 @@ def get_tts_client(
     log_client_selected(
         "tts", provider, overridden=overridden, has_api_key=bool(api_key)
     )
-    return _build(provider, api_key)
+    primary = _build(provider, api_key)
+    fallback = None
+    if TTS_FALLBACK_PROVIDER:
+        try:
+            fallback_provider = normalize_provider(
+                TTS_FALLBACK_PROVIDER,
+                fallback="self_hosted",
+                service="tts",
+            )
+            if fallback_provider != provider:
+                fallback_key = resolve_api_key("tts", fallback_provider, None)
+                fallback = _build(fallback_provider, fallback_key)
+        except Exception:
+            fallback = None
+    return ResilientTts(primary, fallback, pin_voice=TTS_PIN_VOICE)

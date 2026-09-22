@@ -8,6 +8,11 @@ import aaptor_agent
 import racko_agent
 
 
+@pytest.fixture(autouse=True)
+def _allow_legacy_interview_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALLOW_LEGACY_INTERVIEW_FLOW", "1")
+
+
 class FakeLlm:
     def __init__(self, *replies: str) -> None:
         self.replies = list(replies)

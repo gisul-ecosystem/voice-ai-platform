@@ -285,6 +285,30 @@ def test_off_topic_answer_is_not_marked_usable() -> None:
     assert covered == []
 
 
+def test_coverage_evidence_states_progress_to_confirmed() -> None:
+    from products.interviewer.coverage import apply_coverage, empty_coverage_entry
+
+    coverage = {"ownership": empty_coverage_entry(["establish_ownership"])}
+    apply_coverage(
+        coverage,
+        competency_id="ownership",
+        covered_intents=["establish_ownership"],
+        evidence_id="ev_1",
+    )
+    assert coverage["ownership"]["evidence_states"] == {
+        "establish_ownership": "demonstrated"
+    }
+    apply_coverage(
+        coverage,
+        competency_id="ownership",
+        covered_intents=["establish_ownership"],
+        evidence_id="ev_2",
+    )
+    assert coverage["ownership"]["evidence_states"] == {
+        "establish_ownership": "confirmed"
+    }
+
+
 def test_missing_intents_force_probe_instead_of_advance() -> None:
     decision = decide_next_action(
         PolicyState(

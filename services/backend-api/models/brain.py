@@ -440,6 +440,9 @@ class CompetencyCoverage(BaseModel):
     covered_intents: list[str] = Field(default_factory=list, max_length=20)
     missing_intents: list[str] = Field(default_factory=list, max_length=20)
     evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    evidence_states: dict[str, Literal["missing", "claimed", "demonstrated", "confirmed"]] = Field(
+        default_factory=dict
+    )
 
 
 class InterviewBrainState(BaseModel):

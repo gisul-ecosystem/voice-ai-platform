@@ -86,6 +86,35 @@ DEFAULT_INTENTS = (
     "applied_understanding",
 )
 
+EVIDENCE_STATES = frozenset({"missing", "claimed", "demonstrated", "confirmed"})
+
+_NUMBER = re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|%|k|m|b)?\b", re.IGNORECASE)
+_QUOTED = re.compile(r"\"([^\"]+)\"|'([^']+)'")
+_FIRST_PERSON = re.compile(
+    r"\bi\s+(handled|led|built|owned|implemented|designed|wrote|ran|"
+    r"managed|reduced|set|rewrote|chose|moved)\s+([^.,;]+)",
+    re.IGNORECASE,
+)
+_OWNERSHIP_CUES = (
+    "i handled",
+    "i led",
+    "i built",
+    "i owned",
+    "i implemented",
+    "i designed",
+    "i wrote",
+    "i ran",
+    "i managed",
+    "i reduced",
+    "i set",
+    "i rewrote",
+)
+_CONTEXT_CUES = (" when ", " at ", " for the ", " for a ", " with the ", " on the ")
+_METHOD_CUES = (" by ", " using ", " steps", " mechanism", " implemented", " designed")
+_PROBLEM_CUES = ("failed", "broke", "timeout", "incident", "blocked", "constraint")
+_TRADEOFF_CUES = ("instead", "rather than", "trade-off", "tradeoff", "would change")
+_WEAK_OBJECTS = frozenset({"it", "that", "this", "them", "things", "stuff"})
+
 
 def _tokens(text: str) -> set[str]:
     return {part for part in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(part) > 2}
@@ -141,6 +170,7 @@ def empty_coverage_entry(required: list[str]) -> dict[str, Any]:
         "covered_intents": [],
         "missing_intents": list(intents),
         "evidence_ids": [],
+        "evidence_states": {intent: "missing" for intent in intents},
     }
 
 
@@ -176,7 +206,11 @@ def classify_live_answer(
     evidence_expected: list[str] | None = None,
     min_words: int = 3,
 ) -> tuple[str, str, list[str]]:
-    """Return (usability, quality, newly_covered_intents)."""
+    """Return (usability, quality, hinted_intents).
+
+    ``hinted_intents`` are keyword matches for debugging only. Callers must
+    use ``evidenced_intents`` to update coverage.
+    """
     usability = classify_answer_usability(text, min_words=min_words)
     cleaned = _WS.sub(" ", (text or "").strip())
     if usability == "silence":
@@ -188,7 +222,7 @@ def classify_live_answer(
     if usability != "usable":
         return usability, "unusable", []
 
-    covered = [intent for intent in required_intents if _intent_matched(cleaned, intent)]
+    hinted = [intent for intent in required_intents if _intent_matched(cleaned, intent)]
     expected = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
     expected_hits = 0
     blob_tokens = _tokens(cleaned)
@@ -197,15 +231,124 @@ def classify_live_answer(
         if item.lower() in cleaned.lower() or (needles and needles & blob_tokens):
             expected_hits += 1
 
-    if not covered and expected and expected_hits == 0 and len(cleaned.split()) >= 8:
+    if not hinted and expected and expected_hits == 0 and len(cleaned.split()) >= 8:
         return "off_topic", "off_topic", []
-    if len(covered) >= max(1, (len(required_intents) + 1) // 2) and expected_hits >= 1:
+    if len(hinted) >= max(1, (len(required_intents) + 1) // 2) and expected_hits >= 1:
         quality = "sufficient"
-    elif covered or expected_hits:
+    elif hinted or expected_hits:
         quality = "partial"
     else:
         quality = "unclear"
-    return "usable", quality, covered
+    # Keyword hits are a debug hint only — they never complete coverage.
+    return "usable", quality, hinted
+
+
+def extract_evidence_facts(text: str) -> list[str]:
+    """Pull concrete facts from an answer: numbers, quotes, first-person verb+object."""
+    cleaned = _WS.sub(" ", (text or "").strip())
+    if not cleaned:
+        return []
+    facts: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str) -> None:
+        item = value.strip()
+        key = item.lower()
+        if not item or key in seen or key in _WEAK_OBJECTS:
+            return
+        seen.add(key)
+        facts.append(item)
+
+    for number in _NUMBER.findall(cleaned):
+        _add(number)
+    for group in _QUOTED.findall(cleaned):
+        quoted = next((part.strip() for part in group if part and part.strip()), "")
+        if quoted:
+            _add(quoted)
+    for match in _FIRST_PERSON.finditer(cleaned):
+        obj = match.group(2).strip()
+        head = obj.split()[0].lower() if obj else ""
+        if len(obj) >= 4 and head not in _WEAK_OBJECTS:
+            _add(f"I {match.group(1).lower()} {obj}")
+    return facts[:8]
+
+
+def _fact_maps_to_evidence(fact: str, evidence_expected: list[str]) -> bool:
+    fact_tokens = _tokens(fact)
+    if not fact_tokens:
+        return False
+    for item in evidence_expected:
+        needles = _tokens(item)
+        if needles and needles & fact_tokens:
+            return True
+    return False
+
+
+def _intent_has_concrete_evidence(intent: str, text: str, facts: list[str]) -> bool:
+    if not facts:
+        return False
+    lowered = f" {(text or '').lower()} "
+    if intent == "establish_ownership":
+        return any(cue in lowered for cue in _OWNERSHIP_CUES)
+    if intent == "establish_context":
+        return any(cue in lowered for cue in _CONTEXT_CUES)
+    if intent == "applied_understanding":
+        return any(cue in lowered for cue in _METHOD_CUES)
+    if intent == "problem_or_complexity":
+        return any(cue in lowered for cue in _PROBLEM_CUES)
+    if intent == "tradeoff_or_transfer":
+        return any(cue in lowered for cue in _TRADEOFF_CUES)
+    return False
+
+
+def evidenced_intents(
+    *,
+    required_intents: list[str],
+    evidence_expected: list[str] | None = None,
+    answer_eval: Any | None = None,
+    asked_intent: str | None = None,
+    answer_text: str | None = None,
+) -> list[str]:
+    """Intents covered by evidenced facts or a prior evaluation — never keywords alone."""
+    required = [item for item in required_intents if item]
+    if not required:
+        return []
+    if answer_eval is not None and getattr(answer_eval, "factually_correct", True) is False:
+        return []
+    substance = str(getattr(answer_eval, "technical_substance", "") or "").strip()
+    if substance in {"surface", "incorrect", "not_applicable"}:
+        return []
+
+    eval_facts = [
+        str(item).strip()
+        for item in (getattr(answer_eval, "key_facts_stated", None) or [])
+        if str(item).strip()
+    ] if answer_eval is not None else []
+    extracted = extract_evidence_facts(answer_text or "")
+    facts = list(dict.fromkeys([*eval_facts, *extracted]))
+    expected = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
+    eval_ok = bool(
+        answer_eval is not None
+        and substance in {"deep", "partial"}
+        and (
+            getattr(answer_eval, "matches_evidence_expected", False)
+            or eval_facts
+            or any(_fact_maps_to_evidence(fact, expected) for fact in facts)
+        )
+    )
+    if not facts and not eval_ok:
+        return []
+
+    target = asked_intent if asked_intent in required else None
+    if target:
+        if eval_ok or _intent_has_concrete_evidence(target, answer_text or "", facts):
+            return [target]
+        return []
+    return [
+        intent
+        for intent in required
+        if _intent_has_concrete_evidence(intent, answer_text or "", facts)
+    ]
 
 
 def quality_from_evaluation(answer_eval: Any) -> str | None:
@@ -248,8 +391,20 @@ def apply_coverage(
             already.append(intent)
     missing = [intent for intent in required if intent not in already]
     evidence_ids = list(entry.get("evidence_ids") or [])
+    evidence_states = {
+        intent: state
+        for intent, state in (entry.get("evidence_states") or {}).items()
+        if intent in required and state in EVIDENCE_STATES
+    }
+    for intent in required:
+        evidence_states.setdefault(intent, "missing")
     if evidence_id and evidence_id not in evidence_ids:
         evidence_ids.append(evidence_id)
+    for intent in covered_intents:
+        if intent not in required:
+            continue
+        previous = evidence_states.get(intent, "missing")
+        evidence_states[intent] = "confirmed" if previous == "demonstrated" else "demonstrated"
     if not already:
         status = "not_started"
     elif missing:
@@ -267,6 +422,7 @@ def apply_coverage(
         "covered_intents": already,
         "missing_intents": missing,
         "evidence_ids": evidence_ids,
+        "evidence_states": evidence_states,
     }
     return coverage
 

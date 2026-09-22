@@ -72,6 +72,28 @@ async def test_invalid_lifecycle_transition_returns_conflict(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_abandoned_session_generates_evidence_limited_scorecard(monkeypatch) -> None:
+    generated: list[str] = []
+
+    async def transition(*_args, **_kwargs):
+        return True
+
+    async def generate(session_id: str):
+        generated.append(session_id)
+        return {"session_id": session_id, "overall_recommendation": "insufficient_evidence"}
+
+    monkeypatch.setattr(session_events.interviews, "transition_session", transition)
+    monkeypatch.setattr(session_events.scoring_service, "generate_and_store_scorecard", generate)
+
+    await session_events.update_session_status(
+        "ses_abandoned_scorecard",
+        SessionStatusRequest(status="abandoned", reason="worker_shutdown"),
+    )
+
+    assert generated == ["ses_abandoned_scorecard"]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_duplicate_turn_is_idempotent(monkeypatch) -> None:
     turn = {
         "turn_id": "turn_test",

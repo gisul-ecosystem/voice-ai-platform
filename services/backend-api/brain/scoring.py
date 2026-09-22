@@ -533,10 +533,16 @@ def build_scorecard_bundle(
                 for item in (coverage_row.get("covered_intents") or [])
                 if str(item).strip()
             }
+        # A published coverage ledger records demonstrated evidence, not merely
+        # which question was asked. Only use asked intents for legacy sessions
+        # that have no coverage snapshot.
+        assessed_intents = (
+            covered_intents if isinstance(coverage_row, dict) else asked_intents
+        )
         missing_intents = [
             intent
             for intent in required_intents
-            if intent not in asked_intents and intent not in covered_intents
+            if intent not in assessed_intents
         ]
 
         rating, outcome = _rating_from_bars(

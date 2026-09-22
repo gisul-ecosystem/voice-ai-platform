@@ -202,7 +202,8 @@ async def test_policy_mode_uses_configured_competency_question() -> None:
 
     question = await flow.generate_next_question("I solved a graph problem.")
 
-    assert question == "Tell me about your background."
+    assert "graph problem" in question.lower()
+    assert "personally" in question.lower()
 
 
 @pytest.mark.asyncio

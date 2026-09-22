@@ -11,6 +11,68 @@ from products.interviewer.coverage import competency_by_id, ladder_steps
 _PUNCT = re.compile(r"[^a-z0-9\s]+")
 _WS = re.compile(r"\s+")
 _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
+_NUMBER = re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|%|k|m|b)?\b", re.IGNORECASE)
+_QUOTED = re.compile(r"\"([^\"]+)\"|'([^']+)'")
+_WORD = re.compile(r"\b[A-Za-z][A-Za-z0-9_-]{3,}\b")
+
+HOOK_STOPWORDS = frozenset(
+    {
+        "that",
+        "this",
+        "with",
+        "from",
+        "have",
+        "been",
+        "were",
+        "they",
+        "them",
+        "then",
+        "when",
+        "what",
+        "which",
+        "into",
+        "just",
+        "also",
+        "very",
+        "used",
+        "using",
+        "work",
+        "worked",
+        "working",
+        "about",
+        "your",
+        "their",
+        "there",
+        "than",
+        "some",
+        "more",
+        "only",
+        "would",
+        "could",
+        "should",
+        "problem",
+        "thing",
+        "stuff",
+        "time",
+        "role",
+        "please",
+        "briefly",
+        "recent",
+    }
+)
+
+SKIP_HOOK_INTENTS = frozenset(
+    {
+        "opening",
+        "candidate_map",
+        "clarify",
+        "closing",
+        "final_addition",
+        "await_introduction",
+    }
+)
+
+PROBE_SHAPE_ROTATION = ("why", "failure_mode", "metric", "trade_off")
 
 PROTECTED_MARKERS = (
     "age",
@@ -191,6 +253,54 @@ class ValidationResult:
 def fingerprint(text: str) -> str:
     cleaned = _PUNCT.sub(" ", (text or "").lower())
     return _WS.sub(" ", cleaned).strip()
+
+
+def hook_stem_tokens(text: str) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for match in _NUMBER.findall(text or ""):
+        token = match.lower()
+        if token not in seen:
+            seen.add(token)
+            tokens.append(token)
+    for token in fingerprint(text).split():
+        if len(token) < 4 or token in HOOK_STOPWORDS or token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tokens
+
+
+def extract_hook_fact(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    numbers = _NUMBER.findall(cleaned)
+    if numbers:
+        return numbers[0]
+    quoted = _QUOTED.findall(cleaned)
+    for group in quoted:
+        value = next((item.strip() for item in group if item and item.strip()), "")
+        if value:
+            return value
+    words = _WORD.findall(cleaned)
+    significant = [word for word in words if word.lower() not in HOOK_STOPWORDS]
+    for index, word in enumerate(significant):
+        if index > 0 and word[0].isupper():
+            return word
+    return significant[-1] if significant else ""
+
+
+def prefix_tokens(text: str, count: int = 6) -> list[str]:
+    tokens = fingerprint(text).split()
+    return tokens[:count]
+
+
+def next_probe_shape(last_shape: str | None) -> str:
+    rotation = list(PROBE_SHAPE_ROTATION)
+    if last_shape in rotation:
+        return rotation[(rotation.index(last_shape) + 1) % len(rotation)]
+    return rotation[0]
 
 
 def _question_tokens(text: str) -> set[str]:
@@ -418,6 +528,9 @@ def validate_generated_question(
     recent_turns: list[str] | None = None,
     resume_focus: str = "",
     require_resume_grounding: bool = False,
+    hook_fact: str | None = None,
+    required_probe_shape: str | None = None,
+    last_probe_shape: str | None = None,
 ) -> ValidationResult:
     reasons: list[str] = []
     question = (generated.question or "").strip()
@@ -430,6 +543,25 @@ def validate_generated_question(
         reasons.append("protected_topic")
     if any(marker in lowered for marker in TRIVIA_MARKERS):
         reasons.append("trivia_question")
+    live_probe = (policy_intent or "") not in SKIP_HOOK_INTENTS
+    if live_probe:
+        stems = hook_stem_tokens(hook_fact or "")
+        if stems and not any(stem in lowered for stem in stems):
+            reasons.append("missing_hook_stem")
+        current_prefix = prefix_tokens(question)
+        if len(current_prefix) >= 6:
+            for previous in recent_questions[-8:]:
+                previous_prefix = prefix_tokens(previous)
+                if len(previous_prefix) >= 6 and current_prefix == previous_prefix:
+                    reasons.append("repeated_prefix")
+                    break
+        if (
+            required_probe_shape
+            and generated.probe_shape
+            and last_probe_shape
+            and generated.probe_shape == last_probe_shape
+        ):
+            reasons.append("repeated_probe_shape")
 
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:

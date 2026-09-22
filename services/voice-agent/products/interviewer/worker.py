@@ -99,6 +99,15 @@ def _release_room(room_name: str) -> None:
         handle.close()
 
 
+def _worker_load() -> float:
+    """Report interview capacity without using unrelated desktop CPU load locally."""
+    environment = (os.getenv("APP_ENV") or "development").strip().lower()
+    if environment not in {"production", "staging"}:
+        capacity = max(1, int(os.getenv("LIVEKIT_ROOM_CAPACITY", "1")))
+        return min(1.0, len(_ACTIVE_ROOMS) / capacity)
+    return 0.0
+
+
 async def flush_pending_session_turns(
     session_id: str,
     pending: list[dict[str, Any]],
@@ -434,6 +443,8 @@ async def plan_inputs_from_job(ctx: JobContext) -> tuple[str, str]:
 
 
 async def build_outline(ctx: JobContext) -> dict:
+    if published_plan_required(definition_id=None):
+        raise InterviewPlanUnavailableError("generated_plan_not_allowed")
     try:
         context_id = context_id_from_job(ctx)
         context = await fetch_interview_context(context_id) if context_id else {}
@@ -804,17 +815,20 @@ async def entrypoint(ctx: JobContext) -> None:
 
 def run() -> None:
     validate_startup_configuration()
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "aaptor"),
-            port=int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
-            # Default 0.7 is based on whole-machine CPU; on a dev box with
-            # unrelated apps running, that falsely marks the worker "at
-            # capacity" and it refuses to join new interview rooms.
-            load_threshold=float(os.getenv("AAPTOR_LOAD_THRESHOLD", "0.95")),
-        )
-    )
+    options: dict = {
+        "entrypoint_fnc": entrypoint,
+        "agent_name": os.getenv("LIVEKIT_AGENT_NAME", "aaptor"),
+        "port": int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
+        # Default 0.7 is based on whole-machine CPU; on a dev box with
+        # unrelated apps running, that falsely marks the worker at capacity.
+        "load_threshold": float(os.getenv("AAPTOR_LOAD_THRESHOLD", "0.95")),
+    }
+    if (os.getenv("APP_ENV") or "development").strip().lower() not in {
+        "production",
+        "staging",
+    }:
+        options["load_fnc"] = _worker_load
+    cli.run_app(WorkerOptions(**options))
 
 
 if __name__ == "__main__":

@@ -39,7 +39,13 @@ class ResilientTts:
         try:
             return await self._primary.synthesize(text, **kwargs)
         except ServiceUnavailableError as exc:
-            if self._pin_voice or self._fallback is None or not _should_failover(exc):
+            if self._pin_voice:
+                logger.warning(
+                    "tts_primary_retry",
+                    extra={"event": "tts_primary_retry", "error_type": type(exc).__name__},
+                )
+                return await self._primary.synthesize(text, **kwargs)
+            if self._fallback is None or not _should_failover(exc):
                 logger.warning(
                     "tts_pinned_no_failover",
                     extra={
@@ -66,7 +72,21 @@ class ResilientTts:
                 yield audio
             return
         except ServiceUnavailableError as exc:
-            if self._pin_voice or self._fallback is None or not _should_failover(exc):
+            if self._pin_voice:
+                logger.warning(
+                    "tts_primary_retry",
+                    extra={"event": "tts_primary_retry", "error_type": type(exc).__name__},
+                )
+                retry_stream = getattr(self._primary, "stream_synthesize", None)
+                if retry_stream is not None:
+                    async for chunk in retry_stream(text, **kwargs):
+                        yield chunk
+                    return
+                audio = await self._primary.synthesize(text, **kwargs)
+                if audio:
+                    yield audio
+                return
+            if self._fallback is None or not _should_failover(exc):
                 logger.warning(
                     "tts_pinned_no_failover",
                     extra={
