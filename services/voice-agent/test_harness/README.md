@@ -40,7 +40,19 @@ Use `--help` for room, participant, context-file, and provider override options.
 For normal browser testing, follow the frontend instructions in the repository
 root README.
 
-## If the agent never speaks
+## Flow + SLO harnesses (no LiveKit)
 
-- Worker still running and still `registered worker`
-- LLM / STT / TTS / backend-api reachable (`GET http://localhost:5554/health/all` on Laptop 4)
+```bash
+cd services/voice-agent
+set PYTHONPATH=.
+
+# Structured Q/follow-up against sample JD + resume (scripted LLM)
+python test_harness/debug_flow_jd_resume.py
+
+# First-pass speech-end→audio budget + prompt-size baseline (no paid APIs)
+python test_harness/slo_baseline.py
+```
+
+Record live staging latency samples in `docs/slo_baseline_record.md`.
+PBI mapping: `docs/azure_sprint_pbi_mapping.md`.
+

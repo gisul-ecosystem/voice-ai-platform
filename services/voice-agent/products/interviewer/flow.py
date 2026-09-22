@@ -16,6 +16,8 @@ from products.interviewer.coverage import (
     first_incomplete_competency,
     init_coverage,
     ladder_steps,
+    mark_intent_asked,
+    mark_missing_intents_insufficient,
     quality_from_evaluation,
     required_intents_for,
 )
@@ -67,12 +69,10 @@ CLOSING_MESSAGE = (
     "This concludes the interview."
 )
 FALLBACK_FOLLOWUP = (
-    "What was the hardest decision on that work, and what would have gone wrong "
-    "if you chose the other option?"
+    "What was the hardest decision on that work?"
 )
 FALLBACK_FOLLOWUP_NEUTRAL = (
-    "Thank you. Could you share one specific example of work you personally "
-    "handled, and what happened as a result?"
+    "Thank you. Can you share one concrete example from that work?"
 )
 
 INTERVIEWER_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Behave like a thoughtful human in the room, not a script or a form. Invent every spoken line yourself from the materials below.
@@ -705,6 +705,9 @@ class InterviewFlow:
         self.last_answer_quality = "partial"
         self.last_answer_evaluation: dict[str, Any] | None = None
         self.known_facts: dict[str, list[str]] = {}
+        self.consecutive_dry_probes = 0
+        self.dry_probe_limit = 2
+        self.intent_repairs_used: set[str] = set()
         self.last_probe_shape: dict[str, str] = {}
         self.last_question_competency_id: str | None = None
         self.last_question_intent = "opening"
@@ -713,6 +716,7 @@ class InterviewFlow:
         self.last_raw_model_output: str | None = None
         self.last_validator_ok: bool | None = None
         self.last_validator_reasons: list[str] = []
+        self.last_hook_fact: str = ""
         bounds = time_bounds_from_definition(self.interview_definition)
         non_answer = non_answer_bounds_from_definition(self.interview_definition)
         self.clarify_after = non_answer["clarify_after"]
@@ -816,8 +820,14 @@ class InterviewFlow:
             return
         if decision == "advance" or must_advance:
             previous = self.current_phase().get("name")
+            leaving_id = self.current_phase().get("competency_id")
+            if leaving_id:
+                mark_missing_intents_insufficient(
+                    self.coverage, competency_id=str(leaving_id)
+                )
             self.phase_index += 1
             self.probe_count = 0
+            self.consecutive_dry_probes = 0
             self.phase_started_at = time.monotonic()
             self.focus_item = ""
             self._ensure_focus(None)
@@ -901,11 +911,26 @@ class InterviewFlow:
             coverage_complete=coverage_complete,
             has_coverage_gaps=bool(gap_id),
             gap_competency_id=gap_id,
+            consecutive_dry_probes=self.consecutive_dry_probes,
+            dry_probe_limit=self.dry_probe_limit,
             clarify_after=self.clarify_after,
             rephrase_after=self.rephrase_after,
             change_topic_after=self.change_topic_after,
             close_after=self.close_after_unusable,
+            intent_repair_available=self._intent_repair_available(
+                competency_id, missing
+            ),
         )
+
+    def _intent_repair_key(self, competency_id: str | None, intent: str | None) -> str:
+        return f"{competency_id or ''}::{intent or ''}"
+
+    def _intent_repair_available(
+        self, competency_id: str | None, missing: list[str]
+    ) -> bool:
+        if not competency_id or not missing:
+            return False
+        return self._intent_repair_key(competency_id, missing[0]) not in self.intent_repairs_used
 
     def _current_policy_decision(
         self,
@@ -919,17 +944,66 @@ class InterviewFlow:
             self._policy_state(pending_candidate_turn=pending_candidate_turn)
         )
         if advance_if_ready and decision.forced_flow_decision == "advance" and not self.completed:
-            # Hop the phase we're leaving now (once), so the prompt built from this
-            # decision reflects the competency we're entering (real name, ladder
-            # objective, missing intents) instead of the one we just left. Only a
-            # single hop — cascading through multiple phases in one turn would let
-            # a trivially "complete" competency get skipped without ever being asked.
-            self.apply_decision("advance")
-            decision = decide_next_action(
-                self._policy_state(pending_candidate_turn=pending_candidate_turn)
-            )
+            # Hop warmup phases (opening → candidate_map → first competency) in one
+            # turn so the spoken question is already on a real competency. Never
+            # multi-hop across competency phases — that would skip assessment.
+            for _ in range(4):
+                if decision.forced_flow_decision != "advance" or self.completed:
+                    break
+                leaving = self.current_phase()
+                leaving_is_warmup = not bool(leaving.get("competency_id"))
+                self.apply_decision("advance")
+                decision = decide_next_action(
+                    self._policy_state(pending_candidate_turn=pending_candidate_turn)
+                )
+                landed = self.current_phase()
+                if landed.get("competency_id"):
+                    break
+                if not leaving_is_warmup:
+                    # Left a competency; do not cascade further this turn.
+                    break
         self.last_policy_decision = decision
+        if decision is not None and decision.intent in {
+            "final_addition",
+            "closing",
+        }:
+            # Soft-close used to leave intents stuck at ``asked`` forever — seal
+            # asked-but-uncovered assessment intents as assessed_insufficient.
+            self._seal_open_competency_gaps()
+        if (
+            decision is not None
+            and "reframed repair" in (decision.reason or "")
+            and decision.competency_id
+            and decision.intent
+        ):
+            self.intent_repairs_used.add(
+                self._intent_repair_key(decision.competency_id, decision.intent)
+            )
+            # Give the reframed ask a clean dry-probe counter.
+            self.consecutive_dry_probes = 0
         return decision
+
+    def _reprobe_guidance(
+        self, *, competency_id: str | None, intent: str, last_candidate_turn: str | None
+    ) -> str:
+        if not last_candidate_turn:
+            return ""
+        if (self.last_question_intent or "") != intent:
+            return ""
+        if (self.last_question_competency_id or None) != (competency_id or None):
+            return ""
+        detail = (last_candidate_turn or "").strip()
+        if len(detail) > 220:
+            detail = detail[:217] + "..."
+        return (
+            "RE-PROBE (same intent as your last question):\n"
+            f"- The candidate already answered: {detail}\n"
+            "- Do NOT repeat the same ask or the same sentence frame "
+            "(e.g. 'Can you describe the specific steps…').\n"
+            "- Acknowledge one concrete detail they said, then ask for the "
+            "single missing gap: a decision point, failure mode, TTL/limit, "
+            "or measured outcome.\n"
+        )
 
     def _is_warmup_phase(self) -> bool:
         if self._phase_intent() == "intro":
@@ -1156,6 +1230,14 @@ class InterviewFlow:
     def _soft_time_reached(self) -> bool:
         return time.monotonic() - self.started_at >= self.soft_end_seconds
 
+    def _seal_open_competency_gaps(self) -> None:
+        """Mark asked-but-uncovered intents when leaving assessment (close / advance)."""
+        competency_id = self.current_phase().get("competency_id")
+        if competency_id:
+            mark_missing_intents_insufficient(
+                self.coverage, competency_id=str(competency_id)
+            )
+
     def _closing_speech(self, last_candidate_turn: str | None) -> str | None:
         if self.completed:
             return CLOSING_MESSAGE
@@ -1169,11 +1251,13 @@ class InterviewFlow:
                     elif usability not in {"silence", "stt_failure", "network_failure"}:
                         self.consecutive_unusable += 1
                     self.candidate_turns.append(last_candidate_turn.strip())
+                self._seal_open_competency_gaps()
                 self.completed = True
                 return CLOSING_MESSAGE
         if self._time_up():
             if last_candidate_turn:
                 self.candidate_turns.append(last_candidate_turn.strip())
+            self._seal_open_competency_gaps()
             self.completed = True
             return CLOSING_MESSAGE
         return None
@@ -1274,12 +1358,28 @@ class InterviewFlow:
             return
         facts = getattr(answer_eval, "key_facts_stated", None) or []
         bucket = self.known_facts.setdefault(competency_id, [])
+        added = 0
         for fact in facts:
             text = str(fact).strip()
             if text and text not in bucket:
                 bucket.append(text)
+                added += 1
         if len(bucket) > 8:
             del bucket[:-8]
+        # Follow-ups that add no new facts count toward the dry-probe stop rule.
+        if self.probe_count > 0 and self.policy_mode:
+            if added:
+                self.consecutive_dry_probes = 0
+            else:
+                self.consecutive_dry_probes += 1
+                logger.info(
+                    "dry_followup",
+                    extra={
+                        "event": "dry_followup",
+                        "competency_id": competency_id,
+                        "consecutive_dry_probes": self.consecutive_dry_probes,
+                    },
+                )
 
     def _known_facts_brief(self, competency_id: str | None) -> str:
         facts = self.known_facts.get(competency_id or "", [])
@@ -1297,10 +1397,17 @@ class InterviewFlow:
     ) -> str:
         if not last_turn or (intent or "") in SKIP_HOOK_INTENTS:
             return ""
+        # Prefer entity/tech nouns from the latest answer over known_facts tails
+        # (known_facts often end with weak fillers like "safely").
+        from_turn = extract_hook_fact(last_turn)
+        if from_turn:
+            return from_turn
         facts = self.known_facts.get(competency_id or "", [])
-        if facts:
-            return facts[-1]
-        return extract_hook_fact(last_turn)
+        for fact in reversed(facts):
+            candidate = extract_hook_fact(str(fact))
+            if candidate:
+                return candidate
+        return ""
 
     def _next_probe_shape(
         self, competency_id: str | None, intent: str | None = None
@@ -1310,7 +1417,12 @@ class InterviewFlow:
         return next_probe_shape(self.last_probe_shape.get(competency_id or ""))
 
     def _refine_answer_quality(
-        self, last_candidate_turn: str | None, generated: GeneratedQuestion
+        self,
+        last_candidate_turn: str | None,
+        generated: GeneratedQuestion,
+        *,
+        asked_intent: str | None = None,
+        asked_competency_id: str | None = None,
     ) -> None:
         """Re-score the just-answered turn once the LLM verdict arrives with the next question."""
         answer_eval = generated.answer_evaluation
@@ -1319,13 +1431,24 @@ class InterviewFlow:
         self.last_answer_evaluation = answer_eval.as_dict()
         if not last_candidate_turn or not self.policy_mode:
             return
-        # candidate_turns has not been appended yet, so intro detection still holds.
-        self._record_answer_quality(
-            last_candidate_turn,
-            is_intro_reply=not self.candidate_turns,
-            answer_eval=answer_eval,
-            update_counters=False,
-        )
+        # Temporarily restore the asked intent/competency for coverage credit.
+        previous_intent = self.last_question_intent
+        previous_competency = self.last_question_competency_id
+        if asked_intent:
+            self.last_question_intent = asked_intent
+        if asked_competency_id:
+            self.last_question_competency_id = asked_competency_id
+        try:
+            # candidate_turns has not been appended yet, so intro detection still holds.
+            self._record_answer_quality(
+                last_candidate_turn,
+                is_intro_reply=not self.candidate_turns,
+                answer_eval=answer_eval,
+                update_counters=False,
+            )
+        finally:
+            self.last_question_intent = previous_intent
+            self.last_question_competency_id = previous_competency
         if answer_eval.needs_clarification:
             # A real-but-ambiguous answer forces CLARIFY_CURRENT_ANSWER on the next
             # turn, via the same consecutive_unusable counter the policy engine
@@ -1348,6 +1471,11 @@ class InterviewFlow:
         self.last_question_claim_ids = list(generated.source_claim_ids)
         if self.last_question_competency_id and generated.probe_shape:
             self.last_probe_shape[self.last_question_competency_id] = generated.probe_shape
+        mark_intent_asked(
+            self.coverage,
+            competency_id=self.last_question_competency_id,
+            intent=self.last_question_intent,
+        )
 
     def _capture_replay(self, raw: str, *, validator_ok: bool | None, reasons: list[str] | None = None) -> None:
         self.last_raw_model_output = (raw or "")[:2000] or None
@@ -1390,17 +1518,57 @@ class InterviewFlow:
         return any(tok in text for tok in tokens[:8])
 
     def _ensure_opening_cites_context(self, question: str) -> str:
+        """Keep LLM wording; only soft-weave a missing materials signal.
+
+        Hard-replacing with ``_fallback_opening`` made every interview sound like
+        the same template (role + signal slots). Fallback is reserved for empty
+        or failed generation elsewhere.
+        """
         cleaned = (question or "").strip()
+        if not cleaned:
+            return self._fallback_opening()
         if self._opening_cites_context(cleaned):
             return cleaned
+        signal = self._opening_signal()
+        if not signal:
+            return cleaned
         logger.info(
-            "opening_missing_context_cite",
+            "opening_soft_weave_signal",
             extra={
-                "event": "opening_missing_context_cite",
-                "signal": (self._opening_signal() or "")[:80],
+                "event": "opening_soft_weave_signal",
+                "signal": signal[:80],
             },
         )
-        return self._fallback_opening()
+        return self._weave_opening_signal(cleaned, signal)
+
+    def _weave_opening_signal(self, question: str, signal: str) -> str:
+        """Append a short cite without discarding the model's greeting."""
+        cite = f"I noticed {signal} on your materials"
+        text = question.strip()
+        if signal.lower() in text.lower():
+            return text
+        # Prefer inserting before a trailing invite if we can find one.
+        lower = text.lower()
+        for marker in (
+            "please introduce",
+            "introduce yourself",
+            "tell me a bit about yourself",
+            "could you introduce",
+            "can you introduce",
+        ):
+            index = lower.find(marker)
+            if index > 0:
+                before = text[:index].rstrip(" ,;—-")
+                after = text[index:]
+                joiner = ". " if before and not before.endswith((".", "!", "?")) else " "
+                return f"{before}{joiner}{cite} — {after[0].lower() + after[1:] if after else after}"
+        # Otherwise tack a cite clause onto the end of the first sentence.
+        match = re.search(r"[.!?]", text)
+        if match and match.end() < len(text):
+            head = text[: match.end()].rstrip()
+            tail = text[match.end() :].lstrip()
+            return f"{head} {cite}. {tail}"
+        return f"{text.rstrip('.!?')}. {cite}."
 
     def _opening_signal(self) -> str:
         """One concrete resume claim or JD signal for openings (PBI-B1)."""
@@ -1566,6 +1734,11 @@ class InterviewFlow:
             "previous_evaluation": self._previous_evaluation_brief(),
             "framing_notes": framing_notes(self._profile_type(), self._job_target_level()),
             "role_title": str(role.get("title") or ""),
+            "reprobe_guidance": self._reprobe_guidance(
+                competency_id=competency_id,
+                intent=intent,
+                last_candidate_turn=last_candidate_turn,
+            ),
         }
         system = prompt_pack(self._prompt_version())
         if last_candidate_turn:
@@ -1703,6 +1876,7 @@ class InterviewFlow:
         *,
         policy: PolicyDecision | None,
         last_candidate_turn: str | None,
+        use_fallback: bool = True,
     ) -> GeneratedQuestion:
         parsed = parse_generated_question(raw)
         if parsed is None:
@@ -1716,6 +1890,7 @@ class InterviewFlow:
         policy_intent = policy.intent if policy else parsed.intent
         competency_id = policy.competency_id if policy else None
         hook_fact = self._hook_fact(last_candidate_turn, competency_id, policy_intent)
+        self.last_hook_fact = hook_fact
         required_shape = self._next_probe_shape(competency_id, policy_intent)
         result = validate_generated_question(
             parsed,
@@ -1746,13 +1921,200 @@ class InterviewFlow:
                 "prompt_version": self._prompt_version(),
             },
         )
+        if not use_fallback:
+            # Keep rejected text available for a rewrite attempt.
+            return GeneratedQuestion(
+                question=(parsed.question or "").strip(),
+                competency_id=competency_id,
+                intent=policy_intent or "live_question",
+                depth=policy.current_depth if policy else parsed.depth,
+                answer_evaluation=parsed.answer_evaluation,
+                probe_shape=parsed.probe_shape,
+                depth_tag=parsed.depth_tag,
+                source_claim_ids=list(parsed.source_claim_ids),
+                decision=parsed.decision,
+            )
         fallback = self._fallback_spoken_question(policy, last_turn=last_candidate_turn)
-        return GeneratedQuestion(
+        fallback_parsed = GeneratedQuestion(
             question=fallback,
             competency_id=policy.competency_id if policy else None,
             intent=policy.intent if policy else "live_question",
             depth=policy.current_depth if policy else 1,
+            answer_evaluation=parsed.answer_evaluation,
         )
+        # Gate: never ship an unvalidated fallback. Re-check; if still invalid,
+        # build a minimal hook+ladder question that satisfies the validator.
+        fallback_result = validate_generated_question(
+            fallback_parsed,
+            definition=self.interview_definition,
+            policy_competency_id=competency_id,
+            policy_intent=policy_intent,
+            policy_depth=policy.current_depth if policy else 1,
+            max_depth=policy.max_depth if policy else 5,
+            recent_questions=self.interviewer_turns[-8:],
+            allowed_probes=self._allowed_probes(),
+            profile=self.candidate_profile,
+            job_description=self.job_description,
+            resume_text=self.resume_text,
+            recent_turns=self.candidate_turns[-4:]
+            + ([last_candidate_turn] if last_candidate_turn else []),
+            hook_fact=hook_fact,
+            required_probe_shape=required_shape or None,
+            last_probe_shape=self.last_probe_shape.get(competency_id or "") or None,
+        )
+        if fallback_result.ok:
+            self._capture_replay(
+                fallback, validator_ok=True, reasons=[]
+            )
+            return fallback_result.question
+        # Last resort: build a minimal question, then actually re-validate it.
+        # Never mark ok:True without a real pass (sales turn-6 greenwash bug).
+        safe = self._safe_gated_question(
+            policy, last_turn=last_candidate_turn, hook_fact=hook_fact
+        )
+        safe_parsed = GeneratedQuestion(
+            question=safe,
+            competency_id=competency_id,
+            intent=policy_intent or "live_question",
+            depth=policy.current_depth if policy else 1,
+            answer_evaluation=parsed.answer_evaluation,
+        )
+        safe_result = validate_generated_question(
+            safe_parsed,
+            definition=self.interview_definition,
+            policy_competency_id=competency_id,
+            policy_intent=policy_intent,
+            policy_depth=policy.current_depth if policy else 1,
+            max_depth=policy.max_depth if policy else 5,
+            recent_questions=self.interviewer_turns[-8:],
+            allowed_probes=self._allowed_probes(),
+            profile=self.candidate_profile,
+            job_description=self.job_description,
+            resume_text=self.resume_text,
+            recent_turns=self.candidate_turns[-4:]
+            + ([last_candidate_turn] if last_candidate_turn else []),
+            hook_fact=hook_fact,
+            required_probe_shape=required_shape or None,
+            last_probe_shape=self.last_probe_shape.get(competency_id or "") or None,
+        )
+        if safe_result.ok:
+            self._capture_replay(
+                safe, validator_ok=True, reasons=["safe_gated_fallback"]
+            )
+            return safe_result.question
+        # Still invalid (e.g. compound default / bad hook): ship a bland single
+        # ask that is known-clean rather than a known-bad dual ask. Prefer UX
+        # safety over shipping a broken question with an honest ok:False.
+        clean = self._ultimate_clean_question(hook_fact)
+        clean_parsed = GeneratedQuestion(
+            question=clean,
+            competency_id=competency_id,
+            intent=policy_intent or "live_question",
+            depth=policy.current_depth if policy else 1,
+            answer_evaluation=parsed.answer_evaluation,
+        )
+        clean_result = validate_generated_question(
+            clean_parsed,
+            definition=self.interview_definition,
+            policy_competency_id=competency_id,
+            policy_intent=policy_intent,
+            policy_depth=policy.current_depth if policy else 1,
+            max_depth=policy.max_depth if policy else 5,
+            recent_questions=self.interviewer_turns[-8:],
+            allowed_probes=self._allowed_probes(),
+            profile=self.candidate_profile,
+            job_description=self.job_description,
+            resume_text=self.resume_text,
+            recent_turns=self.candidate_turns[-4:]
+            + ([last_candidate_turn] if last_candidate_turn else []),
+            hook_fact=hook_fact if (hook_fact or "").strip().lower() in clean.lower() else "",
+            required_probe_shape=None,
+            last_probe_shape=None,
+        )
+        if clean_result.ok:
+            self._capture_replay(
+                clean,
+                validator_ok=True,
+                reasons=["safe_gated_fallback", "ultimate_clean_fallback"],
+            )
+            return clean_result.question
+        # Absolute last resort: ship the bland line with honest ok:False so
+        # harness / logs never claim a clean pass that was not checked.
+        self._capture_replay(
+            clean,
+            validator_ok=False,
+            reasons=list(clean_result.reasons) + ["ultimate_clean_unvalidated"],
+        )
+        return clean_parsed
+
+    def _ultimate_clean_question(self, hook_fact: str) -> str:
+        """Guaranteed single-ask bland prompt — preferred over shipping known-bad."""
+        from products.interviewer.validator import is_clean_hook_fact
+
+        hook = (hook_fact or "").strip()
+        if hook and is_clean_hook_fact(hook):
+            return f"Regarding {hook}, can you tell me more about that?"
+        return "Can you tell me more about that?"
+
+    def _capture_spoken_validation(
+        self,
+        spoken: str,
+        *,
+        policy: PolicyDecision | None,
+        last_candidate_turn: str | None,
+    ) -> None:
+        """Post-hoc validate already-spoken audio; never invent ok:True."""
+        policy_intent = policy.intent if policy else "live_question"
+        competency_id = policy.competency_id if policy else None
+        hook_fact = self._hook_fact(last_candidate_turn, competency_id, policy_intent)
+        parsed = GeneratedQuestion(
+            question=(spoken or "").strip(),
+            competency_id=competency_id,
+            intent=policy_intent,
+            depth=policy.current_depth if policy else 1,
+        )
+        result = validate_generated_question(
+            parsed,
+            definition=self.interview_definition,
+            policy_competency_id=competency_id,
+            policy_intent=policy_intent,
+            policy_depth=policy.current_depth if policy else 1,
+            max_depth=policy.max_depth if policy else 5,
+            recent_questions=self.interviewer_turns[-8:],
+            allowed_probes=self._allowed_probes(),
+            profile=self.candidate_profile,
+            job_description=self.job_description,
+            resume_text=self.resume_text,
+            recent_turns=self.candidate_turns[-4:]
+            + ([last_candidate_turn] if last_candidate_turn else []),
+            hook_fact=hook_fact,
+        )
+        reasons = list(result.reasons)
+        if "shipped_pre_validation" not in reasons:
+            reasons.append("shipped_pre_validation")
+        self._capture_replay(
+            spoken, validator_ok=result.ok, reasons=reasons
+        )
+
+    def _safe_gated_question(
+        self,
+        policy: PolicyDecision | None,
+        *,
+        last_turn: str | None,
+        hook_fact: str,
+    ) -> str:
+        """Last-resort spoken question that includes the hook stem when required."""
+        intent = policy.intent if policy else "live_question"
+        competency_id = policy.competency_id if policy else None
+        base = ladder_fallback_question(
+            self.interview_definition,
+            competency_id=competency_id,
+            intent=intent,
+        )
+        hook = (hook_fact or "").strip()
+        if hook and hook.lower() not in base.lower():
+            return f"Regarding {hook}, {base[0].lower() + base[1:] if base else base}"
+        return base or "Can you share one concrete example from that work?"
 
     def _uses_legacy_decision_flow(self) -> bool:
         return (not self.policy_mode) and self.allow_legacy_flow
@@ -1944,37 +2306,87 @@ class InterviewFlow:
         policy = self.last_policy_decision
         if not self._uses_legacy_decision_flow():
             generated = self._coerce_generated(
-                raw, policy=policy, last_candidate_turn=last_candidate_turn
+                raw,
+                policy=policy,
+                last_candidate_turn=last_candidate_turn,
+                use_fallback=False,
             )
             parsed = parse_generated_question(raw)
-            if (
+            needs_rewrite = self.last_validator_ok is False or (
                 allow_retry
                 and parsed is None
-                and generated.question
-                == self._fallback_spoken_question(
-                    policy, last_turn=last_candidate_turn
+                and not (generated.question or "").strip()
+            )
+            if allow_retry and needs_rewrite and not spoken_any:
+                reasons = ", ".join(self.last_validator_reasons) or "invalid_question"
+                rejected = (generated.question or "").strip() or "(empty)"
+                rewrite_user = (
+                    f"{user_content}\n\n"
+                    f"REWRITE REQUIRED. Previous question was rejected ({reasons}). "
+                    f"Rejected text: {rejected!r}. "
+                    "Write ONE better question for the same competency and intent. "
+                    "Do not lead the candidate, do not ask two questions, "
+                    "and do not use a template filler."
                 )
-            ):
                 try:
                     raw = await self.llm_client.generate_reply(
                         [
                             {"role": "system", "content": prompt},
-                            {"role": "user", "content": user_content},
+                            {"role": "user", "content": rewrite_user},
                         ]
                     )
+                    logger.info(
+                        "question_rewrite_attempt",
+                        extra={
+                            "event": "question_rewrite_attempt",
+                            "reasons": self.last_validator_reasons,
+                        },
+                    )
                     generated = self._coerce_generated(
-                        raw, policy=policy, last_candidate_turn=last_candidate_turn
+                        raw,
+                        policy=policy,
+                        last_candidate_turn=last_candidate_turn,
+                        use_fallback=True,
                     )
                 except Exception:
                     logger.exception(
                         "stage2_question_retry_failed",
                         extra={"event": "stage2_question_retry_failed"},
                     )
+                    generated = self._coerce_generated(
+                        "",
+                        policy=policy,
+                        last_candidate_turn=last_candidate_turn,
+                        use_fallback=True,
+                    )
+            elif self.last_validator_ok is False:
+                generated = self._coerce_generated(
+                    raw,
+                    policy=policy,
+                    last_candidate_turn=last_candidate_turn,
+                    use_fallback=True,
+                )
             if spoken_any and spoken_question:
+                # Voice already committed audio — cannot retract. Keep spoken text
+                # but re-validate honestly so ok/reasons match what the candidate heard.
                 generated.question = spoken_question
+                self._capture_spoken_validation(
+                    spoken_question,
+                    policy=policy,
+                    last_candidate_turn=last_candidate_turn,
+                )
             decision, question = generated.decision, generated.question
+            # Credit coverage against the question that was just answered, not the
+            # newly generated follow-up intent we are about to remember.
+            asked_intent = self.last_question_intent
+            asked_competency = self.last_question_competency_id
             self._remember_generated(generated, policy)
-            self._refine_answer_quality(last_candidate_turn, generated)
+            self._refine_answer_quality(
+                last_candidate_turn,
+                generated,
+                asked_intent=asked_intent,
+                asked_competency_id=asked_competency,
+            )
         else:
             decision, question = parse_stage2(raw)
             if spoken_any and spoken_question:

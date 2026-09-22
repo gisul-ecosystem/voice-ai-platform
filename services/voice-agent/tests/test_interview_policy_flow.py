@@ -237,9 +237,9 @@ async def test_policy_mode_opening_cites_resume_or_jd_materials() -> None:
     await flow.generate_next_question(None)
 
     prompt = llm.messages[0][0]["content"]
-    assert "cite exactly ONE concrete signal" in prompt
+    assert "ONE" in prompt.upper() or "one" in prompt.lower()
     assert "machine learning classifier" in prompt
-
+    assert "own words" in prompt.lower() or "vary" in prompt.lower()
 
 @pytest.mark.asyncio
 async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:

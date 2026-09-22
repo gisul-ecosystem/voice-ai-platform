@@ -124,11 +124,18 @@ Human delivery:
 - Refer to one concrete detail from the last answer when relevant.
 - If the answer is incomplete, ask for the missing detail gently rather than repeating the same question.
 - Do not say "next", "moving on", "according to the policy", or "the rubric".
+
+{reprobe_guidance}
 """
 
-OPENING_INSTRUCTIONS_V2 = """Write a fresh opening. Greet them, say you are the interviewer for this conversation, and invite a short introduction of background relevant to this role.
+OPENING_INSTRUCTIONS_V2 = """Write a natural opening in your own words — vary greeting and pacing each time. Do not reuse a fixed script or stock phrase like "Thanks for joining. I'm your interviewer for the … conversation."
 
-If a resume claim or job description detail is provided below, cite exactly ONE concrete signal from it (e.g. one project, skill, or requirement) to show you reviewed their materials — do not list several, and do not start a deep probe. If no resume claims or job description excerpt are provided, skip this and give a generic warm opening instead.
+Must cover, in any order that sounds human:
+1) a brief greeting and that you are interviewing them for this conversation,
+2) if a resume claim or JD signal is listed below, weave in exactly ONE of those signals naturally (do not list several, do not start a deep probe),
+3) invite a short introduction of background / work relevant to this role.
+
+If no resume claims or job description excerpt are provided, skip the materials cite and give a warm generic opening instead.
 
 Job target level (assessment bar): {job_target_level}
 Candidate framing: {candidate_framing}
@@ -210,7 +217,10 @@ ACTION_PHRASING: dict[str, str] = {
     ),
     "PROBE_FOR_METHOD": (
         "This is a method follow-up. Ask for the steps or mechanism they used "
-        "on the hook fact. Do not ask why they chose it until the method is clear."
+        "on the hook fact. Do not ask why they chose it until the method is clear. "
+        "If they already named a technique, do not re-ask for 'the steps' in the "
+        "same frame — acknowledge the technique and ask for one decision, failure "
+        "mode, or measurement gap."
     ),
     "PROBE_FOR_REASONING": (
         "This is a reasoning follow-up. Ask what constraint forced that choice, "
