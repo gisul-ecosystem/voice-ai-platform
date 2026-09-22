@@ -1,4 +1,4 @@
-"""Shared LiveKit session construction for all voice products."""
+﻿"""Shared LiveKit session construction for all voice products."""
 from __future__ import annotations
 
 import logging
@@ -14,6 +14,7 @@ from clients.inference import (
     inference_overrides_from_metadata,
     parse_room_metadata,
 )
+from clients.tts.voice_policy import ResolvedVoicePolicy
 from livekit_adapters import LaptopLLM, LaptopSTT, LaptopTTS
 
 
@@ -24,7 +25,12 @@ class InferenceClients:
     tts: Any
 
 
-def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients:
+def load_inference_clients(
+    ctx: Any,
+    logger: logging.Logger,
+    *,
+    voice_policy: ResolvedVoicePolicy | dict[str, Any] | None = None,
+) -> InferenceClients:
     """Resolve room-level provider choices before the first conversation turn."""
     job = getattr(ctx, "job", None)
     raw_metadata = (
@@ -36,7 +42,10 @@ def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients
         parse_room_metadata(raw_metadata)
     )
     try:
-        llm_client, stt_client, tts_client = clients_from_overrides(overrides)
+        llm_client, stt_client, tts_client = clients_from_overrides(
+            overrides,
+            voice_policy=voice_policy,
+        )
     except ProviderConfigError:
         logger.exception(
             "inference_config_invalid",

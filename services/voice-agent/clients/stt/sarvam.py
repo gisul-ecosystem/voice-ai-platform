@@ -97,11 +97,20 @@ def parse_realtime_message(payload: object) -> tuple[str, str]:
     event = str(payload.get("event") or payload.get("type") or "")
     text = payload.get("text")
     if not isinstance(text, str):
+        text = payload.get("transcript")
+    if not isinstance(text, str):
         nested = payload.get("data")
         if isinstance(nested, dict) and isinstance(nested.get("text"), str):
             text = nested["text"]
         elif isinstance(nested, dict):
             text = transcript_from_payload(nested)
+        elif isinstance(nested, list):
+            parts = [
+                transcript_from_payload(item)
+                for item in nested
+                if isinstance(item, (dict, str))
+            ]
+            text = " ".join(part.strip() for part in parts if part.strip())
         else:
             text = transcript_from_payload(payload)
     text = (text or "").strip()

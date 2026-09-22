@@ -22,6 +22,11 @@ from clients.inference import parse_room_metadata
 from clients.llm import get_llm_client
 from clients.stt import get_stt_client
 from clients.tts import get_tts_client
+from clients.tts.voice_policy import (
+    log_tts_recovery,
+    resolve_voice_policy,
+    run_tts_preflight,
+)
 from products.interviewer.agent import AaptorAgent
 from products.interviewer.brain_runtime import (
     BrainSessionBridge,
@@ -531,9 +536,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
         ctx.add_shutdown_callback(release_room)
 
-    clients = load_inference_clients(ctx, logger)
-    session = build_agent_session(clients)
-    attach_session_metrics(session, logger)
+    # TTS clients + AgentSession are built after definition load so voice_policy pins apply.
     initial_state: dict = {}
     brain_bridge: BrainSessionBridge | None = None
     context_id = context_id_from_job(ctx)
@@ -735,6 +738,52 @@ async def entrypoint(ctx: JobContext) -> None:
                     "session_id": session_id,
                 },
             )
+    voice_raw = (
+        interview_definition.get("voice_policy")
+        if isinstance(interview_definition, dict)
+        else None
+    )
+    voice_policy = resolve_voice_policy(
+        voice_raw if isinstance(voice_raw, dict) else None
+    )
+    clients = load_inference_clients(ctx, logger, voice_policy=voice_policy)
+    try:
+        await run_tts_preflight(
+            clients.tts,
+            voice_policy,
+            session_id=session_id or None,
+        )
+    except ServiceUnavailableError as exc:
+        action = log_tts_recovery(
+            voice_policy,
+            session_id=session_id or None,
+            error=exc,
+        )
+        logger.error(
+            "tts_preflight_failed",
+            extra={
+                "event": "tts_preflight_failed",
+                "session_id": session_id,
+                "action": action,
+                "voice_id": voice_policy.voice_id,
+                "provider": voice_policy.provider,
+            },
+        )
+        if session_id:
+            try:
+                await report_session_status(
+                    session_id,
+                    "failed",
+                    reason=f"tts_preflight_{action}"[:120],
+                )
+            except ServiceUnavailableError:
+                logger.warning(
+                    "status_report_unavailable",
+                    extra={"event": "status_report_unavailable"},
+                )
+        raise
+    session = build_agent_session(clients)
+    attach_session_metrics(session, logger)
     try:
         outline, outline_source = resolve_live_outline(
             interview_definition=interview_definition,

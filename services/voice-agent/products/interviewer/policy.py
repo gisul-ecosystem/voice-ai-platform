@@ -160,7 +160,11 @@ def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict
     clarify = max(1, int(policy.get("clarify_after") or defaults["clarify_after"]))
     rephrase = max(clarify, int(policy.get("rephrase_after") or defaults["rephrase_after"]))
     change = max(rephrase, int(policy.get("change_topic_after") or defaults["change_topic_after"]))
-    close = max(change + 1, int(policy.get("close_after") or defaults["close_after"]))
+    # Published brain schema uses confirm_continue_after; agents historically used close_after.
+    close_raw = policy.get("close_after")
+    if close_raw is None:
+        close_raw = policy.get("confirm_continue_after")
+    close = max(change + 1, int(close_raw or defaults["close_after"]))
     return {
         "clarify_after": clarify,
         "rephrase_after": rephrase,
@@ -377,6 +381,24 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="closing",
         )
 
+    # Soft end while competencies remain: advance breadth-first — no new deep probes.
+    if (
+        state.elapsed_seconds >= state.soft_end_seconds
+        and not state.at_last_competency
+        and state.has_uncovered_competencies
+    ):
+        return PolicyDecision(
+            action=MOVE_TO_NEXT_COMPETENCY,
+            forced_flow_decision="advance",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=min(2, state.max_depth),
+            competency_id=state.competency_id,
+            intent="coverage",
+            reason="soft end — advance remaining competencies without deeper probes",
+            section="competency_assessment",
+        )
+
     depth = max(1, min(state.probe_count + 1, state.max_depth))
     probes_exhausted = state.probe_count >= state.max_probes or depth >= state.max_depth
     if state.missing_intents and not probes_exhausted:
@@ -475,6 +497,7 @@ def policy_prompt_block(decision: PolicyDecision) -> str:
         "- Do not jump multiple depth levels.\n"
         "- Do not ask protected-class or prohibited questions.\n"
         "- Prefer applied work examples over trivia.\n"
+        "- Do not ask acronym full-forms, puzzles, riddles, or brain-teasers unless job-critical.\n"
         "- Keep the same domain-neutral interviewer voice for any role.\n"
     )
 

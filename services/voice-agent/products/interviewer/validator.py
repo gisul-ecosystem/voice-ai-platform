@@ -74,6 +74,20 @@ SKIP_HOOK_INTENTS = frozenset(
 
 PROBE_SHAPE_ROTATION = ("why", "failure_mode", "metric", "trade_off")
 
+TRIVIA_MARKERS = (
+    "brain teaser",
+    "riddle",
+    "puzzle",
+    "what does sql stand for",
+    "what does api stand for",
+    "what does http stand for",
+    "full form of",
+    "expand the acronym",
+    "what is the full form",
+    "define polymorphism in one sentence",
+    "write a linked list from scratch",
+)
+
 PROTECTED_MARKERS = (
     "age",
     "how old",
@@ -512,6 +526,32 @@ def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
     return any(alias in blob for alias in aliases)
 
 
+
+def _looks_like_non_job_trivia(question: str, *, corpus: str) -> bool:
+    """Block puzzles/acronym drills unless clearly applied to the candidate's work."""
+    lowered = (question or "").lower()
+    if not lowered:
+        return False
+    applied = any(
+        token in lowered
+        for token in (
+            "how did you",
+            "in your",
+            "when you",
+            "on the job",
+            "in production",
+            "in your project",
+            "at work",
+        )
+    )
+    if any(marker in lowered for marker in TRIVIA_MARKERS):
+        return not applied
+    if "stand for" in lowered or "full form" in lowered:
+        return not applied
+    _ = corpus  # reserved for future job-critical allow-lists
+    return False
+
+
 def validate_generated_question(
     generated: GeneratedQuestion,
     *,
@@ -544,24 +584,8 @@ def validate_generated_question(
     if any(marker in lowered for marker in TRIVIA_MARKERS):
         reasons.append("trivia_question")
     live_probe = (policy_intent or "") not in SKIP_HOOK_INTENTS
-    if live_probe:
-        stems = hook_stem_tokens(hook_fact or "")
-        if stems and not any(stem in lowered for stem in stems):
-            reasons.append("missing_hook_stem")
-        current_prefix = prefix_tokens(question)
-        if len(current_prefix) >= 6:
-            for previous in recent_questions[-8:]:
-                previous_prefix = prefix_tokens(previous)
-                if len(previous_prefix) >= 6 and current_prefix == previous_prefix:
-                    reasons.append("repeated_prefix")
-                    break
-        if (
-            required_probe_shape
-            and generated.probe_shape
-            and last_probe_shape
-            and generated.probe_shape == last_probe_shape
-        ):
-            reasons.append("repeated_probe_shape")
+    # Hook details and probe-shape rotation guide wording, but do not reject a
+    # question that is otherwise safe, grounded, policy-compatible, and unique.
 
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:
@@ -616,6 +640,9 @@ def validate_generated_question(
         if term in lowered and term not in corpus:
             reasons.append("ungrounded_term")
             break
+
+    if _looks_like_non_job_trivia(question, corpus=corpus):
+        reasons.append("non_job_trivia")
 
     ok = not reasons
     normalized = GeneratedQuestion(

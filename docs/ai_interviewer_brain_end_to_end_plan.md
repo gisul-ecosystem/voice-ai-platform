@@ -44,7 +44,7 @@ This section is the source of truth for **what is built now** versus what remain
 |------|--------|
 | OCR for scanned / image-only PDFs | Pending |
 | Full creator blueprint editor UI | Partial (SetupForm ingest fills fields; `/jd/approve` and `/resume/confirm` exist but are not the primary UI path) |
-| Milestone 5 voice pin / TTS preflight / no silent voice switch | Pending |
+| Milestone 5 voice pin / TTS preflight / no silent voice switch | In progress — pin + preflight + same-voice retry wired in voice-agent |
 | Scorecard review / override APIs + recruiter UI | Pending (schema fields + `human_review_status=pending` only; GET/generate exist) |
 | Formal M7 role/failure validation matrix | Pending |
 
@@ -1295,15 +1295,15 @@ Exit criteria:
 - The LLM cannot exceed depth, time, probe, or prohibited-content policies.
 - The interview does not immediately deep-dive without establishing context.
 
-### Milestone 5: Voice reliability — PENDING
+### Milestone 5: Voice reliability — IN PROGRESS
 
 Deliver:
 
-- Session-pinned voice configuration.
-- TTS preflight.
-- Same-voice retries.
-- Pause/end recovery policy.
-- Provider and voice observability.
+- Session-pinned voice configuration. *(wired: `voice_policy` → pinned `voice_id` on TTS client)*
+- TTS preflight. *(wired: `run_tts_preflight` before `session.start`; fail session on failure)*
+- Same-voice retries. *(wired: `synthesize_same_voice` in LaptopTTS path)*
+- Pause/end recovery policy. *(preflight failure → `tts_recovery` pause/end + session failed; mid-session pin refuses provider failover)*
+- Provider and voice observability. *(events: `tts_voice_pinned`, `tts_preflight_ok`, `tts_pinned_no_failover`, `tts_recovery`)*
 
 Exit criteria:
 
@@ -1366,7 +1366,7 @@ Most evolutionary steps are complete on the interviewer product path. Remaining 
 | Preserve LiveKit transport and provider clients | Done |
 | Stable generic system prompt (domain-neutral) | Done |
 | Versioned immutable interview definitions | Done |
-| Structured resume claims (vs project-name matching) | Partial — claims schema exists; live claim extraction still thin |
+| Structured resume claims (vs project-name matching) | Improved — schedule auto-extracts profile; UI passes ingest claims; opening cites one ranked claim; project ranking by JD gap |
 | Question / answer / evidence / snapshot records | Done |
 | Policy engine replaces LLM probe/advance control | Done |
 | Full transcript + explicit Q/A linkage | Done |
@@ -1401,7 +1401,7 @@ The interview brain is ready for production evaluation when:
 5. It maintains competency coverage and missing evidence. — **partial** (scoring coverage; live tracker evolving)
 6. It resumes correctly after worker restart. — **met** (3-layer snapshots)
 7. It does not repeat answered questions. — **met** (policy/ledger)
-8. It does not silently change voice. — **not met** (M5 pending)
+8. It does not silently change voice. — **partially met** (pin + preflight + no failover; mid-session pause speech still limited when TTS is fully down)
 9. It closes naturally at the configured time. — **met** (time policy)
 10. Every score is evidence-backed and reviewable. — **partial** (AI card + evidence; human review/override APIs pending)
 11. Candidate data and protected characteristics are handled according to approved privacy and fairness policies. — **partial** (rules in prompt/policy; formal retention gates evolving)

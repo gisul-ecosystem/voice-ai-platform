@@ -292,32 +292,6 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                 if text:
                     last_text = text
                 _schedule_final()
-            if text_to_send and text_to_send != committed_text:
-                committed_text = text_to_send
-            if kind == "partial" and text:
-                last_text = text
-                _emit_interim(text)
-                if pending_final_task is not None:
-                    # Speech resumed before the grace window elapsed; more is coming.
-                    _cancel_pending_final()
-                return
-            if kind == "final" and text:
-                # Identical final twice → utterance settled; otherwise keep interim.
-                if speaking and text == last_text:
-                    _cancel_pending_final()
-                    _emit_final(text)
-                    _end_speech()
-                    return
-                last_text = text
-                _emit_interim(text)
-                # Sarvam may omit speech_end. Every final therefore gets a short
-                # debounce window so a correction can replace it before commit.
-                _schedule_final()
-                return
-            if kind == "speech_end":
-                if text:
-                    last_text = text
-                _schedule_final()
 
         try:
             connect_options = {_WEBSOCKET_HEADERS_ARG: headers}
@@ -396,6 +370,12 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                                     "event": "stt_realtime_event",
                                     "kind": kind,
                                     "has_text": bool(text),
+                                    "payload_keys": sorted(
+                                        str(key) for key in payload.keys()
+                                    ),
+                                    "payload_event": str(
+                                        payload.get("event") or payload.get("type") or ""
+                                    ),
                                 },
                             )
                         if kind == "other":
@@ -479,7 +459,11 @@ class LaptopTTS(tts.TTS):
 class _LaptopChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            audio_bytes = await self._tts._client.synthesize(self.input_text)
+            from clients.tts.voice_policy import synthesize_same_voice
+
+            audio_bytes = await synthesize_same_voice(
+                self._tts._client, self.input_text
+            )
         except ServiceUnavailableError as exc:
             raise _to_api_error(exc) from exc
 

@@ -219,7 +219,7 @@ def test_probe_action_phrasing_is_unique() -> None:
     assert len(set(notes)) == len(notes)
 
 
-def test_validator_requires_hook_stem_on_live_probes() -> None:
+def test_validator_allows_natural_question_without_hook_stem() -> None:
     generated = GeneratedQuestion(
         question="What would you change about the approach next time?",
         competency_id="negotiation",
@@ -238,8 +238,7 @@ def test_validator_requires_hook_stem_on_live_probes() -> None:
         recent_turns=["We used Redis during that renewal."],
         hook_fact="Redis",
     )
-    assert missing.ok is False
-    assert "missing_hook_stem" in missing.reasons
+    assert missing.ok is True
 
     hooked = validate_generated_question(
         GeneratedQuestion(
@@ -261,7 +260,7 @@ def test_validator_requires_hook_stem_on_live_probes() -> None:
     assert hooked.ok is True
 
 
-def test_validator_rejects_repeated_six_word_prefix() -> None:
+def test_validator_still_rejects_near_duplicate_question() -> None:
     generated = GeneratedQuestion(
         question="What part of that deal did you change afterward?",
         competency_id="negotiation",
@@ -279,10 +278,10 @@ def test_validator_rejects_repeated_six_word_prefix() -> None:
         allowed_probes=_sales_definition()["allowed_probes"],
     )
     assert result.ok is False
-    assert "repeated_prefix" in result.reasons
+    assert "duplicate_question" in result.reasons
 
 
-def test_validator_rejects_repeated_probe_shape() -> None:
+def test_validator_allows_repeated_probe_shape_when_question_is_valid() -> None:
     generated = GeneratedQuestion(
         question="Why did you choose Redis for that deal?",
         competency_id="negotiation",
@@ -304,5 +303,4 @@ def test_validator_rejects_repeated_probe_shape() -> None:
         required_probe_shape="failure_mode",
         last_probe_shape="why",
     )
-    assert result.ok is False
-    assert "repeated_probe_shape" in result.reasons
+    assert result.ok is True

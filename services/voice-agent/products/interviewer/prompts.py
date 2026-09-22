@@ -65,7 +65,7 @@ Allowed probe intents: {allowed_probes}
 Facts already established for this competency — do not re-ask these, build on them instead:
 {known_facts}
 
-Hook from the last answer — if this is not "(none)", the spoken question must use this stem:
+Hook from the last answer — if this is not "(none)", prefer using this concrete detail:
 {hook_fact}
 
 Required probe_shape for this turn (set probe_shape to this value; do not repeat the last angle): {required_probe_shape}
@@ -114,9 +114,9 @@ Answer analysis supplied by the runtime (already applied to coverage — do not 
 - Once candidate mapping is complete, ask a technical question for the active competency.
 - Do not ask about internships, general background, or motivation during a competency phase unless the policy explicitly requires context.
 
-When a hook stem is supplied above, the spoken question must include that stem. Do not ask a generic "tell me more" question, and do not ask about a fact already listed as established.
+When a hook stem is supplied above, use it when natural, but do not force awkward wording. Do not ask a generic "tell me more" question, and do not ask about a fact already listed as established.
 
-Tag the question you write: set depth_tag to "concept" for definition/context questions, "applied" for hands-on method questions, or "trade_off" for reasoning/reflection/what-would-you-change questions. Set probe_shape to the required probe_shape above.
+Tag the question you write: set depth_tag to "concept" for definition/context questions, "applied" for hands-on method questions, or "trade_off" for reasoning/reflection/what-would-you-change questions. Prefer the required probe_shape above when it fits the answer.
 
 Respond with a single JSON object in exactly this shape:
 {{
@@ -152,6 +152,7 @@ Interview structure planned by the admin:
 
 Published interview definition and competency boundaries:
 {published_context}
+{framing_notes}
 
 Allowed resume claims you may reference:
 {claim_brief}

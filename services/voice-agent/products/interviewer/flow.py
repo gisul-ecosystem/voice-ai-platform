@@ -350,6 +350,57 @@ def resume_project_excerpt(resume_text: str, project_name: str, *, limit: int = 
                 chunks.append(text)
     excerpt = " ".join(chunks)
     return clip_source_text(excerpt, limit) if excerpt else clip_source_text(cleaned, limit)
+
+def rank_projects_by_competency_gap(
+    claims: list[dict],
+    *,
+    competencies: list[str] | None = None,
+    job_description: str = "",
+    coverage: dict | None = None,
+) -> list[dict]:
+    """Rank resume project/experience claims for interview use (plan §12).
+
+    Prefer claims that match JD/competency tokens and can fill coverage gaps.
+    Does not change the job bar — ranking only personalizes order.
+    """
+    items = [item for item in claims if isinstance(item, dict) and str(item.get("value") or "").strip()]
+    if not items:
+        return []
+    tokens: set[str] = set()
+    for raw in list(competencies or []) + [job_description or ""]:
+        for piece in re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{1,}", str(raw).lower()):
+            if len(piece) >= 3:
+                tokens.add(piece)
+    gap_ids: set[str] = set()
+    if isinstance(coverage, dict):
+        for cid, row in coverage.items():
+            if not isinstance(row, dict):
+                continue
+            missing = row.get("missing_intents") or []
+            if missing:
+                gap_ids.add(str(cid))
+    type_boost = {
+        "project": 5,
+        "experience": 4,
+        "internship": 3,
+        "skill": 1,
+        "achievement": 2,
+    }
+
+    def score(item: dict) -> tuple:
+        value = str(item.get("value") or "").lower()
+        ctype = str(item.get("type") or "").lower()
+        overlap = sum(1 for token in tokens if token in value)
+        gap_hit = 1 if any(gid.replace("_", " ") in value for gid in gap_ids) else 0
+        ownership = 1 if any(w in value for w in ("i ", "led", "owned", "built", "designed")) else 0
+        return (
+            overlap * 10 + type_boost.get(ctype, 0) + gap_hit * 3 + ownership,
+            -len(value),
+        )
+
+    return sorted(items, key=score, reverse=True)
+
+
 def build_candidate_profile(
     *,
     resume_text: str = "",
@@ -389,6 +440,34 @@ def build_candidate_profile(
     )
     if not profile.get("experience_summary"):
         profile["experience_summary"] = {"profile_type": "unknown"}
+    raw_claims = profile.get("claims") if isinstance(profile.get("claims"), list) else []
+    competency_names: list[str] = []
+    if isinstance(definition, dict):
+        for item in definition.get("competencies") or []:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                if name:
+                    competency_names.append(name)
+    if not competency_names and isinstance(setup, dict):
+        raw_skills = setup.get("competencies") or []
+        if isinstance(raw_skills, list):
+            competency_names = [str(item).strip() for item in raw_skills if str(item).strip()]
+    ranked = rank_projects_by_competency_gap(
+        [item for item in raw_claims if isinstance(item, dict)],
+        competencies=competency_names,
+        job_description=str(
+            (definition or {}).get("job_description")
+            if isinstance(definition, dict)
+            else ""
+        ),
+    )
+    if ranked:
+        profile["claims"] = ranked
+        profile["ranked_claim_ids"] = [
+            str(item.get("claim_id"))
+            for item in ranked
+            if item.get("claim_id")
+        ]
     return profile
 
 
@@ -1374,13 +1453,86 @@ class InterviewFlow:
                         return title
         return ""
 
+
+    def _opening_cites_context(self, question: str) -> bool:
+        """True when spoken opening mentions the chosen claim/JD signal (PBI-B1)."""
+        signal = self._opening_signal()
+        if not signal:
+            return True
+        text = (question or "").lower()
+        stop = {
+            "with", "from", "that", "this", "have", "been", "your", "their",
+            "owned", "built", "using", "into", "about", "work", "project",
+        }
+        tokens = [
+            tok
+            for tok in re.findall(r"[a-z0-9][a-z0-9+.#-]{3,}", signal.lower())
+            if tok not in stop
+        ]
+        if not tokens:
+            needle = signal.lower()[:24].strip()
+            return bool(needle) and needle in text
+        return any(tok in text for tok in tokens[:8])
+
+    def _ensure_opening_cites_context(self, question: str) -> str:
+        cleaned = (question or "").strip()
+        if self._opening_cites_context(cleaned):
+            return cleaned
+        logger.info(
+            "opening_missing_context_cite",
+            extra={
+                "event": "opening_missing_context_cite",
+                "signal": (self._opening_signal() or "")[:80],
+            },
+        )
+        return self._fallback_opening()
+
+    def _opening_signal(self) -> str:
+        """One concrete resume claim or JD signal for openings (PBI-B1)."""
+        claims = (
+            self.candidate_profile.get("claims")
+            if isinstance(self.candidate_profile, dict)
+            else None
+        )
+        if isinstance(claims, list):
+            ranked = rank_projects_by_competency_gap(
+                [item for item in claims if isinstance(item, dict)],
+                competencies=self.competencies,
+                job_description=self.job_description,
+                coverage=self.coverage if isinstance(getattr(self, "coverage", None), dict) else None,
+            )
+            for item in ranked:
+                value = str(item.get("value") or "").strip()
+                if value:
+                    # Keep spoken openings short — one clause, not a dump.
+                    clipped = value if len(value) <= 120 else value[:117].rstrip() + "..."
+                    return clipped
+        for req in (self.jd_requirements or [])[:3]:
+            text = str(req).strip()
+            if text:
+                return text if len(text) <= 120 else text[:117].rstrip() + "..."
+        return ""
+
     def _fallback_opening(self) -> str:
         role = self._role_title()
+        signal = self._opening_signal()
+        if role and signal:
+            return (
+                f"Thanks for joining. I'm your interviewer for the {role} conversation. "
+                f"I noticed {signal} on your materials — to get started, please introduce "
+                "yourself and share the work most relevant to this role."
+            )
         if role:
             return (
                 f"Thanks for joining. I'm your interviewer for the {role} conversation. "
                 "To get started, please introduce yourself — a short overview of your "
                 "background, and the work that is most relevant to this role."
+            )
+        if signal:
+            return (
+                "Thanks for joining. I'll be interviewing you for this role today. "
+                f"I noticed {signal} on your materials — please introduce yourself and "
+                "share the work from your background that is most relevant to this job."
             )
         if (self.job_description or "").strip():
             return (
@@ -1922,7 +2074,16 @@ class InterviewFlow:
         if closing:
             return closing
         if last_candidate_turn is None:
-            if self._uses_legacy_decision_flow():
+            # Legacy path: skip LLM only when there is nothing to personalize from.
+            has_opening_context = bool(
+                (self.job_description or "").strip()
+                or (self.resume_text or "").strip()
+                or (
+                    isinstance(self.candidate_profile, dict)
+                    and (self.candidate_profile.get("claims") or [])
+                )
+            )
+            if self._uses_legacy_decision_flow() and not has_opening_context:
                 started = time.perf_counter()
                 opening = self._fallback_opening()
                 self.last_question_competency_id = None
@@ -2062,6 +2223,8 @@ class InterviewFlow:
             self._apply_turn_decision(decision, is_intro_reply=is_intro_reply)
             if self.completed:
                 question = CLOSING_MESSAGE
+        if last_candidate_turn is None:
+            question = self._ensure_opening_cites_context(question)
         self._remember_question(question)
         logger.info(
             "stage2_question",
@@ -2217,6 +2380,11 @@ class InterviewFlow:
         if not question:
             question = self._fallback_opening() if is_opening else FALLBACK_FOLLOWUP
             yield question
+        elif is_opening:
+            ensured = self._ensure_opening_cites_context(question)
+            if ensured != question:
+                question = ensured
+                yield question
         self._commit_turn(
             last_candidate_turn,
             parser.decision or "probe",
@@ -2325,7 +2493,8 @@ class InterviewFlow:
             if not spoken_any:
                 yield question
             return
-
+        # finish() already ran inside _pump_stream; reuse the spoken question text.
+        spoken = parser.question.strip() or None
         question = await self._complete_generated_turn(
             "".join(raw_parts),
             last_candidate_turn,
@@ -2333,12 +2502,16 @@ class InterviewFlow:
             prompt=prompt,
             user_content=user_content,
             allow_retry=not spoken_any,
-            spoken_question=parser.question.strip() or None,
+            spoken_question=spoken,
             spoken_any=spoken_any,
         )
         if question == CLOSING_MESSAGE:
-            if parser.question.strip() != CLOSING_MESSAGE:
+            if (spoken or "") != CLOSING_MESSAGE:
                 yield question
+            return
+        if last_candidate_turn is None and spoken_any and question != (spoken or ""):
+            # Soft-replaced opening after stream — speak corrected claim-aware line once.
+            yield question
             return
         if not spoken_any and question:
             yield question

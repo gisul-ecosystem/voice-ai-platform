@@ -61,6 +61,7 @@ export async function POST(request: Request) {
         resume_text: body.resumeText,
         interview_setup: body.interviewSetup,
         definition_id: body.definitionId,
+        candidate_profile: body.candidateProfile,
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(15_000),

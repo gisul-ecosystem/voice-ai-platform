@@ -1,6 +1,7 @@
 """LiveKit adapter for the provider-neutral interview flow."""
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -9,6 +10,8 @@ from livekit.agents import Agent, ModelSettings, llm
 from products.interviewer.brain_runtime import BrainSessionBridge
 from products.interviewer.flow import CLOSING_MESSAGE, FALLBACK_FOLLOWUP, InterviewFlow
 from voice_platform.chat import is_usable_candidate_turn, last_text
+
+logger = logging.getLogger("voice-agent.interviewer")
 
 CLARIFY_TURN = (
     "Sorry, I did not catch that. Please say a bit more, in a full sentence."

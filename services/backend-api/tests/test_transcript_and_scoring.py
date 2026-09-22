@@ -131,6 +131,56 @@ def test_scorecard_requires_evidence_citations() -> None:
     assert scored.evidence_ids
     assert scored.review_required is True
     assert scorecard.human_review_status == "pending"
+    assert scored.contradictory_evidence_ids == []
+
+
+def test_scorecard_links_contradicted_answers_as_contradictory_evidence() -> None:
+    """A false claim must stay unrated *and* be citable by the reviewer."""
+    definition = {
+        "definition_id": "idef_score_test_contra_01",
+        "competencies": [
+            {
+                "id": "problem_solving",
+                "name": "Problem solving",
+                "evidence_expected": ["context", "action", "result"],
+            }
+        ],
+    }
+    scorecard, evidence = build_scorecard_bundle(
+        session_id="ses_score_test_contra_01",
+        definition=definition,
+        questions=[
+            {
+                "question_id": "q1",
+                "competency_id": "problem_solving",
+                "text": "What problem did you solve?",
+            }
+        ],
+        answers=[
+            {
+                "answer_id": "a1",
+                "question_id": "q1",
+                "turn_ids": ["turn_candidate_1"],
+                "usable": True,
+                "final_transcript": (
+                    "I owned the billing timeout context. I implemented retries "
+                    "and the result was lower latency for checkout."
+                ),
+                "answer_evaluation": {
+                    "technical_substance": "deep",
+                    "factually_correct": False,
+                },
+            }
+        ],
+    )
+    scored = scorecard.competencies[0]
+    assert scored.contradictory_evidence_ids == scored.evidence_ids
+    assert scored.contradictory_evidence_ids
+    # The contradiction must still block a numeric rating.
+    assert scored.rating is None
+    assert scored.outcome == "insufficient_evidence"
+    flagged = {item.evidence_id for item in evidence}
+    assert set(scored.contradictory_evidence_ids) <= flagged
 
 
 def test_scorecard_coverage_does_not_count_an_asked_but_unproven_intent() -> None:

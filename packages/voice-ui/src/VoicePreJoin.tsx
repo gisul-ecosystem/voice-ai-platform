@@ -11,7 +11,7 @@ import {
   LocalVideoTrack,
   Track,
 } from "livekit-client";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { VoiceDeviceChoices } from "./types";
 
@@ -120,10 +120,9 @@ export function VoicePreJoin({
     saveVideoInputDeviceId(videoDeviceId);
   }, [saveVideoInputDeviceId, videoDeviceId]);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function join() {
     const normalizedName = username.trim();
-    if (!normalizedName) return;
+    if (!normalizedName || !audioEnabled || !audioTrack) return;
     onSubmit({
       username: normalizedName,
       audioEnabled,
@@ -134,9 +133,8 @@ export function VoicePreJoin({
   }
 
   return (
-    <form
+    <div
       className={["voice-device-check", className].filter(Boolean).join(" ")}
-      onSubmit={submit}
     >
       {cameraAllowed ? (
         <div className="voice-device-preview">
@@ -179,6 +177,12 @@ export function VoicePreJoin({
             autoComplete="name"
             required
             readOnly={!allowNameEditing}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                join();
+              }
+            }}
           />
         </label>
 
@@ -236,12 +240,13 @@ export function VoicePreJoin({
 
         <button
           className="lk-button voice-join-button"
-          type="submit"
+          type="button"
           disabled={!username.trim() || !audioEnabled || !audioTrack}
+          onClick={join}
         >
           {joinLabel}
         </button>
       </div>
-    </form>
+    </div>
   );
 }
