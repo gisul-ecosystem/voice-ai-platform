@@ -25,6 +25,19 @@ def test_resolve_live_outline_rejects_generic_fallback_in_production() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_build_outline_raises_when_published_plan_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from products.interviewer.worker import build_outline
+
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(InterviewPlanUnavailableError, match="generated_plan_not_allowed"):
+        await build_outline(SimpleNamespace())
+
+
 def test_local_development_may_use_generated_plan() -> None:
     outline, source = resolve_live_outline(
         interview_definition=None,

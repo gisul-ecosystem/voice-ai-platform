@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from products.interviewer.coverage import classify_live_answer, quality_from_evaluation
+from products.interviewer.coverage import (
+    classify_live_answer,
+    evidenced_intents,
+    quality_from_evaluation,
+)
 from products.interviewer.validator import AnswerEvaluation, parse_answer_evaluation
 
 GENERIC_ANSWERS = [
@@ -92,3 +96,57 @@ def test_short_answer_does_not_crash(text: str) -> None:
 @pytest.mark.parametrize("payload", [None, {}, {"technical_substance": "not_a_real_value"}, "not a dict"])
 def test_parse_answer_evaluation_never_crashes_on_bad_payload(payload) -> None:
     assert parse_answer_evaluation(payload) is None
+
+
+def test_keyword_only_answer_does_not_cover_intents() -> None:
+    text = "I used it because the team project was interesting."
+    _, _, hinted = classify_live_answer(
+        text,
+        required_intents=["establish_ownership", "applied_understanding"],
+        evidence_expected=["personal contribution", "approach or method"],
+    )
+    assert hinted
+    covered = evidenced_intents(
+        required_intents=["establish_ownership", "applied_understanding"],
+        evidence_expected=["personal contribution", "approach or method"],
+        asked_intent="establish_ownership",
+        answer_text=text,
+    )
+    assert covered == []
+
+
+def test_evidenced_ownership_covers_only_asked_intent() -> None:
+    text = "I owned the billing retries and cut timeout errors from 12% to 3%."
+    covered = evidenced_intents(
+        required_intents=["establish_context", "establish_ownership", "applied_understanding"],
+        evidence_expected=["personal contribution", "result or impact"],
+        asked_intent="establish_ownership",
+        answer_text=text,
+    )
+    assert covered == ["establish_ownership"]
+
+
+def test_previous_evaluation_covers_asked_intent() -> None:
+    covered = evidenced_intents(
+        required_intents=["establish_ownership", "applied_understanding"],
+        evidence_expected=["personal contribution"],
+        answer_eval=AnswerEvaluation(
+            technical_substance="deep",
+            key_facts_stated=["owned billing retries"],
+            matches_evidence_expected=True,
+        ),
+        asked_intent="establish_ownership",
+        answer_text="I handled the retries.",
+    )
+    assert covered == ["establish_ownership"]
+
+
+def test_surface_evaluation_does_not_cover_intents() -> None:
+    covered = evidenced_intents(
+        required_intents=["establish_ownership"],
+        evidence_expected=["personal contribution"],
+        answer_eval=AnswerEvaluation(technical_substance="surface"),
+        asked_intent="establish_ownership",
+        answer_text="I owned the billing retries and cut errors from 12% to 3%.",
+    )
+    assert covered == []

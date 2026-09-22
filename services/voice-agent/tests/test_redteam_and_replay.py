@@ -38,7 +38,7 @@ def test_red_team_rejects_prohibited_and_injected_questions() -> None:
 @pytest.mark.asyncio
 async def test_replay_metadata_is_captured_per_turn() -> None:
     llm = FakeLlm(
-        '{"question": "What part of that customer conversation did you personally handle?",'
+        '{"question": "What did you personally handle when speaking with those shop owners?",'
         ' "competency_id": "negotiation", "intent": "establish_ownership", "depth": 2,'
         ' "source_claim_ids": []}'
     )

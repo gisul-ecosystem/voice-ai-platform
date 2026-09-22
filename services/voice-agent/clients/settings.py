@@ -50,6 +50,12 @@ TTS_VOICE = os.getenv("TTS_VOICE", "af_heart")
 LLM_PROVIDER = (os.getenv("LLM_PROVIDER") or "self_hosted").strip() or "self_hosted"
 STT_PROVIDER = (os.getenv("STT_PROVIDER") or "self_hosted").strip() or "self_hosted"
 TTS_PROVIDER = (os.getenv("TTS_PROVIDER") or "self_hosted").strip() or "self_hosted"
+TTS_FALLBACK_PROVIDER = (os.getenv("TTS_FALLBACK_PROVIDER") or "").strip()
+TTS_PIN_VOICE = (os.getenv("TTS_PIN_VOICE") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 LLM_API_KEY = (os.getenv("LLM_API_KEY") or "").strip()
 STT_API_KEY = (os.getenv("STT_API_KEY") or "").strip()
 TTS_API_KEY = (os.getenv("TTS_API_KEY") or "").strip()
