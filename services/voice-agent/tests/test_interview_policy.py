@@ -109,6 +109,22 @@ def test_baseline_then_depth_caps_force_advance() -> None:
     assert capped.forced_flow_decision == "advance"
 
 
+def test_two_no_gain_probes_force_competency_transition() -> None:
+    decision = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=6,
+            candidate_turn_count=6,
+            phase_name="Problem solving",
+            competency_id="problem_solving",
+            consecutive_no_gain_probes=2,
+            has_uncovered_competencies=True,
+        )
+    )
+    assert decision.action == MOVE_TO_NEXT_COMPETENCY
+    assert decision.forced_flow_decision == "advance"
+    assert decision.intent == "evidence_gap_stop"
+
+
 def test_hard_time_limit_closes() -> None:
     decision = decide_next_action(
         PolicyState(

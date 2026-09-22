@@ -72,6 +72,7 @@ class AaptorAgent(Agent):
         self._status_sink = status_sink
         self._brain = brain_bridge
         self._completion_reported = False
+        self._opening_in_progress = False
         # Mid-session restore: any prior turn means opening already happened.
         self._opened = bool(self.flow.candidate_turns or self.flow.interviewer_turns)
         self._last_agent_text = (
@@ -171,18 +172,22 @@ class AaptorAgent(Agent):
         # Claim the opening before awaiting synthesis so a concurrent LLM callback
         # cannot schedule a second opening/question for the same room.
         self._opened = True
-        parts: list[str] = []
-        async for chunk in self.flow.generate_next_question_stream(None):
-            parts.append(chunk)
-        opening = "".join(parts).strip() or FALLBACK_OPENING
-        await self.session.say(opening, allow_interruptions=False)
-        self._last_agent_text = opening
-        turn_id = await self._record("agent", opening)
-        await self._persist_brain_after_exchange(
-            speaker="agent",
-            text=opening,
-            turn_id=turn_id,
-        )
+        self._opening_in_progress = True
+        try:
+            parts: list[str] = []
+            async for chunk in self.flow.generate_next_question_stream(None):
+                parts.append(chunk)
+            opening = "".join(parts).strip() or FALLBACK_OPENING
+            await self.session.say(opening, allow_interruptions=False)
+            self._last_agent_text = opening
+            turn_id = await self._record("agent", opening)
+            await self._persist_brain_after_exchange(
+                speaker="agent",
+                text=opening,
+                turn_id=turn_id,
+            )
+        finally:
+            self._opening_in_progress = False
 
     async def llm_node(
         self,
@@ -191,6 +196,8 @@ class AaptorAgent(Agent):
         model_settings: ModelSettings,
     ):
         candidate_turn = last_text(chat_ctx)
+        if self._opening_in_progress or (self._opened and not candidate_turn):
+            return
         opening = not self._opened
         candidate_brain_turn_id = None
         if opening:

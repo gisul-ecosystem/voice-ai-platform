@@ -569,6 +569,8 @@ class InterviewFlow:
         self.last_answer_quality = "partial"
         self.last_answer_evaluation: dict[str, Any] | None = None
         self.known_facts: dict[str, list[str]] = {}
+        self.no_gain_probes: dict[str, int] = {}
+        self._last_ledger_answer: tuple[str, str] | None = None
         self.last_probe_shape: dict[str, str] = {}
         self.last_question_competency_id: str | None = None
         self.last_question_intent = "opening"
@@ -680,10 +682,13 @@ class InterviewFlow:
             return
         if decision == "advance" or must_advance:
             previous = self.current_phase().get("name")
+            previous_competency_id = self.current_phase().get("competency_id")
             self.phase_index += 1
             self.probe_count = 0
             self.phase_started_at = time.monotonic()
             self.focus_item = ""
+            if previous_competency_id:
+                self.no_gain_probes.pop(str(previous_competency_id), None)
             self._ensure_focus(None)
             logger.info(
                 "phase_advanced",
@@ -763,6 +768,9 @@ class InterviewFlow:
             has_uncovered_competencies=has_uncovered,
             missing_intents=missing,
             coverage_complete=coverage_complete,
+            consecutive_no_gain_probes=(
+                self.no_gain_probes.get(competency_id or "", 0)
+            ),
             has_coverage_gaps=bool(gap_id),
             gap_competency_id=gap_id,
             clarify_after=self.clarify_after,
@@ -1122,6 +1130,29 @@ class InterviewFlow:
             elif usability not in {"silence", "stt_failure", "network_failure"}:
                 self.consecutive_unusable += 1
         if self.policy_mode and competency_id:
+            answer_key = (competency_id, last_candidate_turn.strip())
+            if answer_key != self._last_ledger_answer:
+                before = set(
+                    (self.coverage.get(competency_id) or {}).get("covered_intents") or []
+                )
+                apply_coverage(
+                    self.coverage,
+                    competency_id=competency_id,
+                    covered_intents=covered,
+                    evidence_id=f"ev_{self.last_question_competency_id or competency_id}_{len(self.candidate_turns)}",
+                    answer_eval=answer_eval,
+                )
+                after = set(
+                    (self.coverage.get(competency_id) or {}).get("covered_intents") or []
+                )
+                if after - before:
+                    self.no_gain_probes[competency_id] = 0
+                else:
+                    self.no_gain_probes[competency_id] = (
+                        self.no_gain_probes.get(competency_id, 0) + 1
+                    )
+                self._last_ledger_answer = answer_key
+                return
             apply_coverage(
                 self.coverage,
                 competency_id=competency_id,
@@ -1268,6 +1299,26 @@ class InterviewFlow:
             return str(self.interview_definition.get("prompt_version") or "interviewer-system-v2")
         return "interviewer-system-v2"
 
+    def _validate_prompt_briefing(
+        self,
+        briefing: dict[str, Any],
+        template: str,
+        template_name: str,
+    ) -> None:
+        required_fields = set(re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", template))
+        missing_fields = sorted(required_fields - set(briefing))
+        if missing_fields:
+            logger.error(
+                "turn_prompt_missing_fields",
+                extra={
+                    "template_name": template_name,
+                    "missing_fields": missing_fields,
+                },
+            )
+            raise RuntimeError(
+                f"{template_name} missing briefing fields: {missing_fields}"
+            )
+
     def _structured_system_prompt(
         self, last_candidate_turn: str | None, policy: PolicyDecision | None
     ) -> tuple[str, str]:
@@ -1298,6 +1349,9 @@ class InterviewFlow:
             "section": decision.section if decision else "opening",
             "current_depth": decision.current_depth if decision else 1,
             "max_depth": decision.max_depth if decision else 1,
+            "followups_used": self.probe_count,
+            "followups_remaining": max(0, self._phase_probe_limit() - self.probe_count),
+            "max_followups": self._phase_probe_limit(),
             "forced_flow_decision": decision.forced_flow_decision if decision else "probe",
             "reason": decision.reason if decision else "open the interview",
             "target_minutes": self.target_duration_minutes,
@@ -1326,6 +1380,7 @@ class InterviewFlow:
             "candidate_framing": self._profile_type(),
             "claim_brief": claim_brief(self.candidate_profile),
             "claim_guidance": self._claim_guidance(),
+            "resume_excerpt": clip_source_text(self.resume_text, 6_000),
             "jd_excerpt": clip_source_text(self.job_description, 2_000),
             "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-2:])
             or "(none yet)",
@@ -1339,7 +1394,9 @@ class InterviewFlow:
         }
         system = prompt_pack(self._prompt_version())
         if last_candidate_turn:
+            self._validate_prompt_briefing(briefing, TURN_INSTRUCTIONS_V2, "TURN_INSTRUCTIONS_V2")
             return system + "\n\n" + TURN_INSTRUCTIONS_V2.format(**briefing), last_candidate_turn
+        self._validate_prompt_briefing(briefing, OPENING_INSTRUCTIONS_V2, "OPENING_INSTRUCTIONS_V2")
         return system + "\n\n" + OPENING_INSTRUCTIONS_V2.format(**briefing), (
             "Open the interview in your own words and invite them to introduce themselves."
         )
@@ -1428,27 +1485,62 @@ class InterviewFlow:
         lines.append(clip_source_text(self.job_description, 3000))
         return "\n".join(lines)[:20000]
 
-    def _fallback_spoken_question(self, policy: PolicyDecision | None) -> str:
+    def _question_was_asked(self, question: str) -> bool:
+        normalized = " ".join((question or "").lower().split()).strip()
+        if not normalized:
+            return False
+        return any(
+            normalized == " ".join(previous.lower().split()).strip()
+            for previous in self.interviewer_turns[-8:]
+        )
+
+    def _fallback_spoken_question(
+        self,
+        policy: PolicyDecision | None,
+        last_candidate_turn: str | None = None,
+    ) -> str:
         intent = policy.intent if policy else "opening"
         competency_id = policy.competency_id if policy else None
         if not self.policy_mode:
             return FALLBACK_FOLLOWUP
-        return ladder_fallback_question(
+        if last_candidate_turn and not self.candidate_turns:
+            return (
+                "Thanks for sharing that. Which project or experience would you like "
+                "to use as the main example for this interview?"
+            )
+        candidate = last_candidate_turn or (
+            self.candidate_turns[-1] if self.candidate_turns else None
+        )
+        fallback = ladder_fallback_question(
             self.interview_definition,
             competency_id=competency_id,
             intent=intent,
+            last_candidate_turn=candidate,
         )
-
-    def _configured_ladder_question(self, policy: PolicyDecision | None) -> str:
-        if not policy or not policy.competency_id:
-            return ""
-        for step in ladder_steps(self.interview_definition, policy.competency_id):
-            if (
-                str(step.get("intent") or "").strip() == policy.intent
-                and str(step.get("example_question") or "").strip()
-            ):
-                return str(step["example_question"]).strip()
-        return ""
+        if not self._question_was_asked(fallback):
+            return fallback
+        if candidate:
+            contextual = ladder_fallback_question(
+                self.interview_definition,
+                competency_id=competency_id,
+                intent="baseline",
+                last_candidate_turn=candidate,
+            )
+            if not self._question_was_asked(contextual):
+                return contextual
+        focus = self.focus_item or "this area"
+        dynamic_fallbacks = (
+            f"Let's look at {focus} from another angle. What concrete result did your work produce?",
+            f"What is one detail about {focus} that we have not covered yet?",
+            "Could you give one new detail about the work that we have not discussed?",
+            FALLBACK_FOLLOWUP_NEUTRAL,
+        )
+        for dynamic_fallback in dynamic_fallbacks:
+            if not self._question_was_asked(dynamic_fallback):
+                return dynamic_fallback
+        return (
+            f"What is one different detail about {focus} that you have not mentioned yet?"
+        )
 
     def _coerce_generated(
         self,
@@ -1459,9 +1551,58 @@ class InterviewFlow:
     ) -> GeneratedQuestion:
         parsed = parse_generated_question(raw)
         if parsed is None:
-            _, spoken = parse_stage2(raw)
-            parsed = GeneratedQuestion(
-                question=spoken,
+            plain_text = re.sub(
+                r"^\s*DECISION:\s*(?:probe|advance)\s*",
+                "",
+                raw or "",
+                flags=re.IGNORECASE,
+            )
+            plain_text = " ".join(plain_text.strip().split())
+            if plain_text and policy and (
+                policy.intent == "opening" or "?" in plain_text
+            ):
+                candidate = GeneratedQuestion(
+                    question=plain_text,
+                    competency_id=policy.competency_id,
+                    intent=policy.intent,
+                    depth=policy.current_depth,
+                )
+                result = validate_generated_question(
+                    candidate,
+                    definition=self.interview_definition,
+                    policy_competency_id=policy.competency_id,
+                    policy_intent=policy.intent,
+                    policy_depth=policy.current_depth,
+                    max_depth=policy.max_depth,
+                    recent_questions=self.interviewer_turns[-8:],
+                    allowed_probes=self._allowed_probes(),
+                    profile=self.candidate_profile,
+                    job_description=self.job_description,
+                    resume_text=self.resume_text,
+                    recent_turns=self.candidate_turns[-4:]
+                    + ([last_candidate_turn] if last_candidate_turn else []),
+                    resume_focus=self.focus_item,
+                    require_resume_grounding=self._phase_intent() == "resume_project",
+                )
+                if result.ok:
+                    self._capture_replay(raw, validator_ok=True, reasons=[])
+                    return result.question
+            logger.warning(
+                "llm_question_output_rejected",
+                extra={
+                    "event": "llm_question_output_rejected",
+                    "reason": "invalid_structured_output_or_plain_text_validation",
+                    "output_chars": len(raw or ""),
+                    "policy_intent": policy.intent if policy else None,
+                },
+            )
+            self._capture_replay(
+                raw,
+                validator_ok=False,
+                reasons=["invalid_structured_output"],
+            )
+            return GeneratedQuestion(
+                question=self._fallback_spoken_question(policy, last_candidate_turn),
                 competency_id=policy.competency_id if policy else None,
                 intent=policy.intent if policy else "live_question",
                 depth=policy.current_depth if policy else 1,
@@ -1480,12 +1621,11 @@ class InterviewFlow:
             resume_text=self.resume_text,
             recent_turns=self.candidate_turns[-4:]
             + ([last_candidate_turn] if last_candidate_turn else []),
+            resume_focus=self.focus_item,
+            require_resume_grounding=self._phase_intent() == "resume_project",
         )
         self._capture_replay(raw, validator_ok=result.ok, reasons=result.reasons)
         if result.ok:
-            configured_question = self._configured_ladder_question(policy)
-            if configured_question:
-                result.question.question = configured_question
             return result.question
         logger.info(
             "question_validation_failed",
@@ -1495,7 +1635,17 @@ class InterviewFlow:
                 "prompt_version": self._prompt_version(),
             },
         )
-        fallback = self._fallback_spoken_question(policy)
+        fallback = self._fallback_spoken_question(policy, last_candidate_turn)
+        logger.warning(
+            "question_fallback_selected",
+            extra={
+                "event": "question_fallback_selected",
+                "reason": "validation_failed",
+                "reasons": result.reasons,
+                "fallback": fallback,
+                "policy_intent": policy.intent if policy else None,
+            },
+        )
         return GeneratedQuestion(
             question=fallback,
             competency_id=policy.competency_id if policy else None,
@@ -1629,7 +1779,7 @@ class InterviewFlow:
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": user_content},
                 ],
-                extra_body={"max_completion_tokens": 256},
+                extra_body={"max_completion_tokens": 1024},
             )
         except Exception:
             logger.exception(
@@ -1646,7 +1796,7 @@ class InterviewFlow:
             fallback = (
                 FALLBACK_OPENING
                 if last_candidate_turn is None
-                else self._fallback_spoken_question(policy)
+                else self._fallback_spoken_question(policy, last_candidate_turn)
             )
             if self.completed:
                 fallback = CLOSING_MESSAGE

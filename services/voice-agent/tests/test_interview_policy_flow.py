@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from products.interviewer.flow import InterviewFlow
+from products.interviewer.prompts import TURN_INSTRUCTIONS_V2
 
 
 class FakeLlm:
@@ -102,6 +103,57 @@ def test_policy_prompt_contains_full_technical_reference_context() -> None:
     assert "technical communication" in prompt.lower()
 
 
+def test_policy_prompt_contract_catches_missing_briefing_fields() -> None:
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=_definition(),
+        initial_phase_index=2,
+    )
+
+    briefing = {
+        "action": "PROBE_FOR_CONTEXT",
+        "intent": "establish_context",
+        "section": "competency_assessment",
+        "current_depth": 1,
+        "max_depth": 3,
+        "forced_flow_decision": "probe",
+        "reason": "Need more context",
+        "target_minutes": 30,
+        "elapsed_minutes": 3,
+        "remaining_minutes": 27,
+        "competency_name": "Problem solving",
+        "competency_id": "problem_solving",
+        "competency_definition": "Solve technical problems",
+        "active_focus": "problem solving",
+        "active_focus_context": "resume and jd context",
+        "priority_guidance": "must-have",
+        "ladder_objective": "Assess baseline",
+        "missing_intents": "(none)",
+        "evidence_expected": "ownership",
+        "allowed_probes": "context",
+        "known_facts": "None yet",
+        "last_probe_shape": "why",
+        "interview_structure": "intro",
+        "published_context": "role context",
+        "job_target_level": "mid",
+        "seniority_question_guidance": "keep it grounded",
+        "candidate_framing": "mid",
+        "claim_brief": "claim ids",
+        "jd_excerpt": "Build reliable systems",
+        "recent_turns": "(none yet)",
+        "recent_questions": "(none yet)",
+        "last_turn": "(none yet)",
+        "answer_quality": "partial",
+        "answer_adaptation": "ask for missing detail",
+        "framing_notes": "keep it grounded",
+        "role_title": "Engineer",
+    }
+
+    with pytest.raises(RuntimeError, match="missing briefing fields"):
+        flow._validate_prompt_briefing(briefing, TURN_INSTRUCTIONS_V2, "TURN_INSTRUCTIONS_V2")
+
+
 @pytest.mark.asyncio
 async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
     llm = FakeLlm(
@@ -130,8 +182,8 @@ async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
     assert "problem_solving" in prompt
     # Forced probe — cannot honor LLM advance into deep dive.
     assert flow.phase_index == 2
-    # The configured ladder question for this competency/intent is pinned verbatim.
-    assert question == "Which algorithm did you use for the problem, and why?"
+    # The policy constrains the action; the LLM owns the spoken wording.
+    assert question == "Jumping straight into system design tradeoffs?"
 
 
 @pytest.mark.asyncio
@@ -150,7 +202,7 @@ async def test_policy_mode_uses_configured_competency_question() -> None:
 
     question = await flow.generate_next_question("I solved a graph problem.")
 
-    assert question == "Which algorithm did you use for the problem, and why?"
+    assert question == "Tell me about your background."
 
 
 @pytest.mark.asyncio
@@ -167,7 +219,25 @@ async def test_policy_mode_uses_fallback_without_retrying_invalid_output() -> No
 
     question = await flow.generate_next_question("I improved payment retries.")
 
-    assert question == "Which algorithm did you use for the problem, and why?"
+    assert "payment retries" in question
+    assert "This is not" not in question
+
+
+@pytest.mark.asyncio
+async def test_policy_mode_accepts_safe_plain_text_llm_question() -> None:
+    llm = FakeLlm("Which part of the payment retry work did you personally own?")
+    flow = InterviewFlow(
+        {"phases": []},
+        llm,
+        interview_definition=_definition(),
+        interviewer_turns=["Tell me about your background."],
+        candidate_turns=["I worked on payment systems."],
+        initial_phase_index=2,
+    )
+
+    question = await flow.generate_next_question("I improved payment retries.")
+
+    assert question == "Which part of the payment retry work did you personally own?"
     assert len(llm.messages) == 1
 
 
@@ -234,6 +304,39 @@ async def test_policy_mode_opening_cites_resume_or_jd_materials() -> None:
 
 
 @pytest.mark.asyncio
+async def test_policy_mode_lets_llm_write_plain_text_opening_with_full_context() -> None:
+    llm = FakeLlm(
+        "Welcome, Aditya. I saw your machine learning classifier work. "
+        "Please tell me which part you personally owned."
+    )
+    definition = _definition()
+    definition["job_intelligence"] = {
+        "role": {"title": "AI Engineer", "target_level": "junior"},
+    }
+    flow = InterviewFlow(
+        {"phases": []},
+        llm,
+        interview_definition=definition,
+        resume_text="Projects\n- Machine learning classifier: model evaluation",
+        job_description="Build reliable ML systems and evaluate model quality.",
+        candidate_profile={
+            "claims": [{"claim_id": "c1", "value": "Machine learning classifier"}],
+            "experience_summary": {"profile_type": "junior"},
+        },
+        initial_phase_index=0,
+    )
+
+    question = await flow.generate_next_question(None)
+
+    assert "machine learning classifier" in question.lower()
+    prompt = llm.messages[0][0]["content"]
+    assert "Interview structure planned by the admin" in prompt
+    assert "junior" in prompt
+    assert "model evaluation" in prompt
+    assert "reliable ML systems" in prompt
+
+
+@pytest.mark.asyncio
 async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:
     class FailingLlm:
         async def generate_reply(self, messages: list[dict], **_kwargs) -> str:
@@ -282,7 +385,7 @@ async def test_policy_mode_anchors_competency_question_to_active_jd_focus_and_se
     assert "Job target level (assessment bar — do not lower): junior" in prompt
     assert "accessible scope" in prompt
     assert "must never create a separate standalone question track" in prompt
-    assert llm.request_options[0]["extra_body"] == {"max_completion_tokens": 256}
+    assert llm.request_options[0]["extra_body"] == {"max_completion_tokens": 1024}
 
 
 @pytest.mark.asyncio

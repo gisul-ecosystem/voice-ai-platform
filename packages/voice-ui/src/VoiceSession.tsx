@@ -432,6 +432,22 @@ export function coalesceTranscriptLines(
     if (last && last.who === line.who) {
       const prev = normalizeTranscriptText(last.text);
       const next = normalizeTranscriptText(line.text);
+      const shortGap =
+        last.at !== undefined &&
+        line.at !== undefined &&
+        line.at >= last.at &&
+        line.at - last.at <= 1800;
+      const unfinishedCandidateFragment =
+        line.who === "candidate" &&
+        shortGap &&
+        !/[.!?]$/.test(last.text.trim()) &&
+        (last.text.trim().split(/\s+/).length <= 10 ||
+          line.text.trim().split(/\s+/).length <= 10) &&
+        !next.startsWith(prev) &&
+        !prev.startsWith(next) &&
+        !next.includes(prev) &&
+        !prev.includes(next) &&
+        wordOverlapRatio(prev, next) < 0.7;
       if (
         next === prev ||
         next.startsWith(prev) ||
@@ -439,13 +455,18 @@ export function coalesceTranscriptLines(
         next.includes(prev) ||
         // Late-arriving corrected transcript on a new stream id, but clearly
         // the same spoken utterance (e.g. STT rewrote wording after commit).
-        wordOverlapRatio(prev, next) >= 0.7
+        wordOverlapRatio(prev, next) >= 0.7 ||
+        unfinishedCandidateFragment
       ) {
         const mergedIndex = result.length - 1;
         result[mergedIndex] = {
           ...line,
           id: last.id,
-          text: line.text.length >= last.text.length ? line.text : last.text,
+          text: unfinishedCandidateFragment
+            ? `${last.text.trim()} ${line.text.trim()}`
+            : line.text.length >= last.text.length
+              ? line.text
+              : last.text,
           final: last.final || line.final,
         };
         indexById.set(last.id, mergedIndex);
@@ -463,7 +484,6 @@ export function coalesceTranscriptLines(
   return result.filter((line) => {
     if (line.who !== "candidate") return true;
     if (isEchoOfAgentSpeech(line.text, agentTexts)) return false;
-    if (agentTexts.length > 0 && isLikelyEchoFragment(line.text)) return false;
     return true;
   });
 }

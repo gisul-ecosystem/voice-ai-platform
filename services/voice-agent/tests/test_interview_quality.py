@@ -23,6 +23,35 @@ class FakeLlm:
         return self.replies.pop(0)
 
 
+def _technical_definition() -> dict:
+    return {
+        "definition_id": "idef_technical_quality_01",
+        "competencies": [
+            {
+                "id": "dsa",
+                "name": "Data Structures and Algorithms",
+                "definition": "Solves algorithmic problems with appropriate data structures.",
+                "max_depth": 3,
+                "max_probes": 3,
+                "min_assessment_intents": ["establish_context", "establish_ownership"],
+                "evidence_expected": ["problem", "approach", "result"],
+            }
+        ],
+        "question_ladders": [
+            {
+                "competency_id": "dsa",
+                "levels": [
+                    {
+                        "depth": 1,
+                        "intent": "establish_context",
+                        "example_question": "Can you describe a technical problem where you used data structures or algorithms?",
+                    }
+                ],
+            }
+        ],
+    }
+
+
 def _sales_definition() -> dict:
     return {
         "definition_id": "idef_sales_quality_01",
@@ -81,6 +110,48 @@ def _sales_definition() -> dict:
             }
         ],
     }
+
+
+def test_fallback_does_not_repeat_the_previous_dsa_question() -> None:
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=_technical_definition(),
+        interviewer_turns=[
+            "Can you describe a technical problem where you used data structures or algorithms?"
+        ],
+        candidate_turns=["I optimized arrays and strings."],
+        initial_phase_index=2,
+    )
+    policy = flow._current_policy_decision(pending_candidate_turn=True)
+
+    fallback = flow._fallback_spoken_question(
+        policy,
+        "I optimized arrays and strings.",
+    )
+
+    assert fallback != flow.interviewer_turns[-1]
+    assert "arrays and strings" in fallback
+
+
+def test_last_resort_fallback_is_not_repeated() -> None:
+    repeated = "Thank you. Could you share one specific example of work you personally handled, and what happened as a result?"
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=_technical_definition(),
+        interviewer_turns=[repeated],
+        candidate_turns=["I optimized arrays and strings."],
+        initial_phase_index=2,
+    )
+    policy = flow._current_policy_decision(pending_candidate_turn=True)
+
+    fallback = flow._fallback_spoken_question(
+        policy,
+        "I optimized arrays and strings.",
+    )
+
+    assert fallback != repeated
 
 
 def _junior_backend_definition() -> dict:

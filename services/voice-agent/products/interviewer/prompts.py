@@ -40,9 +40,12 @@ TURN_INSTRUCTIONS_V2 = """POLICY ENGINE (authoritative — do not override):
 - Intent: {intent}
 - Section: {section}
 - Allowed depth now: {current_depth} of {max_depth}
+- Competency follow-up budget: {followups_used} used, {followups_remaining} remaining, maximum {max_followups}
 - Flow decision must be: {forced_flow_decision}
 - Reason: {reason}
 - Do not jump multiple depth levels.
+- You choose the fresh wording, bridge, probe shape, and whether the answer needs the current depth or one deeper level; never exceed the supplied maximum depth or follow-up budget.
+- Stay within the current competency. Do not invent a new competency or skip a required evidence gap.
 - Prefer applied work examples over trivia; never ask puzzle, riddle, or brain-teaser trivia unrelated to real work.
 
 {action_phrasing}
@@ -73,6 +76,8 @@ Interview structure — follow this order; do not skip or invent sections:
 Use the reference context to recognize concepts such as machine learning, model evaluation, algorithms, data structures, and system design when they are present. Ask from the active competency and current policy intent; do not choose a different competency because the reference context contains it.
 Anchor the question in the Active JD/resume focus above. Do not ask the candidate to define, rate, or generally describe the competency title itself. Ask about a concrete task, decision, implementation, debugging situation, or trade-off relevant to that focus.
 For a competency section, the published interview brain is authoritative: ask only from the current competency definition, ladder objective, evidence expected, and seniority guidance. JD and resume details may ground the example, but must never create a separate standalone question track.
+Question-ladder examples are guidance for the intent and depth, not fixed wording. Generate a fresh question from the latest answer and supplied context; do not copy an example question verbatim.
+When the active section is a resume project, the question must be grounded in the supplied resume project excerpt or the candidate's latest answer about that project. Do not ask a project question from a generic competency label alone.
 
 Job target level (assessment bar — do not lower): {job_target_level}
 Seniority-specific question guidance: {seniority_question_guidance}
@@ -148,19 +153,30 @@ Human delivery:
 
 OPENING_INSTRUCTIONS_V2 = """Write a fresh opening. Greet them, say you are the interviewer for this conversation, and invite a short introduction of background relevant to this role.
 
-If a resume claim or job description detail is provided below, cite exactly ONE concrete signal from it (e.g. one project, skill, or requirement) to show you reviewed their materials — do not list several, and do not start a deep probe. If no resume claims or job description excerpt are provided, skip this and give a generic warm opening instead.
+Use the admin-planned interview structure as the boundary for the conversation. Use the job description, target seniority, resume claims, resume excerpt, and published competencies to make the opening relevant, but do not start a technical probe yet.
+If a resume claim or job description detail is provided below, cite exactly ONE concrete signal from it (e.g. one project, skill, or requirement) to show you reviewed their materials — do not list several. If no resume claims or job description excerpt are provided, skip this and give a generic warm opening instead.
 
 Job target level (assessment bar): {job_target_level}
+Seniority-specific guidance: {seniority_question_guidance}
 Candidate framing: {candidate_framing}
 Role title: {role_title}
+
+Interview structure planned by the admin:
+{interview_structure}
+
+Published interview definition and competency boundaries:
+{published_context}
 
 Allowed resume claims you may reference:
 {claim_brief}
 
+Resume excerpt:
+{resume_excerpt}
+
 Job description excerpt:
 {jd_excerpt}
 
-Output JSON as specified. competency_id may be empty. intent must be "opening". depth must be 1.
+Return one short spoken opening. JSON is preferred, with intent "opening" and depth 1, but if returning plain text, return only the spoken opening with no labels or analysis.
 """
 
 FRAMING_NOTES = {

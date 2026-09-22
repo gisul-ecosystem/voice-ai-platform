@@ -1,12 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 const DRAFT_KEY = "ai-interview:role-draft";
 type Candidate = { name: string; email: string; resume: File | null; invite?: string; error?: string; busy?: boolean };
 
 type Pipeline = { backend: boolean; services: Array<{ name: string; provider: string; configured: boolean }> };
+
+const subscribeToHydration = () => () => undefined;
+const getClientHydration = () => true;
+const getServerHydration = () => false;
 
 function readDraft(): { state?: Record<string, unknown>; error: string } {
   if (typeof window === "undefined") return { error: "" };
@@ -19,7 +23,8 @@ function readDraft(): { state?: Record<string, unknown>; error: string } {
 }
 
 export default function InviteCandidatesPage() {
-  const [{ state, error }] = useState(readDraft);
+  const hydrated = useSyncExternalStore(subscribeToHydration, getClientHydration, getServerHydration);
+  const { state, error } = hydrated ? readDraft() : { state: undefined, error: "" };
   const [candidates, setCandidates] = useState<Candidate[]>([{ name: "", email: "", resume: null }]);
   const [pipeline, setPipeline] = useState<Pipeline>();
 

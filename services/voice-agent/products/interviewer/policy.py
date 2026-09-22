@@ -64,6 +64,7 @@ class PolicyState:
     probe_count: int = 0
     elapsed_seconds: int = 0
     consecutive_unusable: int = 0
+    consecutive_no_gain_probes: int = 0
     completed: bool = False
     phase_name: str = ""
     competency_id: str | None = None
@@ -276,6 +277,22 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             competency_id=state.competency_id,
             intent="recovery",
             reason="repeated unusable answers",
+            section=_section_for_phase(state.phase_name),
+        )
+    if state.consecutive_no_gain_probes >= 2:
+        return PolicyDecision(
+            action=(
+                MOVE_TO_NEXT_COMPETENCY
+                if state.has_uncovered_competencies
+                else OFFER_FINAL_ADDITION
+            ),
+            forced_flow_decision="advance" if state.has_uncovered_competencies else "close",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="evidence_gap_stop",
+            reason="two consecutive probes added no new evidence",
             section=_section_for_phase(state.phase_name),
         )
 

@@ -123,6 +123,24 @@ async def test_restored_agent_on_enter_does_not_respeak() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_ignores_empty_llm_callback_during_opening() -> None:
+    agent = aaptor_agent.AaptorAgent(
+        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": ["background"]}]},
+        FakeLlm(),
+    )
+    agent._opening_in_progress = True
+
+    class _ChatContext:
+        items = []
+
+    spoken: list[str] = []
+    async for chunk in agent.llm_node(_ChatContext(), [], None):
+        spoken.append(chunk)
+
+    assert spoken == []
+
+
+@pytest.mark.asyncio
 async def test_aaptor_closes_after_last_phase_probe_limit() -> None:
     llm = FakeLlm(
         "DECISION: probe\n\nFirst probe?",

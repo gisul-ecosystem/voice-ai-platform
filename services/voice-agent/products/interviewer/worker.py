@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 
 from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
 
@@ -40,6 +41,60 @@ from voice_platform.runtime import (
 )
 
 logger = logging.getLogger("voice-agent.aaptor")
+_ACTIVE_ROOMS: set[str] = set()
+_ROOM_LOCK_HANDLES: dict[str, object] = {}
+
+
+def _claim_room(room_name: str) -> bool:
+    """Claim a room across LiveKit job-runner processes on this host."""
+    if room_name in _ACTIVE_ROOMS:
+        return False
+    lock_path = os.path.join(
+        tempfile.gettempdir(),
+        f"voice-agent-aaptor-{room_name}.lock",
+    )
+    try:
+        handle = open(lock_path, "a+b")
+        handle.seek(0)
+        handle.write(b"1")
+        handle.flush()
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        try:
+            handle.close()
+        except UnboundLocalError:
+            pass
+        return False
+    _ACTIVE_ROOMS.add(room_name)
+    _ROOM_LOCK_HANDLES[room_name] = handle
+    return True
+
+
+def _release_room(room_name: str) -> None:
+    handle = _ROOM_LOCK_HANDLES.pop(room_name, None)
+    _ACTIVE_ROOMS.discard(room_name)
+    if handle is None:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
 
 GENERIC_OUTLINE = {
     "phases": [
@@ -346,9 +401,25 @@ async def build_outline(ctx: JobContext) -> dict:
 
 
 async def entrypoint(ctx: JobContext) -> None:
+    room_name = str(ctx.room.name)
+    if not _claim_room(room_name):
+        logger.warning(
+            "duplicate_room_job_ignored",
+            extra={
+                "event": "duplicate_room_job_ignored",
+                "room": room_name,
+            },
+        )
+        return
     if hasattr(ctx, "log_context_fields"):
-        ctx.log_context_fields = {"room": ctx.room.name}
-    logger.info("session_start", extra={"event": "session_start", "room": ctx.room.name})
+        ctx.log_context_fields = {"room": room_name}
+    logger.info("session_start", extra={"event": "session_start", "room": room_name})
+
+    async def release_room_lock() -> None:
+        _release_room(room_name)
+
+    if hasattr(ctx, "add_shutdown_callback"):
+        ctx.add_shutdown_callback(release_room_lock)
     await ctx.connect()
 
     metadata = job_metadata(ctx)
@@ -369,7 +440,10 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
     if hasattr(ctx, "add_shutdown_callback"):
-        ctx.add_shutdown_callback(shutdown_session)
+        async def release_room() -> None:
+            await shutdown_session()
+
+        ctx.add_shutdown_callback(release_room)
 
     clients = load_inference_clients(ctx, logger)
     session = build_agent_session(clients)

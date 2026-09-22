@@ -213,6 +213,20 @@ def _question_tokens(text: str) -> set[str]:
     }
 
 
+def _grounding_terms(text: str) -> set[str]:
+    stopwords = {
+        "about", "after", "because", "could", "did", "from", "have", "into",
+        "that", "their", "them", "they", "this", "what", "when", "where",
+        "which", "while", "with", "would", "your", "used", "using", "work",
+        "worked", "project", "specific", "technical", "problem", "result",
+    }
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(token) > 3 and token not in stopwords
+    }
+
+
 def _near_duplicate(left: str, right: str) -> bool:
     left_tokens = _question_tokens(left)
     right_tokens = _question_tokens(right)
@@ -278,7 +292,25 @@ def ladder_fallback_question(
     *,
     competency_id: str | None,
     intent: str,
+    last_candidate_turn: str | None = None,
 ) -> str:
+    candidate = " ".join((last_candidate_turn or "").split()).strip()
+    if candidate and intent in {"candidate_map", "await_introduction"}:
+        return (
+            "Thanks for sharing that. Which project or experience would you like "
+            "to use as the main example for this interview?"
+        )
+    if candidate and intent in {
+        "establish_context",
+        "baseline",
+        "candidate_map",
+        "gap_check",
+    }:
+        return (
+            "You mentioned "
+            f"{candidate[:180].rstrip('.!?')}. "
+            "What specific problem were you solving, and what did you personally do?"
+        )
     for step in ladder_steps(definition, competency_id):
         if str(step.get("intent") or "").strip() == intent:
             example = str(step.get("example_question") or "").strip()
@@ -303,6 +335,17 @@ def ladder_fallback_question(
         intent,
         "Could you share one specific example of work you personally handled, and what happened as a result?",
     )
+
+
+def _compatible_intents(expected: str, generated: str) -> bool:
+    if expected == generated:
+        return True
+    families = (
+        {"candidate_map", "await_introduction", "baseline", "establish_context"},
+        {"establish_ownership", "applied_understanding"},
+        {"problem_or_complexity", "tradeoff_or_transfer"},
+    )
+    return any(expected in family and generated in family for family in families)
 
 
 def _allowed_claim_ids(profile: dict[str, Any] | None) -> set[str]:
@@ -373,6 +416,8 @@ def validate_generated_question(
     job_description: str = "",
     resume_text: str = "",
     recent_turns: list[str] | None = None,
+    resume_focus: str = "",
+    require_resume_grounding: bool = False,
 ) -> ValidationResult:
     reasons: list[str] = []
     question = (generated.question or "").strip()
@@ -391,7 +436,9 @@ def validate_generated_question(
         reasons.append("competency_mismatch")
     if policy_intent and generated.intent not in {policy_intent, "live_question"}:
         # Opening/map can be phrased with nearby intents; still record mismatch for probes.
-        if policy_intent not in {"opening", "candidate_map", "await_introduction"}:
+        if policy_intent in {"opening", "candidate_map", "await_introduction"}:
+            pass
+        elif not _compatible_intents(policy_intent, generated.intent):
             reasons.append("intent_mismatch")
     if generated.depth > max(1, int(max_depth)):
         reasons.append("depth_exceeded")
@@ -427,6 +474,12 @@ def validate_generated_question(
         recent_turns=list(recent_turns or []),
         competency_id=expected_competency or generated.competency_id,
     )
+    if require_resume_grounding and resume_text:
+        resume_terms = _grounding_terms(
+            f"{resume_focus} {resume_text} {' '.join(recent_turns or [])}"
+        )
+        if not (_grounding_terms(question) & resume_terms):
+            reasons.append("resume_project_ungrounded")
     for term in UNGROUNDED_TECH_TERMS:
         if term in lowered and term not in corpus:
             reasons.append("ungrounded_term")
@@ -437,7 +490,15 @@ def validate_generated_question(
         question=question,
         competency_id=expected_competency or generated.competency_id,
         intent=policy_intent or generated.intent,
-        depth=max(1, min(5, int(policy_depth or generated.depth or 1))),
+        depth=max(
+            1,
+            min(
+                5,
+                int(max_depth),
+                int(policy_depth or generated.depth or 1) + 1,
+                int(generated.depth or policy_depth or 1),
+            ),
+        ),
         source_claim_ids=[item for item in generated.source_claim_ids if item in allowed_ids]
         if allowed_ids
         else list(generated.source_claim_ids),

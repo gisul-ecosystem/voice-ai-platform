@@ -162,6 +162,17 @@ def test_ladder_fallback_is_domain_neutral() -> None:
     assert "situation" in spoken.lower()
 
 
+def test_ladder_fallback_anchors_to_candidate_answer() -> None:
+    spoken = ladder_fallback_question(
+        _sales_definition(),
+        competency_id="negotiation",
+        intent="baseline",
+        last_candidate_turn="I optimized arrays and strings.",
+    )
+    assert "optimized arrays and strings" in spoken
+    assert "personally" in spoken.lower()
+
+
 def test_validator_preserves_evaluation_and_tags_on_success() -> None:
     evaluation = AnswerEvaluation(
         technical_substance="deep",
