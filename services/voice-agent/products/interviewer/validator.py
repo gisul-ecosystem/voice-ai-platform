@@ -58,6 +58,167 @@ HOOK_STOPWORDS = frozenset(
         "please",
         "briefly",
         "recent",
+        # Weak trailing fillers that produced "You mentioned safely/overall".
+        "overall",
+        "safely",
+        "really",
+        "basically",
+        "actually",
+        "fine",
+        "good",
+        "okay",
+        "yeah",
+        "sure",
+        "main",
+        "mode",
+        "mentioned",
+        "operators",
+        "replay",
+        # Function words — without these, token windows became "One deal was" /
+        # "the commercial" mid-phrase fragments (sales dry-run).
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "for",
+        "to",
+        "of",
+        "on",
+        "in",
+        "at",
+        "by",
+        "as",
+        "it",
+        "its",
+        "my",
+        "our",
+        "his",
+        "her",
+        "one",
+        "two",
+        "any",
+        "all",
+        "each",
+        "every",
+        "such",
+        "deal",  # too generic alone; prefer "manufacturing customer" etc.
+    }
+)
+
+_TECH_HOOK_PHRASES = (
+    "dead-letter queue",
+    "dead letter queue",
+    "exponential backoff",
+    "idempotency keys",
+    "idempotency key",
+    "webhook storms",
+    "webhook storm",
+    "rate limiting",
+    "rate-limited",
+    "payment intents",
+    "p95 latency",
+)
+
+_TECH_HOOK_TOKENS = frozenset(
+    {
+        "redis",
+        "fastapi",
+        "postgres",
+        "postgresql",
+        "kafka",
+        "rabbitmq",
+        "kubernetes",
+        "docker",
+        "graphql",
+        "grpc",
+        "mongodb",
+        "dynamodb",
+        "payments",
+        "webhooks",
+        "webhook",
+        "backoff",
+        "idempotency",
+        "graph",
+    }
+)
+
+_HOOK_VERBS = frozenset(
+    {
+        "migrated",
+        "worked",
+        "built",
+        "owned",
+        "handled",
+        "implemented",
+        "designed",
+        "added",
+        "used",
+        "measured",
+        "solved",
+        "solve",
+        "backend",
+        "engineer",
+        "who",
+        "after",
+        "before",
+        "during",
+        # Copulas / light verbs that left bare fragments when stripped partially.
+        "was",
+        "is",
+        "are",
+        "were",
+        "be",
+        "being",
+        "am",
+        "had",
+        "has",
+        "did",
+        "do",
+        "does",
+        "got",
+        "get",
+        "made",
+        "make",
+        "said",
+        "say",
+        "went",
+        "go",
+        "came",
+        "come",
+        "took",
+        "take",
+        "ran",
+        "run",
+        "saw",
+        "see",
+        "knew",
+        "know",
+        "gave",
+        "give",
+        "told",
+        "tell",
+        "asked",
+        "ask",
+        "tried",
+        "try",
+        "needed",
+        "need",
+        "wanted",
+        "want",
+        "seemed",
+        "seem",
+        "became",
+        "become",
+        "started",
+        "start",
+        "ended",
+        "end",
+        "closed",
+        "close",
+        "negotiated",
+        "negotiate",
     }
 )
 
@@ -127,7 +288,7 @@ UNGROUNDED_TECH_TERMS = (
 )
 
 INTENT_PROBE_ALIASES: dict[str, tuple[str, ...]] = {
-    "establish_context": ("context", "situation", "describe"),
+    "establish_context": ("context", "situation", "describe", "walk me through", "tell me about"),
     "establish_ownership": ("responsibility", "personally", "owned", "your specific"),
     "applied_understanding": ("approach", "how did you", "method", "action"),
     "problem_or_complexity": ("difficult", "challenge", "failed", "constraint"),
@@ -141,6 +302,21 @@ INTENT_PROBE_ALIASES: dict[str, tuple[str, ...]] = {
     "closing": ("thank", "concludes"),
     "recovery": ("move", "another"),
 }
+
+# Ladder intents are always valid; allowed_probes are example phrasings for the LLM,
+# not a hard blocklist against assessment intents like establish_context.
+STANDARD_ASSESSMENT_INTENTS = frozenset(INTENT_PROBE_ALIASES) - frozenset(
+    {
+        "clarify",
+        "candidate_map",
+        "opening",
+        "baseline",
+        "final_addition",
+        "gap_check",
+        "closing",
+        "recovery",
+    }
+)
 
 
 TechnicalSubstance = Literal[
@@ -263,6 +439,12 @@ def fingerprint(text: str) -> str:
 
 
 def hook_stem_tokens(text: str) -> list[str]:
+    """Content stems from a hook phrase — aligned with extract_hook_fact filtering.
+
+    Multi-word hooks (e.g. ``commercial negotiation``) yield multiple stems; the
+    spoken question must include at least one. Function words and light verbs are
+    never stems, so a fragment like ``One deal was`` does not silently pass.
+    """
     tokens: list[str] = []
     seen: set[str] = set()
     for match in _NUMBER.findall(text or ""):
@@ -271,17 +453,61 @@ def hook_stem_tokens(text: str) -> list[str]:
             seen.add(token)
             tokens.append(token)
     for token in fingerprint(text).split():
-        if len(token) < 4 or token in HOOK_STOPWORDS or token in seen:
+        if (
+            len(token) < 4
+            or token in HOOK_STOPWORDS
+            or token in _HOOK_VERBS
+            or token in seen
+        ):
             continue
         seen.add(token)
         tokens.append(token)
     return tokens
 
 
+def is_clean_hook_fact(hook: str) -> bool:
+    """True when hook matches extract_hook_fact's success criterion.
+
+    Accepts ≥2 content tokens, a single tech token, a metric/number, or empty
+    (no hook). Rejects mid-phrase fragments like ``One deal was`` / ``the commercial``.
+    """
+    text = (hook or "").strip()
+    if not text:
+        return True
+    if _NUMBER.fullmatch(text):
+        return True
+    lowered = text.lower()
+    if any(phrase == lowered or phrase in lowered for phrase in _TECH_HOOK_PHRASES):
+        return True
+    content = _content_hook_tokens(text)
+    if len(content) >= 2:
+        return True
+    if len(content) == 1 and content[0].lower() in _TECH_HOOK_TOKENS:
+        return True
+    if len(content) == 1 and _NUMBER.search(content[0]):
+        return True
+    return False
+
+
+def _content_hook_tokens(candidate: str) -> list[str]:
+    """Drop function words / light verbs from a candidate span."""
+    return [
+        tok
+        for tok in candidate.split()
+        if tok.lower() not in HOOK_STOPWORDS and tok.lower() not in _HOOK_VERBS
+    ]
+
+
 def extract_hook_fact(text: str) -> str:
+    """Pick a concrete entity/tech noun from the answer — never a trailing filler."""
     cleaned = (text or "").strip()
     if not cleaned:
         return ""
+    lowered = cleaned.lower()
+    for phrase in _TECH_HOOK_PHRASES:
+        if phrase in lowered:
+            start = lowered.find(phrase)
+            return cleaned[start : start + len(phrase)]
     numbers = _NUMBER.findall(cleaned)
     if numbers:
         return numbers[0]
@@ -291,11 +517,41 @@ def extract_hook_fact(text: str) -> str:
         if value:
             return value
     words = _WORD.findall(cleaned)
-    significant = [word for word in words if word.lower() not in HOOK_STOPWORDS]
+    for word in words:
+        if word.lower() in _TECH_HOOK_TOKENS:
+            return word
+    # Scan every 2–3 word window; skip spans that collapse to mid-phrase fragments
+    # after stripping function words (e.g. "One deal was" → empty / "deal").
+    # Advance one character on reject so a discarded window does not hide the
+    # next overlapping noun phrase ("owned the commercial" must not block
+    # "commercial negotiation").
+    phrase_re = re.compile(
+        r"\b([A-Za-z][A-Za-z0-9_+#-]{2,}(?:\s+[A-Za-z][A-Za-z0-9_+#-]{2,}){1,2})\b"
+    )
+    pos = 0
+    while pos < len(cleaned):
+        phrase_match = phrase_re.search(cleaned, pos)
+        if not phrase_match:
+            break
+        tokens = _content_hook_tokens(phrase_match.group(1).strip())
+        if len(tokens) >= 2:
+            return " ".join(tokens[:3])
+        if len(tokens) == 1 and tokens[0].lower() in _TECH_HOOK_TOKENS:
+            return tokens[0]
+        pos = phrase_match.start() + 1
+    significant = [
+        word
+        for word in words
+        if word.lower() not in HOOK_STOPWORDS and word.lower() not in _HOOK_VERBS
+    ]
     for index, word in enumerate(significant):
         if index > 0 and word[0].isupper():
             return word
-    return significant[-1] if significant else ""
+    # Prefer a longer content noun over a short leftover like "deal".
+    if significant:
+        ranked = sorted(significant, key=lambda w: len(w), reverse=True)
+        return ranked[0]
+    return ""
 
 
 def prefix_tokens(text: str, count: int = 6) -> list[str]:
@@ -330,13 +586,20 @@ def _question_tokens(text: str) -> set[str]:
     }
 
 
-def _near_duplicate(left: str, right: str) -> bool:
+def _near_duplicate(left: str, right: str, *, threshold: float = 0.7) -> bool:
     left_tokens = _question_tokens(left)
     right_tokens = _question_tokens(right)
     if len(left_tokens) < 2 or len(right_tokens) < 2:
         return False
     overlap = len(left_tokens & right_tokens)
-    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.7
+    return overlap / min(len(left_tokens), len(right_tokens)) >= threshold
+
+
+def _same_question_frame(left: str, right: str, *, tokens: int = 4) -> bool:
+    """True when the opening ask frame matches (e.g. 'can you describe the specific …')."""
+    a = prefix_tokens(left, tokens)
+    b = prefix_tokens(right, tokens)
+    return len(a) >= tokens and a == b
 
 
 def parse_generated_question(raw: str) -> GeneratedQuestion | None:
@@ -405,8 +668,9 @@ def ladder_fallback_question(
         "establish_context": "Can you briefly describe the situation?",
         "establish_ownership": "What part of that did you personally handle?",
         "applied_understanding": "How did you approach that work?",
-        "problem_or_complexity": "What was difficult about that, and how did you handle it?",
-        "tradeoff_or_transfer": "Looking back, what would you change and why?",
+        "problem_or_complexity": "What was difficult about that?",
+        "tradeoff_or_transfer": "Looking back, what would you change?",
+        "gap_check": "Can you share one concrete example from that work?",
         "candidate_map": "Please share a short overview of the work most relevant to this role.",
         "opening": (
             "Thanks for joining. I'm your interviewer for this conversation. "
@@ -418,7 +682,7 @@ def ladder_fallback_question(
     }
     return defaults.get(
         intent,
-        "Could you share one specific example of work you personally handled, and what happened as a result?",
+        "Can you share one concrete example from that work?",
     )
 
 
@@ -467,6 +731,9 @@ def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
         "await_introduction",
     }:
         return True
+    # Published ladder intents are always permitted; allowed_probes guide phrasing.
+    if intent in STANDARD_ASSESSMENT_INTENTS:
+        return True
     if not allowed_probes:
         return True
     aliases = INTENT_PROBE_ALIASES.get(intent, ())
@@ -475,6 +742,97 @@ def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
         return True
     return any(alias in blob for alias in aliases)
 
+
+_LEADING_MARKERS = (
+    "don't you think",
+    "do you not think",
+    "wouldn't you agree",
+    "wouldnt you agree",
+    "isn't it true",
+    "isnt it true",
+    "you must have",
+    "you obviously",
+    "surely you",
+    "of course you",
+    "wouldn't you say",
+    "wouldnt you say",
+    "right?",
+    ", right?",
+)
+
+_COMPOUND_CONJUNCTIONS = frozenset({"and", "or"})
+_COMPOUND_WH = frozenset(
+    {"how", "what", "why", "when", "who", "which", "where"}
+)
+# Auxiliaries that open a second yes/no ask after a conjunction ("and did you…").
+_COMPOUND_AUX = frozenset(
+    {"did", "do", "does", "can", "could", "would", "should", "have", "has", "is", "are"}
+)
+_COMPOUND_IF = frozenset({"if", "whether"})
+# Ask verbs that make "…and if you…" a disguised second question (sparse fixture).
+_COMPOUND_ASK_VERBS = frozenset(
+    {
+        "share",
+        "tell",
+        "describe",
+        "determine",
+        "explain",
+        "discuss",
+        "outline",
+        "clarify",
+        "walk",
+    }
+)
+# Look ahead this many tokens after and/or for an interrogative opener.
+_COMPOUND_LOOKAHEAD = 4
+
+
+def looks_like_compound_question(question: str) -> bool:
+    """True when the spoken text packs two asks into one turn.
+
+    Fires on:
+    - more than one '?'
+    - coordinating ``and``/``or`` followed within a few tokens by a wh-word
+      or interrogative auxiliary (``and how`` / ``and did``)
+    - ``and``/``or`` + ``if``/``whether`` when an ask verb (share/tell/describe/…)
+      already appeared earlier — catches the sparse single-'?' pattern
+      ("share how you determined X, and if you encountered Y")
+    """
+    text = (question or "").strip()
+    if not text:
+        return False
+    if text.count("?") > 1:
+        return True
+    tokens = fingerprint(text).split()
+    if len(tokens) < 4:
+        return False
+    for index, token in enumerate(tokens):
+        if token not in _COMPOUND_CONJUNCTIONS:
+            continue
+        window = tokens[index + 1 : index + 1 + _COMPOUND_LOOKAHEAD]
+        if not window:
+            continue
+        if any(item in _COMPOUND_WH or item in _COMPOUND_AUX for item in window):
+            return True
+        if any(item in _COMPOUND_IF for item in window):
+            earlier = tokens[:index]
+            if any(verb in earlier for verb in _COMPOUND_ASK_VERBS):
+                return True
+    return False
+
+
+def _looks_like_leading_question(lowered: str) -> bool:
+    """Block questions that put the preferred answer into the candidate's mouth."""
+    if not lowered:
+        return False
+    if any(marker in lowered for marker in _LEADING_MARKERS):
+        return True
+    # "So you mainly just X?" / "So you were only responsible for Y?"
+    if lowered.startswith("so you ") and any(
+        token in lowered for token in (" just ", " only ", " mainly ", " simply ")
+    ):
+        return True
+    return False
 
 
 def _looks_like_non_job_trivia(question: str, *, corpus: str) -> bool:
@@ -524,16 +882,22 @@ def validate_generated_question(
     question = (generated.question or "").strip()
     if not question:
         reasons.append("empty_question")
-    if question.count("?") > 1:
+    if looks_like_compound_question(question):
         reasons.append("compound_question")
     lowered = question.lower()
+    if _looks_like_leading_question(lowered):
+        reasons.append("leading_question")
     if any(marker in lowered for marker in PROTECTED_MARKERS):
         reasons.append("protected_topic")
     live_probe = (policy_intent or "") not in SKIP_HOOK_INTENTS
     if live_probe:
-        stems = hook_stem_tokens(hook_fact or "")
-        if stems and not any(stem in lowered for stem in stems):
-            reasons.append("missing_hook_stem")
+        hook = (hook_fact or "").strip()
+        if hook and not is_clean_hook_fact(hook):
+            reasons.append("invalid_hook_phrase")
+        else:
+            stems = hook_stem_tokens(hook)
+            if stems and not any(stem in lowered for stem in stems):
+                reasons.append("missing_hook_stem")
         current_prefix = prefix_tokens(question)
         if len(current_prefix) >= 6:
             for previous in recent_questions[-8:]:
@@ -581,6 +945,18 @@ def validate_generated_question(
         ):
             reasons.append("duplicate_question")
             break
+
+    # Adjacent same-frame / soft near-dup: catches "Can you describe the specific
+    # actions…" → "Can you describe the specific steps…" which the 0.7 Jaccard miss.
+    if recent_questions and live_probe:
+        previous = recent_questions[-1]
+        prev_fp = fingerprint(previous)
+        if _same_question_frame(question, previous):
+            reasons.append("repeated_question_frame")
+        elif current_fp and prev_fp and _near_duplicate(
+            current_fp, prev_fp, threshold=0.45
+        ):
+            reasons.append("adjacent_near_duplicate")
 
     corpus = _grounding_corpus(
         definition=definition,

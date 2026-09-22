@@ -110,6 +110,46 @@ async def test_fallback_opening_cites_one_resume_claim() -> None:
     assert question.lower().count("fastapi billing") == 1
 
 
+def test_opening_soft_weaves_signal_without_replacing_llm_wording() -> None:
+    """Missing cite must not wipe a natural opening into the stock template."""
+    flow = InterviewFlow(
+        {"phases": [{"name": "opening", "topics": [], "duration_minutes": 2}]},
+        None,  # type: ignore[arg-type]
+        interview_definition={
+            "job_intelligence": {
+                "role": {"title": "Account Executive", "target_level": "mid"}
+            },
+            "competencies": [
+                {
+                    "id": "negotiation",
+                    "name": "Negotiation",
+                    "min_assessment_intents": ["establish_context"],
+                }
+            ],
+        },
+        job_description="Enterprise negotiation and pipeline ownership.",
+        candidate_profile={
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "type": "project",
+                    "value": "Closed manufacturing deals",
+                }
+            ]
+        },
+    )
+    llm_opening = (
+        "Good to meet you — I'll be running today's conversation. "
+        "Please introduce yourself and the work you're most proud of lately."
+    )
+    ensured = flow._ensure_opening_cites_context(llm_opening)
+    assert "Good to meet you" in ensured
+    assert "Closed manufacturing deals" in ensured or "manufacturing" in ensured.lower()
+    # Must not be the full stock template.
+    assert not ensured.startswith("Thanks for joining. I'm your interviewer for the")
+    assert flow._opening_cites_context(ensured) is True
+
+
 def test_same_jd_different_experience_keeps_job_bar() -> None:
     definition = {
         "competencies": [
