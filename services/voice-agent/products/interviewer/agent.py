@@ -35,6 +35,7 @@ class AaptorAgent(Agent):
         brain_bridge: BrainSessionBridge | None = None,
         interview_definition: dict | None = None,
         candidate_profile: dict | None = None,
+        difficulty: str | None = None,
     ) -> None:
         super().__init__(
             instructions=(
@@ -60,6 +61,8 @@ class AaptorAgent(Agent):
             flow_kwargs["interview_definition"] = interview_definition
         if candidate_profile is not None:
             flow_kwargs["candidate_profile"] = candidate_profile
+        if difficulty:
+            flow_kwargs["difficulty"] = difficulty
         restored_state = dict(initial_state or {})
         self._sequence_number = int(restored_state.pop("initial_sequence_number", 0))
         # Brain metadata is not InterviewFlow constructor input.

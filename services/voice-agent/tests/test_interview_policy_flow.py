@@ -128,14 +128,14 @@ async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
     assert "problem_solving" in prompt
     # Forced probe — cannot honor LLM advance into deep dive.
     assert flow.phase_index == 2
-    # The configured ladder question for this competency/intent is pinned verbatim.
-    assert question == "Which algorithm did you use for the problem, and why?"
+    # The model's own wording is spoken; ladder examples are prompt guidance only.
+    assert question == "Jumping straight into system design tradeoffs?"
 
 
 @pytest.mark.asyncio
-async def test_policy_mode_uses_configured_competency_question() -> None:
+async def test_policy_mode_speaks_model_question_not_ladder_example() -> None:
     llm = FakeLlm(
-        '{"question":"Tell me about your background.","competency_id":"problem_solving","intent":"establish_context","depth":1}'
+        '{"question":"Which heuristic did you pick for that graph traversal, and why?","competency_id":"problem_solving","intent":"establish_context","depth":1}'
     )
     flow = InterviewFlow(
         {"phases": []},
@@ -148,7 +148,8 @@ async def test_policy_mode_uses_configured_competency_question() -> None:
 
     question = await flow.generate_next_question("I solved a graph problem.")
 
-    assert question == "Which algorithm did you use for the problem, and why?"
+    assert question == "Which heuristic did you pick for that graph traversal, and why?"
+    assert flow.last_validator_ok is True
 
 
 @pytest.mark.asyncio

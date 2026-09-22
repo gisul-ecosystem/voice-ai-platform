@@ -35,6 +35,17 @@ export default function ReviewAlignmentPage() {
   }, []);
 
   const competencies = state?.draft && Array.isArray(state.draft.competencies) ? state.draft.competencies as Array<Record<string, unknown>> : [];
+  // Publishing rejects weights that do not total 100, so any change to the set must rebalance.
+  function rebalance(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    if (items.length === 0) return items;
+    const each = Math.round((100 / items.length) * 100) / 100;
+    return items.map((item, index) => ({
+      ...item,
+      weight: index === items.length - 1
+        ? Math.round((100 - each * (items.length - 1)) * 100) / 100
+        : each,
+    }));
+  }
   function update(index: number, patch: Record<string, unknown>) {
     if (!state) return;
     const next = competencies.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
@@ -42,9 +53,26 @@ export default function ReviewAlignmentPage() {
   }
   function remove(index: number) {
     if (!state) return;
-    const next = competencies.filter((_, itemIndex) => itemIndex !== index);
-    setState({ ...state, draft: { ...state.draft, competencies: next } });
+    const dropped = String(competencies[index]?.id || "");
+    const next = rebalance(competencies.filter((_, itemIndex) => itemIndex !== index));
+    // Scenarios and ladders key off competency_id; leaving orphans behind fails
+    // publication with scenario_unknown_competency.
+    setState({ ...state, draft: { ...state.draft, competencies: next, ...prunedRefs(dropped) } });
     setSelected(Math.max(0, Math.min(index, next.length - 1)));
+  }
+  function prunedRefs(droppedId: string): Record<string, unknown> {
+    if (!state || !droppedId) return {};
+    const pruned: Record<string, unknown> = {};
+    for (const key of ["scenario_bank", "question_ladders"]) {
+      const list = state.draft[key];
+      if (Array.isArray(list)) {
+        pruned[key] = list.filter(
+          (item) => !item || typeof item !== "object"
+            || (item as Record<string, unknown>).competency_id !== droppedId,
+        );
+      }
+    }
+    return pruned;
   }
   function move(index: number, direction: -1 | 1) {
     moveTo(index, index + direction);
@@ -69,9 +97,26 @@ export default function ReviewAlignmentPage() {
   }
   async function publish() {
     if (!state || competencies.length === 0) return;
+    // A draft compiled before rebalancing existed can still carry stale weights
+    // and scenarios/ladders pointing at competencies that were removed.
+    const balanced = rebalance(competencies);
+    const liveIds = new Set(balanced.map((item) => String(item.id || "")));
+    const keepLinked = (key: string) => {
+      const list = state.draft[key];
+      if (!Array.isArray(list)) return undefined;
+      return list.filter(
+        (item) => !item || typeof item !== "object"
+          || liveIds.has(String((item as Record<string, unknown>).competency_id || "")),
+      );
+    };
+    const draft: Record<string, unknown> = { ...state.draft, competencies: balanced };
+    for (const key of ["scenario_bank", "question_ladders"]) {
+      const kept = keepLinked(key);
+      if (kept) draft[key] = kept;
+    }
     setBusy(true); setError("");
     try {
-      const payload = (definitionId: string) => ({ action: "publish", draft: state.draft, definitionId, publishedBy: "reference-demo-admin" });
+      const payload = (definitionId: string) => ({ action: "publish", draft, definitionId, publishedBy: "reference-demo-admin" });
       let definitionId = state.definitionId;
       let response = await fetch("/api/admin/blueprint", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload(definitionId)) });
       let data = await response.json().catch(() => ({}));
@@ -81,7 +126,7 @@ export default function ReviewAlignmentPage() {
         data = await response.json().catch(() => ({}));
       }
       if (!response.ok) throw new Error(String(data.error || data.detail || "Publish failed."));
-      const publishedState = { ...state, definitionId, published: data };
+      const publishedState = { ...state, draft, definitionId, published: data };
       setState(publishedState);
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify(publishedState));
       window.location.assign("/interviewer/admin/invite");
@@ -92,11 +137,17 @@ export default function ReviewAlignmentPage() {
   if (!hydrated) return <main className="interviewer-home admin-builder-page"><div className="center-state"><h2>Loading draft…</h2></div></main>;
   if (!state) return <main className="interviewer-home admin-builder-page"><div className="center-state"><h2>Alignment draft unavailable</h2><Link className="button secondary" href="/interviewer/admin/design">Start role design</Link></div></main>;
   const competency = competencies[selected];
+  const fallbackCount = competencies.filter((item) => item.source === "fallback").length;
   return <main className="interviewer-home admin-builder-page">
     <nav className="landing-nav" aria-label="Admin navigation"><Link href="/interviewer/admin/design" className="brand"><span className="brand-mark">AI</span>AI Interviewer</Link><span className="environment-badge">02 Review alignment</span></nav>
     <section className="demo-intro"><p className="eyebrow">Review before publish</p><h1>Shape the interview</h1><p>Choose a competency to edit its details. The published structure will be locked for every candidate.</p></section>
     <section className="demo-card alignment-review admin-review-page">
       {error ? <div className="alert" role="alert">{error}</div> : null}
+      {fallbackCount > 0 ? (
+        <div className="alert alert-warning" role="status">
+          {fallbackCount === 1 ? "1 generic competency was" : `${fallbackCount} generic competencies were`} added because the job description did not yield enough specific skills. Interviews using these will ask general questions. Add more detail to the job description, or rename these to the actual skills you want assessed.
+        </div>
+      ) : null}
       <div className="competency-picker" aria-label="Interview competencies">
         {competencies.map((item, index) => {
           const complete = isComplete(item);
@@ -121,6 +172,9 @@ export default function ReviewAlignmentPage() {
               <span className="drag-handle" aria-hidden="true">⠿</span>
               <span className="competency-picker-number">{String(index + 1).padStart(2, "0")}</span>
               <strong>{String(item.name || "Untitled competency")}</strong>
+              {item.source === "fallback" ? (
+                <span className="competency-status-chip is-draft">Generic</span>
+              ) : null}
               <span className={complete ? "competency-status-chip is-complete" : "competency-status-chip is-draft"}>
                 {complete ? "✓ Ready" : "Draft"}
               </span>

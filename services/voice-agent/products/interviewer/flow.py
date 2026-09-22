@@ -27,6 +27,13 @@ from products.interviewer.policy import (
     PolicyDecision,
     PolicyState,
 )
+from products.interviewer.evidence import (
+    build_ledger,
+    difficulty_profile,
+    ledger_brief,
+    promote,
+    target_slot_brief,
+)
 from products.interviewer.prompts import (
     OPENING_INSTRUCTIONS_V2,
     TURN_INSTRUCTIONS_V2,
@@ -37,6 +44,7 @@ from products.interviewer.prompts import (
 )
 from products.interviewer.validator import (
     GeneratedQuestion,
+    fingerprint,
     ladder_fallback_question,
     parse_generated_question,
     validate_generated_question,
@@ -60,6 +68,15 @@ FALLBACK_FOLLOWUP = (
 FALLBACK_FOLLOWUP_NEUTRAL = (
     "Thank you. Could you share one specific example of work you personally "
     "handled, and what happened as a result?"
+)
+
+# Walked in order when the ladder example for the current intent was already asked.
+FALLBACK_PROBE_ROTATION = (
+    "What exactly did you change, and what did that number go from and to?",
+    "Which parts of that were your call?",
+    "Why that approach rather than the obvious alternative?",
+    "Where would that approach break, and what changes at ten times the load?",
+    "If you had half the time, what would you have cut?",
 )
 
 INTERVIEWER_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Behave like a thoughtful human in the room, not a script or a form. Invent every spoken line yourself from the materials below.
@@ -534,6 +551,11 @@ class SpokenJsonQuestionStream:
         self._emitted = len(self.question)
         return extra
 
+    @property
+    def question_complete(self) -> bool:
+        """True once the closing quote of the `question` field has arrived."""
+        return self._done
+
 
 class InterviewFlow:
     """State and question generation independent of LiveKit transport."""
@@ -556,8 +578,12 @@ class InterviewFlow:
         interview_definition: dict[str, Any] | None = None,
         candidate_profile: dict[str, Any] | None = None,
         initial_coverage: dict[str, Any] | None = None,
+        difficulty: str | None = None,
     ) -> None:
-        policy_outline = outline_from_definition(interview_definition)
+        policy_outline = outline_from_definition(
+            interview_definition,
+            resume_projects=extract_resume_projects(resume_text),
+        )
         self.interview_definition = (
             interview_definition if isinstance(interview_definition, dict) else None
         )
@@ -608,6 +634,15 @@ class InterviewFlow:
         self.last_answer_evaluation: dict[str, Any] | None = None
         self.known_facts: dict[str, list[str]] = {}
         self.last_probe_shape: dict[str, str] = {}
+        self.probes_without_gain = 0
+        self.contradiction_pending = False
+        self.difficulty = (difficulty or "applied").strip().lower()
+        self.difficulty_profile = difficulty_profile(self.difficulty)
+        self.evidence_ledger = build_ledger(
+            self.interview_definition,
+            target_level=str(self.candidate_profile.get("job_target_level") or "mid"),
+            difficulty=self.difficulty,
+        )
         self.last_question_competency_id: str | None = None
         self.last_question_intent = "opening"
         self.last_question_depth = 1
@@ -649,14 +684,15 @@ class InterviewFlow:
             else max(12, self.target_duration_minutes // 2)
         )
         if self.policy_mode:
-            # Competency phases carry their own probe ceilings.
+            # Competency phases carry their own probe ceilings; the global cap is a
+            # backstop, so it must not clamp a recruiter's per-competency setting.
             phase_caps = [
                 int(phase.get("max_probes") or max_probes_per_phase)
                 for phase in self.phases
                 if phase.get("competency_id")
             ]
             if phase_caps:
-                self.max_probes_per_phase = min(self.max_probes_per_phase, max(phase_caps))
+                self.max_probes_per_phase = max(self.max_probes_per_phase, max(phase_caps))
 
     def current_phase(self) -> dict:
         if not self.phases:
@@ -720,6 +756,7 @@ class InterviewFlow:
             previous = self.current_phase().get("name")
             self.phase_index += 1
             self.probe_count = 0
+            self.probes_without_gain = 0
             self.phase_started_at = time.monotonic()
             self.focus_item = ""
             self._ensure_focus(None)
@@ -774,7 +811,11 @@ class InterviewFlow:
         coverage_entry = self.coverage.get(competency_id) if competency_id else None
         missing = list((coverage_entry or {}).get("missing_intents") or [])
         required = list((coverage_entry or {}).get("required_intents") or [])
-        coverage_complete = bool(required) and not missing
+        ledger_entry = self.evidence_ledger.get(competency_id or "")
+        # Named-but-unproven evidence must not close a competency; probe caps and
+        # the time guard remain the only other way out.
+        evidence_satisfied = ledger_entry is None or ledger_entry.is_satisfied()
+        coverage_complete = bool(required) and not missing and evidence_satisfied
         competency_ids = [
             str(item.get("competency_id"))
             for item in self.phases
@@ -803,6 +844,10 @@ class InterviewFlow:
             coverage_complete=coverage_complete,
             has_coverage_gaps=bool(gap_id),
             gap_competency_id=gap_id,
+            probes_without_gain=self.probes_without_gain,
+            target_slot=ledger_entry.weakest_slot() if ledger_entry else None,
+            contradiction_pending=self.contradiction_pending,
+            project_name=str(phase.get("project_name") or "") or None,
             clarify_after=self.clarify_after,
             rephrase_after=self.rephrase_after,
             change_topic_after=self.change_topic_after,
@@ -1029,6 +1074,9 @@ class InterviewFlow:
             if not competency_id:
                 return self.probe_count >= min(2, self.max_probes_per_phase)
             missing = list((self.coverage.get(str(competency_id)) or {}).get("missing_intents") or [])
+            ledger_entry = self.evidence_ledger.get(str(competency_id))
+            if ledger_entry is not None and not ledger_entry.is_satisfied():
+                return self.probe_count >= self._phase_probe_limit()
             if missing and self.probe_count < self._phase_probe_limit():
                 return False
             if not missing and self.probe_count >= 1:
@@ -1149,6 +1197,16 @@ class InterviewFlow:
             elif usability not in {"silence", "stt_failure", "network_failure"}:
                 self.consecutive_unusable += 1
         if self.policy_mode and competency_id:
+            before = len(
+                (self.coverage.get(competency_id) or {}).get("covered_intents") or []
+            )
+            facts_before = len(self.known_facts.get(competency_id, []))
+            moved_slots = promote(
+                self.evidence_ledger,
+                competency_id=competency_id,
+                demonstrated=getattr(answer_eval, "slots_demonstrated", ()) or (),
+                claimed=getattr(answer_eval, "slots_claimed", ()) or (),
+            )
             apply_coverage(
                 self.coverage,
                 competency_id=competency_id,
@@ -1156,6 +1214,27 @@ class InterviewFlow:
                 evidence_id=f"ev_{self.last_question_competency_id or competency_id}_{len(self.candidate_turns)}",
                 answer_eval=answer_eval,
             )
+            after = len(
+                (self.coverage.get(competency_id) or {}).get("covered_intents") or []
+            )
+            gained = (
+                bool(moved_slots)
+                or after > before
+                or len(self.known_facts.get(competency_id, [])) > facts_before
+            )
+            if gained:
+                self.probes_without_gain = 0
+            elif update_counters:
+                self.probes_without_gain += 1
+            if moved_slots:
+                logger.info(
+                    "evidence_slots_moved",
+                    extra={
+                        "event": "evidence_slots_moved",
+                        "competency_id": competency_id,
+                        "slots": moved_slots,
+                    },
+                )
 
     def _remember_known_facts(self, competency_id: str | None, answer_eval: Any) -> None:
         if not competency_id:
@@ -1186,6 +1265,9 @@ class InterviewFlow:
             self.last_answer_evaluation = None
             return
         self.last_answer_evaluation = answer_eval.as_dict()
+        self.contradiction_pending = bool(
+            getattr(answer_eval, "contradicts_earlier", False)
+        )
         if not last_candidate_turn or not self.policy_mode:
             return
         # candidate_turns has not been appended yet, so intro detection still holds.
@@ -1209,6 +1291,8 @@ class InterviewFlow:
             )
 
     def _remember_generated(self, generated: GeneratedQuestion, policy: PolicyDecision | None) -> None:
+        if policy and policy.intent == "consistency_check":
+            self.contradiction_pending = False
         self.last_question_competency_id = generated.competency_id or (
             policy.competency_id if policy else None
         )
@@ -1311,6 +1395,24 @@ class InterviewFlow:
             "",
         )
         missing = list((self.coverage.get(competency_id) or {}).get("missing_intents") or [])
+        ledger_entry = self.evidence_ledger.get(competency_id or "")
+        target_slot, slot_instruction = target_slot_brief(ledger_entry)
+        phase = self.current_phase()
+        project_name = str(phase.get("project_name") or "").strip()
+        if project_name:
+            # Resume walkthrough: the project is the topic, not a JD competency.
+            competency = {
+                "name": project_name,
+                "definition": (
+                    "The candidate's own project from their resume. Establish what it "
+                    "actually was, what they personally built, and how it works."
+                ),
+            }
+            target_slot, slot_instruction = "", (
+                f"Walk through '{project_name}' from the candidate's resume. Get the real "
+                "technical substance: what the system did, what they personally built, "
+                "and how their part works. Do not move to job competencies yet."
+            )
         role = {}
         if isinstance(self.interview_definition, dict):
             intelligence = self.interview_definition.get("job_intelligence")
@@ -1338,6 +1440,11 @@ class InterviewFlow:
             )
             or "(use the last answer)",
             "allowed_probes": "; ".join(self._allowed_probes()) or "(STAR probes)",
+            "evidence_ledger": ledger_brief(ledger_entry)
+            if not project_name
+            else f"Resume excerpt for this project:\n{resume_project_excerpt(self.resume_text, project_name)}",
+            "target_slot": target_slot or "(none)",
+            "slot_instruction": slot_instruction,
             "known_facts": self._known_facts_brief(competency_id),
             "last_probe_shape": self._probe_shape_guidance(competency_id),
             "action_phrasing": action_phrasing_note(decision.action if decision else None),
@@ -1454,22 +1561,90 @@ class InterviewFlow:
         competency_id = policy.competency_id if policy else None
         if not self.policy_mode:
             return FALLBACK_FOLLOWUP
-        return ladder_fallback_question(
+        asked = {fingerprint(q) for q in self.interviewer_turns[-8:]}
+        candidate = ladder_fallback_question(
             self.interview_definition,
             competency_id=competency_id,
             intent=intent,
         )
+        if fingerprint(candidate) not in asked:
+            return candidate
+        # The ladder example for this intent was already spoken; walk the rest of
+        # the ladder rather than repeating it verbatim.
+        for step in ladder_steps(self.interview_definition, competency_id):
+            example = str(step.get("example_question") or "").strip()
+            if example and fingerprint(example) not in asked:
+                return example
+        for generic in FALLBACK_PROBE_ROTATION:
+            if fingerprint(generic) not in asked:
+                return generic
+        return candidate
 
-    def _configured_ladder_question(self, policy: PolicyDecision | None) -> str:
-        if not policy or not policy.competency_id:
+    _REPAIR_HINTS = {
+        "duplicate_question": "that question repeats one already asked — ask about a different, unexplored angle",
+        "compound_question": "ask exactly one question, not two",
+        "leading_question": "do not put the answer inside the question",
+        "protected_topic": "remove the protected-class reference",
+        "competency_mismatch": "stay on the competency the policy engine selected",
+        "unknown_intent": "use the intent the policy engine supplied",
+        "depth_exceeded": "stay within the allowed depth",
+        "depth_jump": "advance depth by at most one level",
+        "unknown_claim_id": "only cite resume claim ids that were supplied",
+        "empty_question": "the question field was empty",
+    }
+
+    def _repair_instruction(self, reasons: list[str]) -> str:
+        notes = [self._REPAIR_HINTS[r] for r in reasons if r in self._REPAIR_HINTS]
+        if not notes:
             return ""
-        for step in ladder_steps(self.interview_definition, policy.competency_id):
-            if (
-                str(step.get("intent") or "").strip() == policy.intent
-                and str(step.get("example_question") or "").strip()
-            ):
-                return str(step["example_question"]).strip()
-        return ""
+        return (
+            "\n\nYour previous question was rejected. Rewrite it: "
+            + "; ".join(notes)
+            + ". Return the same JSON shape."
+        )
+
+    def _precheck_spoken_question(
+        self, question: str, policy: PolicyDecision | None
+    ) -> bool:
+        """Validate a streamed question before any of it reaches TTS.
+
+        Once audio starts there is no way to retract it, so the duplicate,
+        compound, leading and protected-topic rules have to run here rather than
+        after the turn completes.
+        """
+        text = (question or "").strip()
+        if not text:
+            return False
+        candidate = GeneratedQuestion(
+            question=text,
+            competency_id=policy.competency_id if policy else None,
+            intent=policy.intent if policy else "live_question",
+            depth=policy.current_depth if policy else 1,
+        )
+        result = validate_generated_question(
+            candidate,
+            definition=self.interview_definition,
+            policy_competency_id=policy.competency_id if policy else None,
+            policy_intent=policy.intent if policy else candidate.intent,
+            policy_depth=policy.current_depth if policy else candidate.depth,
+            max_depth=policy.max_depth if policy else 5,
+            recent_questions=self.interviewer_turns[-8:],
+            allowed_probes=self._allowed_probes(),
+            profile=self.candidate_profile,
+            job_description=self.job_description,
+            resume_text=self.resume_text,
+            recent_turns=self.candidate_turns[-4:],
+        )
+        if not result.ok:
+            logger.info(
+                "question_blocked_before_speech",
+                extra={
+                    "event": "question_blocked_before_speech",
+                    "reasons": result.reasons,
+                    "prompt_version": self._prompt_version(),
+                },
+            )
+        return result.ok
 
     def _coerce_generated(
         self,
@@ -1504,9 +1679,6 @@ class InterviewFlow:
         )
         self._capture_replay(raw, validator_ok=result.ok, reasons=result.reasons)
         if result.ok:
-            configured_question = self._configured_ladder_question(policy)
-            if configured_question:
-                result.question.question = configured_question
             return result.question
         logger.info(
             "question_validation_failed",
@@ -1701,22 +1873,20 @@ class InterviewFlow:
             generated = self._coerce_generated(
                 raw, policy=policy, last_candidate_turn=last_candidate_turn
             )
-            parsed = parse_generated_question(raw)
-            if (
-                allow_retry
-                and parsed is None
-                and generated.question == self._fallback_spoken_question(policy)
-            ):
+            if allow_retry and self.last_validator_ok is False:
+                repair = self._repair_instruction(self.last_validator_reasons)
                 try:
                     raw = await self.llm_client.generate_reply(
                         [
                             {"role": "system", "content": prompt},
-                            {"role": "user", "content": user_content},
+                            {"role": "user", "content": user_content + repair},
                         ]
                     )
-                    generated = self._coerce_generated(
+                    retried = self._coerce_generated(
                         raw, policy=policy, last_candidate_turn=last_candidate_turn
                     )
+                    if self.last_validator_ok:
+                        generated = retried
                 except Exception:
                     logger.exception(
                         "stage2_question_retry_failed",
@@ -1935,6 +2105,7 @@ class InterviewFlow:
         parser = SpokenJsonQuestionStream()
         raw_parts: list[str] = []
         spoken_any = False
+        gated = False
         try:
             async for delta in stream(
                 [
@@ -1943,10 +2114,14 @@ class InterviewFlow:
                 ]
             ):
                 raw_parts.append(delta or "")
-                spoken = parser.push(delta or "")
-                if spoken:
-                    spoken_any = True
-                    yield spoken
+                parser.push(delta or "")
+                # Speak only once the whole question has arrived and passed the
+                # quality rules; a half-spoken question cannot be retracted.
+                if not gated and parser.question_complete:
+                    gated = True
+                    if self._precheck_spoken_question(parser.question, policy):
+                        spoken_any = True
+                        yield parser.question.strip()
         except Exception:
             logger.exception(
                 "stage2_question_failed",
@@ -1978,10 +2153,12 @@ class InterviewFlow:
             if not spoken_any:
                 yield question
             return
-        leftover = parser.finish()
-        if leftover:
-            spoken_any = True
-            yield leftover
+        # Stream ended mid-question (truncated JSON): gate whatever arrived.
+        if not gated and parser.question.strip():
+            gated = True
+            if self._precheck_spoken_question(parser.question, policy):
+                spoken_any = True
+                yield parser.question.strip()
         question = await self._complete_generated_turn(
             "".join(raw_parts),
             last_candidate_turn,
@@ -1989,7 +2166,7 @@ class InterviewFlow:
             prompt=prompt,
             user_content=user_content,
             allow_retry=not spoken_any,
-            spoken_question=parser.question.strip() or None,
+            spoken_question=parser.question.strip() if spoken_any else None,
         )
         if question == CLOSING_MESSAGE:
             if parser.question.strip() != CLOSING_MESSAGE:

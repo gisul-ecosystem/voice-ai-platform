@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from products.interviewer.coverage import competency_by_id, ladder_steps
+from products.interviewer.evidence import SLOT_KEYS
 
 _PUNCT = re.compile(r"[^a-z0-9\s]+")
 _WS = re.compile(r"\s+")
@@ -31,7 +32,14 @@ PROTECTED_MARKERS = (
     "maiden",
 )
 
-UNGROUNDED_TECH_TERMS = (
+LEADING_PATTERNS = (
+    re.compile(r"\b(?:right|correct|no)\s*\?\s*$"),
+    re.compile(r",\s*(?:didn't|don't|doesn't|wasn't|weren't|isn't|aren't)\s+\w+\s*\?"),
+    re.compile(r"^\s*so\s+you\s+(?:used|chose|built|went|picked|decided)\b"),
+    re.compile(r"\bi\s+(?:assume|presume|take it)\b"),
+)
+
+TECH_TERMS = (
     "api",
     "schema",
     "queue",
@@ -39,33 +47,45 @@ UNGROUNDED_TECH_TERMS = (
     "kubernetes",
     "redis",
     "postgres",
-    "postgresql",
     "microservice",
     "latency",
     "deadlock",
-    "index",
     "timeout",
-    "http client",
     "websocket",
     "sharding",
+    "throughput",
+    "cache",
+    "database",
+    "algorithm",
+    "deploy",
+    "server",
+    "code",
 )
 
-INTENT_PROBE_ALIASES: dict[str, tuple[str, ...]] = {
-    "establish_context": ("context", "situation", "describe"),
-    "establish_ownership": ("responsibility", "personally", "owned", "your specific"),
-    "applied_understanding": ("approach", "how did you", "method", "action"),
-    "problem_or_complexity": ("difficult", "challenge", "failed", "constraint"),
-    "tradeoff_or_transfer": ("change", "outcome", "result", "again", "alternative"),
-    "clarify": ("clarify", "say a bit more", "full sentence"),
-    "candidate_map": ("background", "introduce", "experience"),
-    "opening": ("introduce", "background"),
-    "baseline": ("example", "tell me about"),
-    "final_addition": ("anything else", "add"),
-    "gap_check": ("anything we have not", "one more"),
-    "closing": ("thank", "concludes"),
-    "recovery": ("move", "another"),
-}
-
+# Every intent the policy engine or a published ladder may legitimately ask for.
+KNOWN_INTENTS: frozenset[str] = frozenset(
+    (
+        "establish_context",
+        "establish_ownership",
+        "applied_understanding",
+        "problem_or_complexity",
+        "tradeoff_or_transfer",
+        "opening",
+        "await_introduction",
+        "candidate_map",
+        "baseline",
+        "resume_project",
+        "consistency_check",
+        "clarify",
+        "rephrase",
+        "recovery",
+        "coverage",
+        "gap_check",
+        "final_addition",
+        "closing",
+        "live_question",
+    )
+)
 
 TechnicalSubstance = Literal[
     "surface", "partial", "deep", "incorrect", "not_applicable"
@@ -126,6 +146,10 @@ class AnswerEvaluation:
     matches_evidence_expected: bool = False
     needs_clarification: bool = False
     factually_correct: bool = True
+    # Evidence dimensions (evidence.SLOT_KEYS) this answer actually proved / merely asserted.
+    slots_demonstrated: list[str] = field(default_factory=list)
+    slots_claimed: list[str] = field(default_factory=list)
+    contradicts_earlier: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -135,7 +159,21 @@ class AnswerEvaluation:
             "matches_evidence_expected": self.matches_evidence_expected,
             "needs_clarification": self.needs_clarification,
             "factually_correct": self.factually_correct,
+            "slots_demonstrated": list(self.slots_demonstrated),
+            "slots_claimed": list(self.slots_claimed),
+            "contradicts_earlier": self.contradicts_earlier,
         }
+
+
+def _slot_list(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    seen: list[str] = []
+    for item in raw:
+        key = str(item).strip().lower()
+        if key in SLOT_KEYS and key not in seen:
+            seen.append(key)
+    return seen
 
 
 def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
@@ -158,6 +196,9 @@ def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
         matches_evidence_expected=bool(payload.get("matches_evidence_expected")),
         needs_clarification=bool(payload.get("needs_clarification")),
         factually_correct=bool(payload.get("factually_correct", True)),
+        slots_demonstrated=_slot_list(payload.get("slots_demonstrated")),
+        slots_claimed=_slot_list(payload.get("slots_claimed")),
+        contradicts_earlier=bool(payload.get("contradicts_earlier")),
     )
 
 
@@ -322,6 +363,8 @@ def _grounding_corpus(
     competency = competency_by_id(definition, competency_id)
     parts.append(str(competency.get("name") or ""))
     parts.append(str(competency.get("definition") or ""))
+    for item in competency.get("evidence_expected") or []:
+        parts.append(str(item))
     if isinstance(profile, dict):
         for item in profile.get("claims") or []:
             if isinstance(item, dict):
@@ -329,27 +372,25 @@ def _grounding_corpus(
     return " ".join(parts).lower()
 
 
-def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
-    if intent in {
-        "opening",
-        "candidate_map",
-        "clarify",
-        "closing",
-        "final_addition",
-        "gap_check",
-        "baseline",
-        "recovery",
-        "coverage",
-        "await_introduction",
-    }:
-        return True
-    if not allowed_probes:
-        return True
-    aliases = INTENT_PROBE_ALIASES.get(intent, ())
-    blob = " ".join(allowed_probes).lower()
-    if intent.replace("_", " ") in blob:
-        return True
-    return any(alias in blob for alias in aliases)
+def _known_intents(definition: dict[str, Any] | None) -> set[str]:
+    """Policy vocabulary plus any intent a published ladder actually declares."""
+    intents = set(KNOWN_INTENTS)
+    if isinstance(definition, dict):
+        for ladder in definition.get("question_ladders") or []:
+            if not isinstance(ladder, dict):
+                continue
+            for step in ladder.get("levels") or []:
+                if isinstance(step, dict):
+                    value = str(step.get("intent") or "").strip()
+                    if value:
+                        intents.add(value)
+        for competency in definition.get("competencies") or []:
+            if isinstance(competency, dict):
+                for value in competency.get("min_assessment_intents") or []:
+                    text = str(value).strip()
+                    if text:
+                        intents.add(text)
+    return intents
 
 
 def validate_generated_question(
@@ -376,21 +417,20 @@ def validate_generated_question(
     lowered = question.lower()
     if any(marker in lowered for marker in PROTECTED_MARKERS):
         reasons.append("protected_topic")
+    if any(pattern.search(lowered) for pattern in LEADING_PATTERNS):
+        reasons.append("leading_question")
 
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:
         reasons.append("competency_mismatch")
-    if policy_intent and generated.intent not in {policy_intent, "live_question"}:
-        # Opening/map can be phrased with nearby intents; still record mismatch for probes.
-        if policy_intent not in {"opening", "candidate_map", "await_introduction"}:
-            reasons.append("intent_mismatch")
+    # policy_intent is authoritative and overwritten below, so a differing echo is
+    # not a defect. Only an intent outside the known vocabulary is.
+    if generated.intent and generated.intent not in _known_intents(definition):
+        reasons.append("unknown_intent")
     if generated.depth > max(1, int(max_depth)):
         reasons.append("depth_exceeded")
     if generated.depth > max(1, int(policy_depth) + 1):
         reasons.append("depth_jump")
-
-    if not _intent_allowed_by_probes(policy_intent, allowed_probes):
-        reasons.append("probe_intent_not_allowed")
 
     allowed_ids = _allowed_claim_ids(profile)
     for claim_id in generated.source_claim_ids:
@@ -418,10 +458,11 @@ def validate_generated_question(
         recent_turns=list(recent_turns or []),
         competency_id=expected_competency or generated.competency_id,
     )
-    for term in UNGROUNDED_TECH_TERMS:
-        if term in lowered and term not in corpus:
+    # Only guard jargon for roles with no technical signal at all. Banning these
+    # words outright would stop a technical interview from ever going deep.
+    if corpus and not any(term in corpus for term in TECH_TERMS):
+        if any(term in lowered for term in TECH_TERMS):
             reasons.append("ungrounded_term")
-            break
 
     ok = not reasons
     normalized = GeneratedQuestion(

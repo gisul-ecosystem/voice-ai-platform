@@ -79,7 +79,7 @@ export default function AdminInterviewPage() {
         interviewSetup: {
           title, role, seniority, difficulty: "applied", durationMinutes: Number(durationMinutes),
           language: "English", competencies: competencies.split(",").map((item) => item.trim()).filter(Boolean),
-          maxProbesPerPhase: 2, monitoringEnabled: true, recordingEnabled: false,
+          maxProbesPerPhase: 3, monitoringEnabled: true, recordingEnabled: false,
         },
       });
       setInvite(String(scheduled.candidatePath));

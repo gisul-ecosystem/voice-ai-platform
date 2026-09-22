@@ -129,6 +129,9 @@ class CompetencyDefinition(BaseModel):
     max_probes: int = Field(ge=0, le=8, default=3)
     rubric: list[RubricAnchor] = Field(min_length=3, max_length=5)
     weight: float | None = Field(default=None, ge=0, le=100)
+    # "jd" when derived from the job description, "fallback" when the JD yielded
+    # too few competencies and a generic one was substituted.
+    source: Literal["jd", "creator", "fallback"] = "jd"
 
     @field_validator("evidence_expected", "min_assessment_intents")
     @classmethod

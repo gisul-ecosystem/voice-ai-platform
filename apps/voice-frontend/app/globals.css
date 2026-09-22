@@ -438,6 +438,12 @@ a {
   line-height: 1.45;
 }
 
+.alert.alert-warning {
+  border-color: #e4c65a;
+  color: #6b5510;
+  background: #fff8e0;
+}
+
 .section-heading {
   max-width: 700px;
   margin-bottom: clamp(10px, 2vh, 18px);
@@ -1966,8 +1972,8 @@ select:focus-visible,
 .interview-room {
   height: 100%;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   background: var(--surface-muted);
 }
 
@@ -2020,6 +2026,7 @@ select:focus-visible,
 
 .interview-workspace {
   min-height: 0;
+  flex: 1;
   display: grid;
   grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
   gap: 16px;
@@ -2126,7 +2133,6 @@ select:focus-visible,
 .interview-workspace .transcript-list {
   max-height: none;
   padding: 16px;
-  padding-bottom: 112px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2149,11 +2155,6 @@ select:focus-visible,
 }
 
 .interview-control-dock {
-  position: fixed;
-  z-index: 20;
-  right: 16px;
-  bottom: 12px;
-  left: 16px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -2310,11 +2311,6 @@ select:focus-visible,
     overflow: hidden;
   }
 
-  .interview-room {
-    display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
-  }
-
   .interview-room-header {
     position: relative;
     z-index: 5;
@@ -2333,6 +2329,12 @@ select:focus-visible,
     grid-template-rows: minmax(180px, 0.8fr) minmax(220px, 1fr);
     min-height: 0;
     overflow: hidden;
+  }
+
+  /* The dock is fixed only at this breakpoint (thumb reach / iOS safe area),
+     so the transcript needs the compensating bottom padding only here. */
+  .interview-workspace .transcript-list {
+    padding-bottom: 112px;
   }
 
   .interview-control-dock {

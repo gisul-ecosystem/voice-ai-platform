@@ -60,6 +60,27 @@ Allowed probe intents: {allowed_probes}
 Facts already established for this competency — do not re-ask these, build on them instead:
 {known_facts}
 
+EVIDENCE LEDGER for this competency — what is proven and what is still missing:
+{evidence_ledger}
+
+YOUR TARGET THIS TURN: {target_slot}
+{slot_instruction}
+
+How to reach technical depth (this is the core of your job):
+- Ask about the substance of the work, not the story around it. "What was challenging?" is a weak question; "What was the time complexity of that approach, and where did it dominate?" is a strong one.
+- Use the candidate's own named technique, tool, algorithm or system from their last answer or their resume claims. If they named one, your question must mention it.
+- Go after mechanism, cost and trade-off: how it works internally, what it costs in time/space/latency/money, what the alternative was, where it breaks, how they would optimise it.
+- If the candidate gave only a label ("I used dynamic programming", "we used caching"), do not accept it — ask them to walk through the actual mechanism or state the cost.
+- Never ask two candidates the same generic question. Every question must be reachable only from what this candidate just said.
+- Match the target level: do not ask trade-off or optimisation questions of an intern who has not yet shown mechanism.
+
+Illustration of depth only — never reuse this wording, and never assume the topic:
+  Weak:   "Tell me about your experience with algorithms."
+  Weak:   "What was the hardest part of that problem?"
+  Strong: "You said you solved the subarray-sum problem with a sliding window — what invariant were you maintaining, and what happens to that invariant when the array contains negatives?"
+  Strong: "That's O(n) time — what's the space cost, and what would you trade to get it to O(1)?"
+The topic in that illustration is arbitrary. Derive your own from the active competency and this candidate's actual answers.
+
 Last follow-up angle used on this competency (vary it, do not repeat the same shape twice in a row): {last_probe_shape}
 
 Interview structure — follow this order; do not skip or invent sections:
@@ -109,6 +130,21 @@ Separately, and regardless of the technical_substance value above, set factually
 Separately, set needs_clarification to true only when the answer itself is too ambiguous to score confidently (unclear pronoun references, contradictory statements, cut-off sentences) — this is different from "surface", which means the answer was clear but shallow. Leave needs_clarification false whenever you can confidently assign a technical_substance value.
 Do not reward sentence length, confident tone, or buzzwords - reward specificity, mechanisms, and factual correctness.
 
+Also report which evidence dimensions the last answer actually moved. Use only these keys:
+  ownership           - what they personally decided or built
+  approach            - the specific algorithm, structure, pattern or design, named
+  mechanism           - how it works internally, step by step
+  complexity_or_cost  - time/space complexity, latency, throughput or resource cost, with the figure
+  tradeoff            - why this over a named alternative, and what it cost
+  failure_mode        - where it breaks, edge cases, behaviour at scale
+  optimization        - how they would make it faster or cheaper, and the cost of doing so
+  measurement         - a number that moved, from-value to to-value
+Put a key in slots_demonstrated ONLY if the answer contained the real substance for it.
+Put it in slots_claimed if they asserted it without substance ("I optimised it" with no mechanism or figure).
+Naming a technique is a claim, not a demonstration. Be strict: an over-generous verdict here
+makes the interview end before the candidate has actually been assessed.
+Set contradicts_earlier to true if this answer conflicts with something they said earlier.
+
 When the candidate has already stated a specific number, tool, or decision (see established facts above or the last answer), your next question must build on it — ask why that choice was made, what would break if it changed, or what the measured outcome was. Do not ask a generic "tell me more" question, and do not ask about a fact already listed as established.
 
 Tag the question you write: set depth_tag to "concept" for definition/context questions, "applied" for hands-on method questions, or "trade_off" for reasoning/reflection/what-would-you-change questions. Set probe_shape to the follow-up angle used: "why", "trade_off", "failure_mode", "metric", or "other" — and avoid repeating the same probe_shape as the last one noted above.
@@ -122,7 +158,10 @@ Respond with a single JSON object in exactly this shape:
     "reasoning": "one sentence a human reviewer could paste directly into the scorecard as justification",
     "matches_evidence_expected": true,
     "needs_clarification": false,
-    "factually_correct": true
+    "factually_correct": true,
+    "slots_demonstrated": [],
+    "slots_claimed": [],
+    "contradicts_earlier": false
   }},
   "competency_id": "...",
   "intent": "...",
@@ -241,6 +280,17 @@ ACTION_PHRASING: dict[str, str] = {
         "This is a follow-up. Anchor it to the specific number, tool, or decision "
         "the candidate just stated — ask why that choice was made, what would break "
         "if it changed, or what the measured outcome was. Never a generic \"tell me more\"."
+    ),
+    "WALK_RESUME_PROJECT": (
+        "Move the conversation onto the candidate's own resume project named above. "
+        "Open it by referring to the project by name, then get the technical substance: "
+        "what the system actually did, what they personally built, and how their part "
+        "works. Do not assess job competencies during this section."
+    ),
+    "PROBE_FOR_CONSISTENCY": (
+        "The last answer conflicts with something the candidate said earlier. Ask them "
+        "to reconcile it, quoting both statements briefly. Frame it as you needing help "
+        "understanding, never as an accusation, and ask it only once."
     ),
 }
 
