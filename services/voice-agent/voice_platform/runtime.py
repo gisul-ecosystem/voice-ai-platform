@@ -50,7 +50,7 @@ def build_agent_session(clients: InferenceClients) -> AgentSession:
     """Construct the shared STT → LLM → TTS LiveKit pipeline."""
     return AgentSession(
         # Short silence so the first reply starts soon after the candidate stops.
-        vad=silero.VAD.load(min_speech_duration=0.4, min_silence_duration=0.4),
+        vad=silero.VAD.load(min_speech_duration=0.4, min_silence_duration=1.2),
         stt=LaptopSTT(client=clients.stt),
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
@@ -61,14 +61,14 @@ def build_agent_session(clients: InferenceClients) -> AgentSession:
         allow_interruptions=True,
         min_interruption_duration=2.5,
         min_interruption_words=6,
-        min_endpointing_delay=0.35,
+        min_endpointing_delay=1.0,
         max_endpointing_delay=1.6,
         resume_false_interruption=True,
         false_interruption_timeout=2.0,
         # Preemptive drafting made the agent commit to replying on partial/paused
         # speech before the candidate finished their sentence — disabled so the
         # full final utterance reaches the LLM before a reply is generated.
-        preemptive_generation=False,
+        preemptive_generation=True,
     )
 
 

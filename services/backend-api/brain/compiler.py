@@ -239,29 +239,39 @@ def _candidate_competency_seeds(
     for name in creator_competencies or []:
         add(name, [], required=True, source="creator")
 
-    def _usable(item: ExtractedItem, *, max_len: int = 60) -> bool:
-        text = item.text.strip()
-        if "," in text or len(text) > max_len:
-            return False
-        if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
-            return False
-        return True
+    # If the secondary LLM synthesis pass produced normalized core_competencies,
+    # use those directly — they are already canonical (e.g. "Data Structures and
+    # Algorithms" instead of "solid foundations in DSA"). Only fall through to the
+    # raw-item extraction path when core_competencies is absent or empty.
+    if not creator_competencies and job.core_competencies:
+        for name in job.core_competencies:
+            cleaned = (name or "").strip()
+            if cleaned:
+                add(cleaned, [cleaned], required=True, source="llm_synthesis")
+    else:
+        def _usable(item: ExtractedItem, *, max_len: int = 60) -> bool:
+            text = item.text.strip()
+            if "," in text or len(text) > max_len:
+                return False
+            if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
+                return False
+            return True
 
-    for item in job.skills + job.mandatory_requirements:
-        if _usable(item):
-            add(item.text, [item.text], required=True)
+        for item in job.skills + job.mandatory_requirements:
+            if _usable(item):
+                add(item.text, [item.text], required=True)
 
-    for item in job.responsibilities[:4]:
-        text = item.text.strip()
-        if 8 <= len(text) <= 48 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
-            add(text, [text], required=True)
+        for item in job.responsibilities[:4]:
+            text = item.text.strip()
+            if 8 <= len(text) <= 48 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
+                add(text, [text], required=True)
 
-    preferred_pool = (
-        list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
-    )
-    for item in preferred_pool:
-        if _usable(item, max_len=48):
-            add(item.text, [item.text], required=False)
+        preferred_pool = (
+            list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
+        )
+        for item in preferred_pool:
+            if _usable(item, max_len=48):
+                add(item.text, [item.text], required=False)
 
     required_seeds = [seed for seed in seeds if seed[3]]
     preferred_seeds = [seed for seed in seeds if not seed[3]]

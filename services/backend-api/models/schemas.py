@@ -69,6 +69,7 @@ class CreateInterviewContextRequest(BaseModel):
     resume_text: str = Field(min_length=1, max_length=100_000)
     interview_setup: InterviewSetupConfig | None = None
     definition_id: str | None = Field(default=None, min_length=8, max_length=64)
+    candidate_profile: dict | None = None
 
 
 class CreateInterviewContextResponse(BaseModel):

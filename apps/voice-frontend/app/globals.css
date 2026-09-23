@@ -327,6 +327,7 @@ a {
 .consent-list legend {
   padding: 0 6px;
   font-weight: 650;
+  grid-column: 1 / -1;
 }
 
 .button:disabled {
@@ -2094,6 +2095,7 @@ select:focus-visible,
 
 .interview-workspace .transcript-panel {
   min-height: 0;
+  height: 100%;
   display: grid;
   /* Heading stays put; only the list scrolls, so the newest line is always
      visible at the bottom and older lines scroll up out of view. */
@@ -3157,4 +3159,80 @@ select:focus-visible,
   .scorecard-summary {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+/* Candidate Invite Form Styles */
+.admin-field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.admin-field-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.admin-field-grid input {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.candidate-error {
+  color: var(--danger-text);
+  background: var(--danger-background);
+  border: 1px solid var(--danger-border);
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  margin-bottom: 12px;
+}
+
+/* Interviewer Presence Overlap Fix */
+.agent-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-kicker {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.agent-copy strong {
+  font-size: 1.1rem;
+}
+
+.agent-copy p {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* Transcript Empty State */
+.transcript-empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 20px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.document-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.document-upload-row input[type="file"] {
+  flex: 1;
+  font-size: 0.85rem;
 }

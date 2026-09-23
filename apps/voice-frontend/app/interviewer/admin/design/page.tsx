@@ -1,65 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-
-const defaultStart = new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
-const DRAFT_KEY = "ai-interview:role-draft";
-
-type RoleDraft = {
-  title: string; role: string; seniority: string; durationMinutes: string;
-  jobDescription: string; competencies: string; definitionId: string; startsAt: string;
-  difficulty: string; language: string;
-  monitoringEnabled: boolean; recordingEnabled: boolean;
-  draft?: Record<string, unknown>;
-};
+import { useDesignForm } from "./useDesignForm";
 
 export default function DesignRolePage() {
-  const [value, setValue] = useState<RoleDraft>({
-    title: "AI Engineer interview", role: "AI Engineer", seniority: "junior",
-    durationMinutes: "30", jobDescription: "", competencies: "",
-    definitionId: "ai-engineer-junior-v1", startsAt: defaultStart,
-    difficulty: "applied", language: "English",
-    monitoringEnabled: true, recordingEnabled: false,
-  });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [newCompetency, setNewCompetency] = useState("");
-
-  function setField<K extends keyof RoleDraft>(key: K, next: RoleDraft[K]) {
-    setValue((current) => ({ ...current, [key]: next }));
-  }
-
-  function competencyList(): string[] {
-    return value.competencies.split(",").map((item) => item.trim()).filter(Boolean);
-  }
-
-  function setCompetencyList(items: string[]) {
-    setField("competencies", items.join(", "));
-  }
-
-  function addCompetency() {
-    const item = newCompetency.trim();
-    if (!item || competencyList().some((current) => current.toLowerCase() === item.toLowerCase())) return;
-    setCompetencyList([...competencyList(), item]);
-    setNewCompetency("");
-  }
-
-  async function generate() {
-    setBusy(true); setError("");
-    try {
-      const response = await fetch("/api/admin/blueprint", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-        action: "compile", title: value.title, seniority: value.seniority, durationMinutes: Number(value.durationMinutes),
-        language: value.language, jobDescription: value.jobDescription,
-        competencies: value.competencies.split(",").map((item) => item.trim()).filter(Boolean),
-      }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(String(data.error || data.detail || "Alignment generation failed."));
-      sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ ...value, draft: data }));
-      window.location.assign("/interviewer/admin/review");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Alignment generation failed."); }
-    finally { setBusy(false); }
-  }
+  const {
+    value,
+    busy,
+    error,
+    newCompetency,
+    ingestBusy,
+    setField,
+    setNewCompetency,
+    competencyList,
+    setCompetencyList,
+    addCompetency,
+    ingestDocument,
+    ingestTextContent,
+    generate,
+  } = useDesignForm();
 
   return <main className="interviewer-home admin-builder-page">
     <nav className="landing-nav" aria-label="Admin navigation"><Link href="/interviewer" className="brand"><span className="brand-mark">AI</span>AI Interviewer</Link><span className="environment-badge">01 Design role</span></nav>
@@ -90,7 +49,17 @@ export default function DesignRolePage() {
             <span><strong>Session recording</strong><small>Record the interview only after explicit candidate consent.</small></span>
           </label>
         </div>
-        <label className="admin-field-wide">Job description <span className="field-required">Required</span><textarea required rows={12} value={value.jobDescription} onChange={(e) => setField("jobDescription", e.target.value)} placeholder="Paste the job description and responsibilities..." /></label>
+        <div className="admin-field-wide">
+          <label>Job description <span className="field-required">Required</span></label>
+          <div className="document-upload-row">
+            <input type="file" accept=".pdf,.docx,.txt,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" disabled={ingestBusy} onChange={ingestDocument} />
+            <span className="field-help">{ingestBusy ? "Extracting..." : "PDF, DOCX, or text · max 2MB"}</span>
+          </div>
+          <textarea required rows={12} value={value.jobDescription} onChange={(e) => setField("jobDescription", e.target.value)} placeholder="Paste the job description and responsibilities..." />
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "8px" }}>
+            <button type="button" className="button secondary" style={{ padding: "4px 12px", fontSize: "0.8rem", width: "auto" }} disabled={ingestBusy || value.jobDescription.trim().length < 20} onClick={() => ingestTextContent(value.jobDescription)}>{ingestBusy ? "Extracting..." : "Auto-extract Competencies"}</button>
+          </div>
+        </div>
         <div className="admin-field-wide competency-input-block">
           <label>Assessment areas <span className="field-optional">Optional — leave empty to use the job description</span></label>
           <p className="section-help">Competencies are extracted from the job description automatically, and you can edit them on the next screen. Only add topics here to force something the job description does not mention — anything added takes priority and reduces the number of competencies drawn from the job description.</p>

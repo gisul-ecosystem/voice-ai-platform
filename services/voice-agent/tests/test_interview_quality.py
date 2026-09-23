@@ -197,7 +197,7 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
     assert "establish_ownership" in required
     assert "applied_understanding" in required
     assert flow.coverage["problem_solving"]["missing_intents"]
-    assert flow.last_question_intent in required or flow.last_question_intent == "establish_context"
+    assert flow.last_question_intent in required or flow.last_question_intent in ("establish_context", "resume_project")
 
 
 def test_off_topic_answer_is_not_marked_usable() -> None:

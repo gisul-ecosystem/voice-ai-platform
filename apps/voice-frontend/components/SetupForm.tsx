@@ -85,8 +85,8 @@ function contentStepError(input: PublicationGateInput): string | null {
   }
   const competencies = listedCompetencies(input.competencies);
   if (competencies.length < 1) return "Add at least one competency before publishing.";
-  if (competencies.length > 12) {
-    return `You listed ${competencies.length} competencies — trim to 12 or fewer before continuing.`;
+  if (competencies.length > 8) {
+    return `You listed ${competencies.length} competencies — trim to 8 or fewer before continuing.`;
   }
   if (input.jdSummary && !input.jdReviewed) {
     return "Review the extracted JD and resume facts before continuing.";
@@ -207,9 +207,9 @@ export function SetupForm({
   const [step, setStep] = useState(0);
   const [reviewing, setReviewing] = useState(false);
   const [hydrated, setHydrated] = useState(Boolean(initialValue));
-  const [title, setTitle] = useState(initialSetup?.title ?? "Structured interview");
+  const [title, setTitle] = useState(initialSetup?.title ?? "");
   const [role, setRole] = useState(initialSetup?.role ?? "");
-  const [seniority, setSeniority] = useState(initialSetup?.seniority ?? "mid");
+  const [seniority, setSeniority] = useState(initialSetup?.seniority ?? "");
   const [difficulty, setDifficulty] = useState(
     initialSetup?.difficulty ?? "applied",
   );
@@ -219,7 +219,7 @@ export function SetupForm({
   const [language, setLanguage] = useState(initialSetup?.language ?? "English");
   const [competencies, setCompetencies] = useState(
     initialSetup?.competencies.join(", ") ??
-      "Problem solving, Role expertise, Communication",
+      "",
   );
   const [maxProbesPerPhase, setMaxProbesPerPhase] = useState(
     initialSetup?.maxProbesPerPhase ?? 2,
@@ -244,6 +244,7 @@ export function SetupForm({
   const [resumeSummary, setResumeSummary] = useState<IngestSummary | null>(null);
   const [jdReviewed, setJdReviewed] = useState(false);
   const [resumeReviewed, setResumeReviewed] = useState(false);
+  const [candidateProfile, setCandidateProfile] = useState<Record<string, unknown> | null>(null);
   const timezone =
     initialValue?.timezone ??
     Intl.DateTimeFormat().resolvedOptions().timeZone ??
@@ -346,6 +347,7 @@ export function SetupForm({
       jobDescription: jobDescription.trim() || undefined,
       resumeText: resumeText.trim() || undefined,
       candidateEmail: candidateEmail.trim() || undefined,
+      candidateProfile: candidateProfile || undefined,
       startsAt: safeStartsAt ? new Date(safeStartsAt).toISOString() : undefined,
       timezone,
       interviewSetup: {
@@ -358,7 +360,8 @@ export function SetupForm({
         competencies: competencies
           .split(",")
           .map((value) => value.trim())
-          .filter(Boolean),
+          .filter(Boolean)
+          .slice(0, 8),
         maxProbesPerPhase,
         monitoringEnabled,
         recordingEnabled,
@@ -405,27 +408,105 @@ export function SetupForm({
           typeof payload.jobIntelligence === "object"
         ) {
           const job = payload.jobIntelligence as {
-            role?: { title?: string };
+            role?: { title?: string; target_level?: string };
             mandatory_requirements?: unknown[];
             skills?: unknown[];
+            core_competencies?: unknown[];
           };
-          if (job.role?.title && !role.trim()) setRole(job.role.title);
-          const suggested = [
-            ...itemTexts(job.mandatory_requirements),
-            ...itemTexts(job.skills),
-          ]
-            .filter((item, index, all) => all.findIndex((other) => other.toLowerCase() === item.toLowerCase()) === index)
-            .slice(0, 6);
-          if (
-            suggested.length &&
-            competencies === "Problem solving, Role expertise, Communication"
-          ) {
+          if (job.role?.title) {
+            setRole(job.role.title);
+            setTitle(`${job.role.title} interview`);
+          }
+          if (job.role?.target_level) {
+            setSeniority(job.role.target_level);
+          }
+          let suggested: string[] = [];
+          if (Array.isArray(job.core_competencies) && job.core_competencies.length > 0) {
+            suggested = job.core_competencies.map(String);
+          }
+          if (suggested.length) {
             setCompetencies(suggested.join(", "));
           }
         }
       } else {
         setResumeText(payload.text);
         setResumeSummary(summary);
+        if (payload.candidateProfile && typeof payload.candidateProfile === "object") {
+          setCandidateProfile(payload.candidateProfile as Record<string, unknown>);
+        } else {
+          setCandidateProfile(null);
+        }
+        setResumeReviewed(false);
+      }
+    } catch (error) {
+      setIngestError(
+        error instanceof Error ? error.message : "Document could not be processed.",
+      );
+    } finally {
+      setIngestBusy(null);
+    }
+  }
+
+  async function ingestTextContent(kind: "jd" | "resume", text: string) {
+    if (!text.trim()) return;
+    setIngestError("");
+    setIngestBusy(kind);
+    try {
+      const body = new FormData();
+      body.set("kind", kind);
+      // Create a Blob from the text to simulate a file upload for the backend
+      const blob = new Blob([text], { type: "text/plain" });
+      body.set("file", blob, kind === "jd" ? "pasted-jd.txt" : "pasted-resume.txt");
+      if (kind === "jd") body.set("target_level", seniority);
+      const response = await fetch("/api/brain/ingest", {
+        method: "POST",
+        body,
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok || typeof payload.text !== "string") {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Document could not be processed.",
+        );
+      }
+      const summary = summarizeIngest(payload);
+      if (kind === "jd") {
+        setJobDescription(payload.text);
+        setJdSummary(summary);
+        setJdReviewed(false);
+        if (payload.jobIntelligence && typeof payload.jobIntelligence === "object") {
+          const job = payload.jobIntelligence as {
+            role?: { title?: string; target_level?: string };
+            mandatory_requirements?: unknown[];
+            skills?: unknown[];
+            core_competencies?: unknown[];
+          };
+          if (job.role?.title) {
+            setRole(job.role.title);
+            setTitle(`${job.role.title} interview`);
+          }
+          if (job.role?.target_level) {
+            setSeniority(job.role.target_level);
+          }
+          
+          let suggested: string[] = [];
+          if (Array.isArray(job.core_competencies) && job.core_competencies.length > 0) {
+             suggested = job.core_competencies.map(String);
+          }
+          
+          if (suggested.length) {
+            setCompetencies(suggested.join(", "));
+          }
+        }
+      } else {
+        setResumeText(payload.text);
+        setResumeSummary(summary);
+        if (payload.candidateProfile && typeof payload.candidateProfile === "object") {
+          setCandidateProfile(payload.candidateProfile as Record<string, unknown>);
+        } else {
+          setCandidateProfile(null);
+        }
         setResumeReviewed(false);
       }
     } catch (error) {
@@ -635,8 +716,20 @@ export function SetupForm({
               onChange={(event) => {
                 setJobDescription(event.target.value);
                 setJdReviewed(false);
+                setJdSummary(null);
               }}
               placeholder="Paste role responsibilities and requirements" />
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "-8px" }}>
+              <button
+                type="button"
+                className="button secondary"
+                style={{ padding: "4px 12px", fontSize: "0.8rem", width: "auto" }}
+                disabled={ingestBusy !== null || jobDescription.trim().length < 20}
+                onClick={() => ingestTextContent("jd", jobDescription)}
+              >
+                {ingestBusy === "jd" ? "Extracting..." : "Auto-extract Competencies"}
+              </button>
+            </div>
             {jdSummary ? (
               <div className="extract-review">
                 <p>
@@ -681,8 +774,20 @@ export function SetupForm({
               onChange={(event) => {
                 setResumeText(event.target.value);
                 setResumeReviewed(false);
+                setResumeSummary(null);
               }}
               placeholder="Paste the candidate resume text" />
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "-8px" }}>
+              <button
+                type="button"
+                className="button secondary"
+                style={{ padding: "4px 12px", fontSize: "0.8rem", width: "auto" }}
+                disabled={ingestBusy !== null || resumeText.trim().length < 20}
+                onClick={() => ingestTextContent("resume", resumeText)}
+              >
+                {ingestBusy === "resume" ? "Extracting..." : "Auto-extract Facts"}
+              </button>
+            </div>
             {resumeSummary ? (
               <div className="extract-review">
                 <p>

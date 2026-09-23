@@ -46,7 +46,6 @@ HARD_BLOCK_REASONS: frozenset[str] = frozenset(
     (
         "empty_question",
         "protected_topic",
-        "duplicate_question",
     )
 )
 

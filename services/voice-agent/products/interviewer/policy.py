@@ -202,22 +202,37 @@ def outline_from_definition(
 
     reserved = generic_minutes + project_budget * len(projects)
     remaining = max(competency_floor, duration - reserved)
-    # Recruiter weighting decides how the competency time is split, not an even share.
+    # Base pool of probes to distribute
+    base_probes = 15
     weights = [max(0.0, float(item.get("weight") or 0)) for item in valid]
     weight_total = sum(weights)
     even = max(3, remaining // max(len(valid), 1))
     for item, weight in zip(valid, weights, strict=True):
-        share = (
-            max(3, round(remaining * weight / weight_total))
-            if weight_total > 0
-            else even
-        )
+        if weight_total > 0:
+            share = max(3, round(remaining * weight / weight_total))
+            normalized_weight = (weight / weight_total) * 100
+        else:
+            share = even
+            normalized_weight = 100.0 / max(len(valid), 1)
+
+        scaled_probes = max(2, round(base_probes * (normalized_weight / 100)))
+        if normalized_weight < 20:
+            scaled_depth = 3
+        elif normalized_weight < 40:
+            scaled_depth = 4
+        else:
+            scaled_depth = 5
+
         name = str(item.get("name") or item.get("id") or "competency").strip()
         evidence = [
             str(x).strip()
             for x in (item.get("evidence_expected") or [])
             if str(x).strip()
         ]
+        
+        cfg_depth = item.get("max_depth")
+        cfg_probes = item.get("max_probes")
+
         phases.append(
             {
                 "name": name,
@@ -225,8 +240,9 @@ def outline_from_definition(
                 "topics": evidence[:4] or [name],
                 "source": "jd",
                 "competency_id": item.get("id"),
-                "max_depth": int(item.get("max_depth") or 4),
-                "max_probes": int(item.get("max_probes") or 3),
+                "max_depth": int(cfg_depth) if cfg_depth else scaled_depth,
+                "max_probes": int(cfg_probes) if cfg_probes else scaled_probes,
+                "weight_normalized": normalized_weight,
             }
         )
     phases.append(
@@ -552,7 +568,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         return PolicyDecision(
             action=action,
             forced_flow_decision="probe",
-            allow_llm_decision=False,
+            allow_llm_decision=True,
             current_depth=max(1, min(intent_depth, state.max_depth)),
             max_depth=state.max_depth,
             competency_id=state.competency_id,
@@ -567,7 +583,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         return PolicyDecision(
             action=SLOT_ACTIONS.get(state.target_slot, PROBE_FOR_METHOD),
             forced_flow_decision="probe",
-            allow_llm_decision=False,
+            allow_llm_decision=True,
             current_depth=depth,
             max_depth=state.max_depth,
             competency_id=state.competency_id,
@@ -645,13 +661,18 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
 
 
 def policy_prompt_block(decision: PolicyDecision) -> str:
+    flow_instruction = (
+        "- Flow decision: You may choose to 'probe' or 'advance'."
+        if decision.allow_llm_decision
+        else f"- Flow decision must be: {decision.forced_flow_decision}"
+    )
     return (
         "POLICY ENGINE (authoritative — do not override):\n"
         f"- Required next action: {decision.action}\n"
         f"- Intent: {decision.intent}\n"
         f"- Section: {decision.section}\n"
         f"- Allowed depth now: {decision.current_depth} of {decision.max_depth}\n"
-        f"- Flow decision must be: {decision.forced_flow_decision}\n"
+        f"{flow_instruction}\n"
         f"- Reason: {decision.reason}\n"
         "- Do not jump multiple depth levels.\n"
         "- Do not ask protected-class or prohibited questions.\n"

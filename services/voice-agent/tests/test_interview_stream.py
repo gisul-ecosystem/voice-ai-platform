@@ -582,7 +582,7 @@ async def test_second_probe_moves_to_the_next_project() -> None:
         target_duration_minutes=15,
     )
     flow.focus_item = "Payments Gateway"
-    flow.probe_count = 1
+    flow.probe_count = 3
     async for _ in flow.generate_next_question_stream(
         "I owned checkout on the payments gateway."
     ):

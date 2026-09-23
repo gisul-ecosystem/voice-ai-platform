@@ -22,6 +22,7 @@ export type PublicSessionRequest = {
   idempotencyKey?: string;
   candidateEmail?: string;
   candidateId?: string;
+  candidateProfile?: Record<string, unknown>;
   definitionId?: string;
   startsAt?: string;
   timezone?: string;

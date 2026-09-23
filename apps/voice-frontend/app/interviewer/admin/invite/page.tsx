@@ -27,7 +27,9 @@ export default function InviteCandidatesPage() {
 
   // sessionStorage is client-only; reading it during render breaks hydration.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
     const boot = readDraft();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState(boot.state);
     setError(boot.error);
     setHydrated(true);

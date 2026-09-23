@@ -57,9 +57,12 @@ def is_usable_candidate_turn(
     agent_words = [word for word in agent_words if word]
     if agent_words:
         agent_set = set(agent_words)
-        overlap = sum(1 for word in words if word in agent_set) / len(words)
-        if overlap >= 0.45:
-            return False
+        stop_words = {"what", "the", "you", "that", "how", "i", "can", "are", "is", "a", "of", "and", "in", "to", "did", "my", "your", "it", "this", "on", "for", "with", "as", "at"}
+        filtered_words = [w for w in words if w not in stop_words]
+        if filtered_words:
+            overlap = sum(1 for word in filtered_words if word in agent_set) / len(filtered_words)
+            if overlap >= 0.75:
+                return False
         agent_joined = " ".join(agent_words)
         if len(words) >= 5:
             prefix = " ".join(words[:8])

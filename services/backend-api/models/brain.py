@@ -18,6 +18,7 @@ ClaimType = Literal[
     "employment",
     "internship",
     "project",
+    "topic",
     "skill",
     "certification",
     "achievement",
@@ -173,7 +174,7 @@ class ScenarioDefinition(BaseModel):
     id: str = Field(min_length=2, max_length=64)
     competency_id: str = Field(min_length=2, max_length=64)
     level: SeniorityLevel
-    scenario: str = Field(min_length=8, max_length=2_000)
+    scenario: str = Field(min_length=2, max_length=2_000)
     expected_evidence: list[str] = Field(min_length=1, max_length=12)
     source: Literal["creator", "ai_generated", "question_bank"] = "creator"
     approved: bool = False
@@ -290,6 +291,7 @@ class JobIntelligence(BaseModel):
     tools: list[ExtractedItem] = Field(default_factory=list, max_length=40)
     work_scenarios: list[ExtractedItem] = Field(default_factory=list, max_length=20)
     expected_outcomes: list[ExtractedItem] = Field(default_factory=list, max_length=20)
+    core_competencies: list[str] = Field(default_factory=list, max_length=20)
     raw_job_description: str = Field(min_length=1, max_length=100_000)
     extraction_version: str = Field(default="jd-extractor-v1", max_length=64)
     approved: bool = False
@@ -324,6 +326,7 @@ class CandidateProfile(BaseModel):
     )
     internships: list[ExtractedItem] = Field(default_factory=list, max_length=20)
     projects: list[ExtractedItem] = Field(default_factory=list, max_length=40)
+    topics_studied: list[ExtractedItem] = Field(default_factory=list, max_length=40)
     skills_claimed: list[ExtractedItem] = Field(default_factory=list, max_length=80)
     certifications: list[ExtractedItem] = Field(default_factory=list, max_length=40)
     achievements: list[ExtractedItem] = Field(default_factory=list, max_length=40)

@@ -587,9 +587,18 @@ class InterviewFlow:
         difficulty: str | None = None,
         language: str | None = None,
     ) -> None:
+        if candidate_profile and candidate_profile.get("claims"):
+            projects = [
+                str(claim.get("value") or "").strip()
+                for claim in candidate_profile.get("claims", [])
+                if str(claim.get("type")).lower() == "project" and str(claim.get("value")).strip()
+            ]
+        else:
+            projects = extract_resume_projects(resume_text)
+
         policy_outline = outline_from_definition(
             interview_definition,
-            resume_projects=extract_resume_projects(resume_text),
+            resume_projects=projects,
         )
         self.interview_definition = (
             interview_definition if isinstance(interview_definition, dict) else None
@@ -794,9 +803,14 @@ class InterviewFlow:
         return min(self.max_probes_per_phase, flow_limit)
 
     def _topic_probe_limit(self) -> int:
-        if self._phase_intent() == "resume_project":
-            return 2
-        return 1
+        intent = self._phase_intent()
+        if intent == "resume_project":
+            base = 4
+        elif intent == "jd_requirement":
+            base = 5
+        else:
+            base = 3
+        return min(base, self.max_probes_per_phase)
 
     def _policy_state(self, *, pending_candidate_turn: bool = False) -> PolicyState:
         phase = self.current_phase()
@@ -1363,8 +1377,18 @@ class InterviewFlow:
         return [str(item).strip() for item in probes if str(item).strip()]
 
     def _priority_guidance(self, competency: dict[str, Any]) -> str:
+        current = self.current_phase()
+        weight_norm = float(current.get("weight_normalized") or 0.0)
+        
+        if weight_norm >= 30.0:
+            return (
+                "CRITICAL PRIMARY COMPETENCY — Demand deep algorithmic logic, step-by-step mechanisms, "
+                "time/space complexity, and optimization reasoning. Do not ask behavioral questions or "
+                "generic 'what was challenging' questions. Probe for deep technical depth."
+            )
+
         importance = str(competency.get("importance") or "high").strip().lower()
-        if importance == "high":
+        if importance == "high" or weight_norm >= 15.0:
             return (
                 "must-have — use rigorous, detail-seeking phrasing and press for concrete specifics."
             )

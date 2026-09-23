@@ -86,6 +86,10 @@ function parseRequest(value: unknown): PublicSessionRequest {
     interviewSetup,
     invitationToken,
     idempotencyKey,
+    candidateProfile:
+      body.candidateProfile && typeof body.candidateProfile === "object"
+        ? (body.candidateProfile as Record<string, unknown>)
+        : undefined,
   };
 }
 
@@ -132,6 +136,7 @@ export async function POST(request: Request) {
           job_description: jobDescription,
           resume_text: resumeText,
           interview_setup: input.interviewSetup,
+          candidate_profile: input.candidateProfile,
         }),
         cache: "no-store",
         signal: AbortSignal.timeout(15_000),

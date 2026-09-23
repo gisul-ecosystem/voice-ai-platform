@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 const DRAFT_KEY = "ai-interview:role-draft";
 
@@ -18,6 +19,7 @@ function readDraft(): { state?: DraftState; error: string } {
 }
 
 export default function ReviewAlignmentPage() {
+  const router = useRouter();
   const [hydrated, setHydrated] = useState(false);
   const [state, setState] = useState<DraftState | undefined>(undefined);
   const [selected, setSelected] = useState(0);
@@ -28,7 +30,9 @@ export default function ReviewAlignmentPage() {
 
   // sessionStorage is client-only; reading it during render breaks hydration.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
     const boot = readDraft();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState(boot.state);
     setError(boot.error);
     setHydrated(true);
@@ -36,22 +40,7 @@ export default function ReviewAlignmentPage() {
 
   const competencies = state?.draft && Array.isArray(state.draft.competencies) ? state.draft.competencies as Array<Record<string, unknown>> : [];
   const weightTotal = Math.round(competencies.reduce((sum, item) => sum + (Number(item.weight) || 0), 0) * 100) / 100;
-  // Publishing rejects weights that do not total 100. Scale proportionally so a
-  // recruiter's relative weighting survives; fall back to an even split only
-  // when no weights were set at all.
-  function rebalance(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-    if (items.length === 0) return items;
-    const total = items.reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
-    const scaled = items.map((item) => {
-      const share = total > 0 ? (Number(item.weight) || 0) / total : 1 / items.length;
-      return Math.round(share * 100 * 100) / 100;
-    });
-    // Put any rounding remainder on the last entry so the total is exactly 100.
-    const head = scaled.slice(0, -1);
-    const last = Math.round((100 - head.reduce((sum, value) => sum + value, 0)) * 100) / 100;
-    const weights = [...head, last];
-    return items.map((item, index) => ({ ...item, weight: weights[index] }));
-  }
+
   function update(index: number, patch: Record<string, unknown>) {
     if (!state) return;
     const next = competencies.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
@@ -60,7 +49,7 @@ export default function ReviewAlignmentPage() {
   function remove(index: number) {
     if (!state) return;
     const dropped = String(competencies[index]?.id || "");
-    const next = rebalance(competencies.filter((_, itemIndex) => itemIndex !== index));
+    const next = competencies.filter((_, itemIndex) => itemIndex !== index);
     // Scenarios and ladders key off competency_id; leaving orphans behind fails
     // publication with scenario_unknown_competency.
     setState({ ...state, draft: { ...state.draft, competencies: next, ...prunedRefs(dropped) } });
@@ -103,9 +92,11 @@ export default function ReviewAlignmentPage() {
   }
   async function publish() {
     if (!state || competencies.length === 0) return;
-    // A draft compiled before rebalancing existed can still carry stale weights
-    // and scenarios/ladders pointing at competencies that were removed.
-    const balanced = rebalance(competencies);
+    if (weightTotal !== 100) {
+      setError(`Weights must total exactly 100%. Currently at ${weightTotal}%.`);
+      return;
+    }
+    const balanced = competencies;
     const liveIds = new Set(balanced.map((item) => String(item.id || "")));
     const keepLinked = (key: string) => {
       const list = state.draft[key];
@@ -135,7 +126,7 @@ export default function ReviewAlignmentPage() {
       const publishedState = { ...state, draft, definitionId, published: data };
       setState(publishedState);
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify(publishedState));
-      window.location.assign("/interviewer/admin/invite");
+      router.push("/interviewer/admin/invite");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Publish failed."); }
     finally { setBusy(false); }
   }
@@ -199,11 +190,18 @@ export default function ReviewAlignmentPage() {
         <legend><span className="drag-handle" aria-hidden="true">⠿</span> Competency {selected + 1}</legend>
         <div className="card-order-actions"><button type="button" disabled={selected === 0} onClick={() => move(selected, -1)}>↑</button><button type="button" disabled={selected === competencies.length - 1} onClick={() => move(selected, 1)}>↓</button></div>
         <label>Main topic<input value={String(competency.name || "")} onChange={(e) => update(selected, { name: e.target.value })} /></label>
-        <div className="admin-field-grid"><label>Maximum depth<input type="number" min="1" max="5" value={String(competency.max_depth ?? 4)} onChange={(e) => update(selected, { max_depth: Number(e.target.value) })} /></label><label>Maximum follow-ups<input type="number" min="0" max="8" value={String(competency.max_probes ?? 3)} onChange={(e) => update(selected, { max_probes: Number(e.target.value) })} /></label><label>Weighting %<input type="number" min="0" max="100" step="1" value={String(competency.weight ?? 0)} onChange={(e) => update(selected, { weight: Number(e.target.value) })} /></label></div>
-        <p className="section-help">Weighting decides how much interview time this competency gets and how much it counts in the score. Totals are normalised to 100% on publish{weightTotal !== 100 ? ` (currently ${weightTotal}%)` : ""}.</p>
+        <div className="admin-field-grid"><label>Maximum depth<input type="number" min="1" max="5" value={String(competency.max_depth ?? 4)} onChange={(e) => update(selected, { max_depth: Number(e.target.value) })} /></label><label>Maximum follow-ups<input type="number" min="0" max="8" value={String(competency.max_probes ?? 3)} onChange={(e) => update(selected, { max_probes: Number(e.target.value) })} /></label><label>Weighting %<input type="number" min="0" max="100" step="1" value={String(competency.weight ?? 0)} onChange={(e) => {
+          const val = Number(e.target.value);
+          const otherWeights = competencies.reduce((s, c, i) => i === selected ? s : s + (Number(c.weight) || 0), 0);
+          const maxAllowed = Math.round((100 - otherWeights) * 100) / 100;
+          update(selected, { weight: val > maxAllowed ? maxAllowed : val });
+        }} /></label></div>
+        <p className="section-help" style={{ color: weightTotal !== 100 ? "#d93025" : "inherit" }}>
+          Weighting decides how much interview time this competency gets and how much it counts in the score. Totals must equal exactly 100% on publish{weightTotal !== 100 ? ` (currently ${weightTotal}%)` : ""}.
+        </p>
         <button className="button danger-button" type="button" onClick={() => remove(selected)}>Delete competency</button>
       </fieldset> : null}
-      <div className="admin-page-actions"><span>{competencies.length} competencies · ID {state.definitionId}</span><button className="button primary" disabled={busy || competencies.length === 0} onClick={() => void publish()}>{busy ? "Publishing..." : "Approve and publish"}</button></div>
+      <div className="admin-page-actions"><span>{competencies.length} competencies · ID {state.definitionId}</span><button className="button primary" disabled={busy || competencies.length === 0 || weightTotal !== 100} onClick={() => void publish()}>{busy ? "Publishing..." : "Approve and publish"}</button></div>
     </section>
   </main>;
 }

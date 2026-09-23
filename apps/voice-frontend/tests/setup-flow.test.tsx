@@ -14,8 +14,14 @@ describe("setup to prejoin flow", () => {
       />,
     );
 
+    fireEvent.change(screen.getByLabelText("Interview title"), {
+      target: { value: "Structured interview" },
+    });
     fireEvent.change(screen.getByLabelText("Role"), {
       target: { value: "Backend Engineer" },
+    });
+    fireEvent.change(screen.getByLabelText("Seniority"), {
+      target: { value: "mid" },
     });
     fireEvent.change(screen.getByLabelText("Interview length"), {
       target: { value: "15" },
@@ -32,6 +38,9 @@ describe("setup to prejoin flow", () => {
         value:
           "Five years in Python backends, FastAPI services, and on-call ownership for distributed systems.",
       },
+    });
+    fireEvent.change(screen.getByLabelText("Competencies (comma-separated)"), {
+      target: { value: "Problem solving, Role expertise, Communication" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.change(screen.getByLabelText("Candidate name"), {
@@ -82,6 +91,9 @@ describe("setup to prejoin flow", () => {
         onContinue={vi.fn()}
       />,
     );
+    fireEvent.change(screen.getByLabelText("Interview title"), {
+      target: { value: "Structured interview" },
+    });
     fireEvent.change(screen.getByLabelText("Role"), {
       target: { value: "Backend Engineer" },
     });
@@ -91,6 +103,9 @@ describe("setup to prejoin flow", () => {
     });
     fireEvent.change(screen.getByLabelText("Candidate resume"), {
       target: { value: "also too short" },
+    });
+    fireEvent.change(screen.getByLabelText("Competencies (comma-separated)"), {
+      target: { value: "Problem solving, Role expertise, Communication" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(
