@@ -85,10 +85,71 @@ async def test_session_dispatches_only_supported_workers(
     assert "job_description" not in metadata
     assert "resume_text" not in metadata
     assert "session_id" in metadata
+    # Exactly one worker start — dual RoomAgentDispatch + create_dispatch caused
+    # two openings (candidate heard the voice twice).
+    assert len(FakeLiveKitApi.dispatch_service.created) == 1
 
 
 @pytest.mark.asyncio
-async def test_session_metadata_includes_published_definition(monkeypatch) -> None:
+async def test_session_dispatches_agent_exactly_once(monkeypatch) -> None:
+    """Regression: opening must not be spoken by two workers in one room."""
+    FakeLiveKitApi.room_service = FakeRoomService()
+    FakeLiveKitApi.dispatch_service = FakeAgentDispatchService()
+    monkeypatch.setattr(sessions.api, "LiveKitAPI", FakeLiveKitApi)
+    monkeypatch.setattr(sessions, "_ws_url", lambda: "wss://livekit.test")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "x" * 32)
+    monkeypatch.setattr(
+        sessions.interviews,
+        "create_live_session",
+        _fake_create_live_session,
+    )
+    monkeypatch.setattr(
+        sessions.interviews,
+        "get_context",
+        _fake_get_context,
+    )
+
+    room_configs: list = []
+
+    class TrackingToken:
+        def __init__(self, *_args):
+            pass
+
+        def with_identity(self, *_a, **_k):
+            return self
+
+        def with_name(self, *_a, **_k):
+            return self
+
+        def with_ttl(self, *_a, **_k):
+            return self
+
+        def with_grants(self, *_a, **_k):
+            return self
+
+        def with_room_config(self, config):
+            room_configs.append(config)
+            return self
+
+        def to_jwt(self):
+            return "jwt-test"
+
+    monkeypatch.setattr(sessions.api, "AccessToken", TrackingToken)
+
+    await sessions.create_session(
+        CreateSessionRequest(
+            name="Test Participant",
+            product_id="interviewer",
+            context_id="ctx_1234567890123456",
+        )
+    )
+
+    assert len(FakeLiveKitApi.dispatch_service.created) == 1
+    created = FakeLiveKitApi.room_service.created[0]
+    assert not list(getattr(created, "agents", None) or [])
+    assert room_configs == []
+
     FakeLiveKitApi.room_service = FakeRoomService()
     FakeLiveKitApi.dispatch_service = FakeAgentDispatchService()
     monkeypatch.setattr(sessions.api, "LiveKitAPI", FakeLiveKitApi)

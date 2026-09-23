@@ -209,12 +209,12 @@ class AaptorAgent(Agent):
         model_settings: ModelSettings,
     ):
         candidate_turn = last_text(chat_ctx)
-        opening = not self._opened
+        # Opening TTS is owned exclusively by on_enter — never stream a greeting
+        # from llm_node (that produced a second voice when both paths raced).
+        if not self._opened:
+            return
         candidate_brain_turn_id = None
-        if opening:
-            self._opened = True
-            candidate_turn = None
-        elif not is_usable_candidate_turn(
+        if not is_usable_candidate_turn(
             candidate_turn,
             self._last_agent_text,
             min_words=1 if not self.flow.candidate_turns else 3,
@@ -230,7 +230,7 @@ class AaptorAgent(Agent):
                 turn_id=turn_id,
             )
             return
-        elif candidate_turn:
+        if candidate_turn:
             turn_id = await self._record("candidate", candidate_turn)
             candidate_brain_turn_id = turn_id
         parts: list[str] = []
