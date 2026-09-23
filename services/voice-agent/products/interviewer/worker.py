@@ -236,15 +236,18 @@ def enrich_outline_with_jd(
     job_description: str,
     competencies: list[str] | None = None,
 ) -> dict:
+    """Inject JD regex topics only when not already covered by competencies/phases."""
     required = extract_jd_requirements(job_description, competencies)
     if not required:
         return outline
     phases = [dict(phase) for phase in (outline or {}).get("phases") or []]
+    competency_blob = " ".join(str(item) for item in (competencies or [])).lower()
     mentioned = " ".join(
         f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}"
         for phase in phases
     ).lower()
-    missing = [name for name in required if name.lower() not in mentioned]
+    coverage_blob = f"{mentioned} {competency_blob}"
+    missing = [name for name in required if name.lower() not in coverage_blob]
     if not missing:
         return {**outline, "phases": phases} if phases else outline
     target = None

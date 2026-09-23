@@ -25,7 +25,8 @@ const DEFAULT_VALUE: RoleDraftState = {
   seniority: "junior",
   durationMinutes: "30",
   jobDescription: "",
-  competencies: "Problem solving, Role expertise, Communication",
+  // Empty = optional guidance only. LLM generates the competency structure from JD/role.
+  competencies: "",
   definitionId: "ai-engineer-junior-v1",
   startsAt: defaultStart,
 };
@@ -39,7 +40,7 @@ function draftToForm(state?: RoleDraftState): RoleDraftState {
     seniority: state.seniority || DEFAULT_VALUE.seniority,
     durationMinutes: state.durationMinutes || DEFAULT_VALUE.durationMinutes,
     jobDescription: state.jobDescription || "",
-    competencies: state.competencies || DEFAULT_VALUE.competencies,
+    competencies: state.competencies ?? "",
     startsAt: state.startsAt || defaultStart,
     draft: state.draft,
     published: state.published,
@@ -104,19 +105,47 @@ export default function DesignRolePage() {
     setBusy(true);
     setError("");
     try {
+      const competenciesPayload = form.competencies
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      // #region agent log
+      fetch("http://127.0.0.1:7619/ingest/592842c5-e50e-49f4-b4c6-a3e4948bc915", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": "4e4b73",
+        },
+        body: JSON.stringify({
+          sessionId: "4e4b73",
+          runId: "post-fix",
+          hypothesisId: "A,D",
+          location: "design/page.tsx:generate",
+          message: "client generate payload",
+          data: {
+            title: form.title,
+            role: form.role,
+            seniority: form.seniority,
+            durationMinutes: form.durationMinutes,
+            jdChars: form.jobDescription.trim().length,
+            competenciesSent: competenciesPayload,
+            roleFieldSentToApi: true,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
       const response = await fetch("/api/admin/blueprint", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: "compile",
           title: form.title,
+          role: form.role,
           seniority: form.seniority,
           durationMinutes: Number(form.durationMinutes),
           jobDescription: form.jobDescription,
-          competencies: form.competencies
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
+          competencies: competenciesPayload,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -125,7 +154,21 @@ export default function DesignRolePage() {
           String(data.error || data.detail || "Alignment generation failed."),
         );
       }
-      writeRoleDraft({ ...form, draft: data, published: undefined });
+      // Persist LLM-generated competency names so invite/setup keep interview structure.
+      const generatedNames = Array.isArray(data.competencies)
+        ? (data.competencies as Array<{ name?: string }>)
+            .map((item) => String(item?.name || "").trim())
+            .filter(Boolean)
+        : [];
+      writeRoleDraft({
+        ...form,
+        competencies:
+          generatedNames.length > 0
+            ? generatedNames.join(", ")
+            : form.competencies,
+        draft: data,
+        published: undefined,
+      });
       router.push("/interviewer/admin/review");
     } catch (reason) {
       setError(

@@ -4,7 +4,10 @@ from __future__ import annotations
 import logging
 
 from brain.compiler import compile_blueprint
-from brain.llm_extract import extract_job_intelligence_async
+from brain.llm_extract import (
+    extract_job_intelligence_async,
+    recommend_competencies_async,
+)
 from brain.publish import publish_definition
 from db import definitions, interviews
 from models.brain import DurationMinutes, InterviewDefinitionVersion, SeniorityLevel
@@ -71,8 +74,6 @@ async def publish_and_store(
         target_level=level,
         domain=None,
     )
-    # Recruiter-named competencies are the review payload. Extract APIs never
-    # stamp approved=True; schedule/publish only does so after this explicit list.
     job = job.model_copy(
         update={
             "approved": True,
@@ -85,12 +86,18 @@ async def publish_and_store(
             ),
         }
     )
+    recommended = await recommend_competencies_async(
+        job,
+        title=interview_setup.title,
+        duration_minutes=int(duration),
+        creator_guidance=list(interview_setup.competencies),
+    )
     logger.info(
         "job_intelligence_approved_for_publish",
         extra={
             "event": "job_intelligence_approved_for_publish",
-            "source": "creator_competencies",
-            "competency_count": len(interview_setup.competencies),
+            "source": "llm_recommended" if recommended else "creator_competencies",
+            "competency_count": len(recommended or interview_setup.competencies),
         },
     )
     draft = compile_blueprint(
@@ -100,6 +107,8 @@ async def publish_and_store(
         timezone=timezone,
         duration_minutes=duration,
         creator_competencies=list(interview_setup.competencies),
+        recommended_competencies=recommended or None,
+        creator_exclusive=bool(recommended),
         include_scenarios=False,
     )
     published = publish_definition(draft, published_by=published_by)

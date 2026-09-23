@@ -1736,7 +1736,7 @@ class InterviewFlow:
             "candidate_framing": self._profile_type(),
             "claim_brief": claim_brief(self.candidate_profile, limit=6),
             "claim_guidance": self._claim_guidance(),
-            "jd_excerpt": clip_source_text(self.job_description, 500),
+            "jd_excerpt": clip_source_text(self.job_description, 800),
             "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-3:])
             or "(none yet)",
             "recent_questions": "\n".join(f"- {q}" for q in self.interviewer_turns[-3:])
@@ -1807,7 +1807,7 @@ class InterviewFlow:
                 else:
                     text = str(item).strip()
                 if text:
-                    result.append(text[:80])
+                    result.append(text[:100])
             return "; ".join(result[:limit]) or "(none)"
 
         intelligence = definition.get("job_intelligence")
@@ -1818,8 +1818,14 @@ class InterviewFlow:
             f"Role: {role.get('title', '')} | Level: {role.get('target_level', '')}",
         ]
         if isinstance(intelligence, dict):
-            tools = values(intelligence.get("tools"), 3)
-            skills = values(intelligence.get("skills"), 3)
+            mandatory = values(intelligence.get("mandatory_requirements"), 6)
+            responsibilities = values(intelligence.get("responsibilities"), 4)
+            tools = values(intelligence.get("tools"), 6)
+            skills = values(intelligence.get("skills"), 8)
+            if mandatory != "(none)":
+                lines.append(f"Mandatory: {mandatory}")
+            if responsibilities != "(none)":
+                lines.append(f"Responsibilities: {responsibilities}")
             if tools != "(none)":
                 lines.append(f"Tools: {tools}")
             if skills != "(none)":
@@ -1843,7 +1849,8 @@ class InterviewFlow:
                         lines.append(f"Current objective: {objective[:180]}")
                     break
         lines.append(f"Claims: {claim_brief(self.candidate_profile, limit=6)}")
-        jd = clip_source_text(self.job_description, 400)
+        # Prefer structured fields above; keep a short JD tail for grounding only.
+        jd = clip_source_text(self.job_description, 600)
         if jd:
             lines.append(f"JD: {jd}")
         return "\n".join(lines)[:PUBLISHED_CONTEXT_LIMIT_CHARS]

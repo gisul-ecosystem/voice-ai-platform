@@ -9,6 +9,7 @@ from brain.documents import DocumentIngestError, extract_document_text
 from brain.llm_extract import (
     extract_candidate_profile_async,
     extract_job_intelligence_async,
+    recommend_competencies_async,
 )
 from brain.publish import publish_definition, validate_for_publication
 from db import definitions
@@ -219,13 +220,21 @@ async def compile_interview_blueprint(
     req: CompileBlueprintRequest,
 ) -> InterviewDefinitionDraft:
     try:
+        recommended = await recommend_competencies_async(
+            req.job_intelligence,
+            title=req.title,
+            duration_minutes=int(req.duration_minutes),
+            creator_guidance=list(req.creator_competencies or []),
+        )
         return compile_blueprint(
             job_intelligence=req.job_intelligence,
             title=req.title,
             language=req.language,
             timezone=req.timezone,
             duration_minutes=req.duration_minutes,
-            creator_competencies=req.creator_competencies,
+            creator_competencies=list(req.creator_competencies or []),
+            recommended_competencies=recommended or None,
+            creator_exclusive=bool(recommended),
             resume_required=req.resume_required,
             include_scenarios=req.include_scenarios,
         )

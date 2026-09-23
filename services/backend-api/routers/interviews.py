@@ -174,11 +174,13 @@ def finalize_interview_outline(
             phase["source"] = "generic"
         phase["intent"] = infer_phase_intent(phase)
     required = extract_jd_requirement_topics(job_description, competencies)
+    competency_blob = " ".join(str(item) for item in (competencies or [])).lower()
     mentioned = " ".join(
         f"{phase.get('name') or ''} {' '.join(phase.get('topics') or [])}"
         for phase in phases
     ).lower()
-    missing = [item for item in required if item.lower() not in mentioned]
+    coverage_blob = f"{mentioned} {competency_blob}"
+    missing = [item for item in required if item.lower() not in coverage_blob]
     if missing:
         target = next(
             (phase for phase in phases if phase.get("intent") == "jd_requirement"),
