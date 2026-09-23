@@ -9,15 +9,12 @@ import {
 } from "@/components/interviewer/LandingNav";
 import {
   EMPTY_ROLE_DRAFT,
+  defaultStartsAtLocal,
   getRoleDraftSnapshot,
   subscribeRoleDraft,
   writeRoleDraft,
   type RoleDraftState,
 } from "@/lib/interviewer/role-draft";
-
-const defaultStart = new Date(Date.now() + 10 * 60_000)
-  .toISOString()
-  .slice(0, 16);
 
 const DEFAULT_VALUE: RoleDraftState = {
   title: "AI Engineer interview",
@@ -27,11 +24,12 @@ const DEFAULT_VALUE: RoleDraftState = {
   jobDescription: "",
   competencies: "Problem solving, Role expertise, Communication",
   definitionId: "ai-engineer-junior-v1",
-  startsAt: defaultStart,
+  startsAt: defaultStartsAtLocal(),
 };
 
 function draftToForm(state?: RoleDraftState): RoleDraftState {
-  if (!state) return { ...DEFAULT_VALUE, startsAt: defaultStart };
+  const startsAt = defaultStartsAtLocal();
+  if (!state) return { ...DEFAULT_VALUE, startsAt };
   return {
     definitionId: state.definitionId || DEFAULT_VALUE.definitionId,
     title: state.title || DEFAULT_VALUE.title,
@@ -40,7 +38,7 @@ function draftToForm(state?: RoleDraftState): RoleDraftState {
     durationMinutes: state.durationMinutes || DEFAULT_VALUE.durationMinutes,
     jobDescription: state.jobDescription || "",
     competencies: state.competencies || DEFAULT_VALUE.competencies,
-    startsAt: state.startsAt || defaultStart,
+    startsAt: state.startsAt || startsAt,
     draft: state.draft,
     published: state.published,
   };
@@ -117,6 +115,8 @@ export default function DesignRolePage() {
             .split(",")
             .map((item) => item.trim())
             .filter(Boolean),
+          timezone:
+            Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
         }),
       });
       const data = await response.json().catch(() => ({}));

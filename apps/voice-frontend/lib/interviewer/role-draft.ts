@@ -34,6 +34,16 @@ export const ROLE_DRAFT_LOAD_ERROR: RoleDraftBundle = {
 let snapshotCache: { raw: string | null; value: RoleDraftBundle } | null =
   null;
 
+/** Local `YYYY-MM-DDTHH:mm` for `<input type="datetime-local">`. */
+export function toLocalDateTimeValue(date: Date): string {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+export function defaultStartsAtLocal(from: Date = new Date()): string {
+  return toLocalDateTimeValue(new Date(from.getTime() + 10 * 60_000));
+}
+
 export function invalidateRoleDraftCache(): void {
   snapshotCache = null;
 }
@@ -62,4 +72,44 @@ export function getRoleDraftSnapshot(): RoleDraftBundle {
 /** Noop subscribe — sessionStorage has no change events we need for the wizard. */
 export function subscribeRoleDraft(): () => void {
   return () => undefined;
+}
+
+export type SavedDefinitionSummary = {
+  definition_id: string;
+  title: string;
+  role: string;
+  seniority: string;
+  duration_minutes: number;
+  timezone: string;
+  competencies: string[];
+  job_description: string;
+  published_at?: string | null;
+  published_by?: string | null;
+};
+
+/** Hydrate wizard state from a Mongo-published definition so Invite can reuse it. */
+export function roleDraftFromSavedDefinition(
+  item: SavedDefinitionSummary,
+  startsAt: string = defaultStartsAtLocal(),
+): RoleDraftState {
+  const definitionId = item.definition_id;
+  return {
+    definitionId,
+    title: item.title || "Interview",
+    role: item.role || item.title || "Role",
+    seniority: item.seniority || "mid",
+    durationMinutes: String(item.duration_minutes || 30),
+    jobDescription: item.job_description || "",
+    competencies: (item.competencies || []).join(", "),
+    startsAt,
+    draft: {
+      title: item.title,
+      reused_definition_id: definitionId,
+    },
+    published: {
+      definition_id: definitionId,
+      title: item.title,
+      status: "published",
+    },
+  };
 }

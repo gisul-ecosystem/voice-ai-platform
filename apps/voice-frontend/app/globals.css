@@ -1766,6 +1766,71 @@ select:focus-visible,
   border: 0;
 }
 
+.saved-interviewers {
+  margin-top: 28px;
+  padding: 28px 0 8px;
+  border-top: 1px solid var(--border);
+}
+
+.saved-interviewers-head {
+  max-width: 640px;
+  margin-bottom: 18px;
+}
+
+.saved-interviewers-head h2 {
+  margin: 6px 0 8px;
+  font-size: clamp(1.35rem, 2vw, 1.7rem);
+}
+
+.saved-interviewers-head p,
+.saved-interviewers-muted {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.saved-interviewer-list {
+  list-style: none;
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+}
+
+.saved-interviewer-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.saved-interviewer-list li p {
+  margin: 4px 0 6px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.saved-definition-id {
+  display: inline-block;
+  color: var(--muted);
+  font: 500 0.72rem var(--font-geist-mono), monospace;
+}
+
+.invite-schedule-field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.invite-schedule-field .field-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .demo-page {
   width: min(1120px, calc(100% - 40px));
   min-height: 100dvh;
@@ -2255,6 +2320,11 @@ select:focus-visible,
   .trust-strip div {
     border-right: 0;
     border-bottom: 1px solid var(--border);
+  }
+
+  .saved-interviewer-list li {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .interview-workspace {

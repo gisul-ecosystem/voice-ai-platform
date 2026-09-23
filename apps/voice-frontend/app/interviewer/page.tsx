@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LandingNav } from "@/components/interviewer/LandingNav";
+import { SavedInterviewers } from "@/components/interviewer/SavedInterviewers";
 
 export default function InterviewerPage() {
   return (
@@ -27,7 +28,7 @@ export default function InterviewerPage() {
             <Link className="button primary" href="/interviewer/admin/design">
               Create an interview
             </Link>
-            <span>Candidates join through their secure invitation link.</span>
+            <span>Or reuse a saved interview below to invite more candidates.</span>
           </div>
         </div>
         <aside className="journey-overview" aria-label="Interview journey">
@@ -79,6 +80,8 @@ export default function InterviewerPage() {
           <span>Credentials stay server-side</span>
         </div>
       </section>
+
+      <SavedInterviewers />
     </main>
   );
 }
