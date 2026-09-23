@@ -65,9 +65,6 @@ CLOSING_MESSAGE = (
     "Thank you for your time and for sharing your experience. "
     "This concludes the interview."
 )
-FALLBACK_FOLLOWUP = (
-    "Let's move on — I'd like to explore the next topic."
-)
 
 INTERVIEWER_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Behave like a thoughtful human in the room, not a script or a form. Invent every spoken line yourself from the materials below.
 
@@ -144,6 +141,10 @@ _SECTION_HEADINGS = re.compile(
     r"(?im)^\s*(projects?|key projects|selected projects|academic projects|"
     r"personal projects|work experience|professional experience|experience)\s*:?\s*$"
 )
+_EXPERIENCE_HEADINGS = re.compile(
+    r"(?im)^\s*(work experience|professional experience|experience|internship|"
+    r"internships)\s*:?\s*$"
+)
 _NEXT_HEADING = re.compile(
     r"(?im)^\s*(education|skills|technical skills|certifications|awards|"
     r"publications|summary|objective|interests|languages|competencies)\s*:?\s*$"
@@ -180,56 +181,130 @@ def _project_title(raw: str) -> str:
 
 
 def extract_resume_projects(resume_text: str) -> list[str]:
+    """Two-pass extraction:
+
+    Pass 1 — scan only explicit project headings (Projects, Technical Projects, etc.).
+             Return immediately if >= 1 project found. This ensures real projects
+             always take priority over work-experience bullets regardless of resume order.
+    Pass 2 — only when Pass 1 finds nothing: scan work/experience sections for
+             project-like entries using the stricter _looks_like_project_title_in_experience filter.
+    """
     lines = (resume_text or "").splitlines()
-    titles: list[str] = []
-    in_section = False
-    for line in lines:
-        if _SECTION_HEADINGS.match(line):
-            in_section = True
-            continue
-        inline = _INLINE_PROJECTS.match(line)
-        if inline:
-            rest = re.split(
-                r"(?i)\b(skills|education|experience|certifications)\b",
-                inline.group(1),
-                maxsplit=1,
-            )[0]
-            for part in re.split(r"[;•]|\s+\|\s+", rest):
-                title = _project_title(part)
-                if title and title.lower() not in {"project", "projects"}:
-                    titles.append(title)
-            continue
-        if in_section and _NEXT_HEADING.match(line):
-            in_section = False
-            continue
-        labeled = _PROJECT_LABEL.match(line)
-        if labeled:
-            title = _project_title(labeled.group(1))
-            if title:
-                titles.append(title)
-            continue
-        if in_section:
-            bullet = _BULLET.match(line)
-            candidate = bullet.group(1) if bullet else line.strip()
-            # A wrapped description continues the previous entry; treating it as
-            # its own project produces mid-sentence fragments like
-            # "against Stripe payouts, cutting manual reconciliation from 6".
-            if not bullet and candidate[:1].islower():
+
+    _PROJECT_ONLY_HEADINGS = re.compile(
+        r"(?im)^\s*(projects?|key projects?|selected projects?|academic projects?|"
+        r"technical projects?|personal projects?|major projects?|relevant projects?|"
+        r"projects?\s*[&/]\s*experience)\s*:?\s*$"
+    )
+
+    def _extract_from_section(lines: list[str], heading_pattern, *, strict_filter: bool) -> list[str]:
+        titles: list[str] = []
+        in_section = False
+        for line in lines:
+            if heading_pattern.match(line):
+                in_section = True
                 continue
-            title = _project_title(candidate)
-            if title and not _NEXT_HEADING.match(title):
-                titles.append(title)
-    seen: set[str] = set()
-    unique: list[str] = []
-    for title in titles:
+            inline = _INLINE_PROJECTS.match(line)
+            if inline:
+                rest = re.split(
+                    r"(?i)\b(skills|education|experience|certifications)\b",
+                    inline.group(1),
+                    maxsplit=1,
+                )[0]
+                for part in re.split(r"[;•]|\s+\|\s+", rest):
+                    title = _project_title(part)
+                    if title and title.lower() not in {"project", "projects"}:
+                        titles.append(title)
+                continue
+            if in_section and _NEXT_HEADING.match(line):
+                in_section = False
+                continue
+            labeled = _PROJECT_LABEL.match(line)
+            if labeled:
+                title = _project_title(labeled.group(1))
+                if title:
+                    titles.append(title)
+                continue
+            if in_section:
+                bullet = _BULLET.match(line)
+                candidate = bullet.group(1) if bullet else line.strip()
+                if not bullet and candidate[:1].islower():
+                    continue
+                if strict_filter and not _looks_like_project_title_in_experience(candidate):
+                    continue
+                title = _project_title(candidate)
+                if title and not _NEXT_HEADING.match(title):
+                    titles.append(title)
+        return titles
+
+    # Pass 1: explicit project headings only — no experience bullets
+    pass1 = _extract_from_section(lines, _PROJECT_ONLY_HEADINGS, strict_filter=False)
+    if pass1:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for title in pass1:
+            key = title.lower()
+            if key not in seen and key not in {"project", "projects"}:
+                seen.add(key)
+                unique.append(title)
+                if len(unique) >= 12:
+                    break
+        return unique
+
+    # Pass 2: nothing in project sections — scan work/experience with strict filter
+    pass2 = _extract_from_section(lines, _SECTION_HEADINGS, strict_filter=True)
+    seen = set()
+    unique = []
+    for title in pass2:
         key = title.lower()
-        if key in seen or key in {"project", "projects"}:
-            continue
-        seen.add(key)
-        unique.append(title)
-        if len(unique) >= 12:
-            break
+        if key not in seen and key not in {"project", "projects"}:
+            seen.add(key)
+            unique.append(title)
+            if len(unique) >= 12:
+                break
     return unique
+
+
+_PROJECT_KEYWORD_IN_EXPERIENCE = re.compile(
+    r"(?i)\b(built|developed|implemented|designed|created|engineered|"
+    r"architected|shipped|launched|wrote|led|project[:\s])\b"
+)
+_SHORT_CAPITALISED_TITLE = re.compile(r"^[A-Z][A-Za-z0-9 \-/&+#.]{2,60}$")
+_ARTICLE = re.compile(r"^(the|a|an)\s+", re.IGNORECASE)
+
+
+def _looks_like_project_title_in_experience(text: str) -> bool:
+    """Return True only when a line inside a work-experience section looks like
+    a named project rather than a generic job-duty bullet.
+
+    Accepts:
+    - Short capitalised names (e.g. "AI Interview Platform", "Payment Retry Service")
+    - Bullets that explicitly name a project keyword followed by a proper noun
+      (allowing articles: "Built the Orion billing reconciler")
+
+    Rejects:
+    - Generic duty bullets ("Collaborated with team...", "Improved latency by 30%...")
+    - Company/role lines ("Software Engineer at Google")
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    # Short capitalised multi-word title with no verb — likely a project name
+    words = stripped.split()
+    if len(words) <= 6 and _SHORT_CAPITALISED_TITLE.match(stripped):
+        if re.search(r"\b(at|@|for|with|intern|engineer|developer|analyst)\b", stripped, re.I):
+            return False
+        return True
+    # Bullet explicitly names a project using project keywords
+    match = _PROJECT_KEYWORD_IN_EXPERIENCE.search(stripped)
+    if match:
+        # Strip the keyword and any leading article to find the project noun
+        remainder = stripped[match.end():].strip()
+        remainder = _ARTICLE.sub("", remainder).strip()
+        # Must start with a capitalised word (the project name)
+        if remainder and remainder[0].isupper():
+            return True
+    return False
 
 
 INTENT_VALUES = {"intro", "resume_project", "jd_requirement", "role_fit"}
@@ -910,7 +985,15 @@ class InterviewFlow:
             for item in self.phases
             if item.get("competency_id")
         ]
-        gap_id = first_incomplete_competency(self.coverage, competency_ids)
+        # Gap check must only look at competencies whose phase is still ahead —
+        # never re-enter a competency whose phase we've already passed, even if
+        # it was partially covered. Re-entry causes the SQL→ML→SQL zigzag pattern.
+        ahead_competency_ids = [
+            str(item.get("competency_id"))
+            for index, item in enumerate(self.phases)
+            if item.get("competency_id") and index >= self.phase_index
+        ]
+        gap_id = first_incomplete_competency(self.coverage, ahead_competency_ids)
         return PolicyState(
             candidate_turn_count=len(self.candidate_turns)
             + (1 if pending_candidate_turn else 0),
@@ -951,7 +1034,14 @@ class InterviewFlow:
         return None
 
     def _warmup_budget_exhausted(self) -> bool:
+        # Only count turns spent in the opening/intro phase as warmup.
+        # The resume_project phase is a deliberate 3-4 minute block that must
+        # run to its own probe ceiling — do NOT cut it short with this budget.
         if len(self.candidate_turns) < 1:
+            return False
+        if self._phase_intent() == "resume_project":
+            # Already past opening; warmup is definitionally over but we must
+            # not force-jump away from the project phase mid-conversation.
             return False
         elapsed = max(0, int(time.monotonic() - self.started_at))
         return (
@@ -1209,6 +1299,10 @@ class InterviewFlow:
             competency_id = self.current_phase().get("competency_id")
             if not competency_id:
                 return self.probe_count >= min(2, self.max_probes_per_phase)
+            # Hard gate: never leave a competency phase with zero real turns.
+            # probe_count==0 means the LLM hasn't asked a single real question yet.
+            if self.probe_count == 0:
+                return False
             missing = list((self.coverage.get(str(competency_id)) or {}).get("missing_intents") or [])
             ledger_entry = self.evidence_ledger.get(str(competency_id))
             if ledger_entry is not None and not ledger_entry.is_satisfied():
@@ -1600,12 +1694,64 @@ class InterviewFlow:
             return "ml"
         if any(token in blob for token in ("sql", "database", "postgres", "mysql")):
             return "sql"
+        if any(token in blob for token in ("deep learning", "neural", "cnn", "rnn", "transformer")):
+            return "deep_learning"
+        if any(token in blob for token in ("data preprocess", "preprocessing", "feature engineering", "eda")):
+            return "data_preprocessing"
+        # Soft/vague competency names — "Learning", "Growth", "Experience", etc.
+        # These map to "generic" and get JD-driven guidance instead of literal use.
         return "generic"
+
+    # Soft competency names that produce "what did you learn?" questions when used literally.
+    _SOFT_COMPETENCY_NAMES = frozenset({
+        "learning", "growth", "experience", "soft skills", "communication",
+        "teamwork", "attitude", "mindset", "adaptability", "curiosity",
+    })
+
+    def _normalise_competency_for_prompt(
+        self, competency: dict | None, *, jd_excerpt: str = ""
+    ) -> dict:
+        """Return a copy of competency with a JD-grounded definition when the
+        name is a soft/vague word that would make the LLM ask generic learning questions.
+        """
+        if not isinstance(competency, dict):
+            return competency or {}
+        name = str(competency.get("name") or "").strip().lower()
+        if name not in self._SOFT_COMPETENCY_NAMES:
+            return competency
+        # Replace soft name with a JD-grounded technical definition so the LLM
+        # asks about real skills instead of "what did you learn?".
+        jd_signals = [s.strip() for s in re.findall(r"[A-Za-z][A-Za-z+# ]{2,20}", jd_excerpt or "")
+                      if len(s.strip()) > 3][:6]
+        jd_hint = ", ".join(jd_signals) if jd_signals else "the technical skills relevant to this role"
+        grounded_def = (
+            f"Assess how the candidate has actively built and applied technical skills "
+            f"relevant to the JD — specifically: {jd_hint}. "
+            f"Ask about a recent concept or tool they studied and applied, "
+            f"not generic learning habits."
+        )
+        return {
+            **competency,
+            "definition": grounded_def,
+            "name": competency.get("name", name),  # keep original display name
+            "_soft_name_normalised": True,
+        }
 
     def _competency_question_guidance(self, competency: dict | None = None) -> str:
         level = self._job_target_level().strip().lower()
         junior = level in {"intern", "junior", "entry", "entry_level"}
         senior = level in {"senior", "lead", "staff", "principal"}
+        # If this competency was soft-name-normalised, direct the LLM explicitly.
+        if isinstance(competency, dict) and competency.get("_soft_name_normalised"):
+            name = str(competency.get("name") or "this competency").strip()
+            return (
+                f"The competency '{name}' is a soft/growth competency. "
+                "Ask about a specific technical concept, tool, or framework the candidate "
+                "has recently studied and applied. Do NOT ask generic questions like "
+                "'what did you learn?' or 'what was your learning experience?'. "
+                "Ask about concrete technical knowledge: e.g. a framework feature, "
+                "algorithm concept, or debugging technique they picked up and used."
+            )
         family = self._competency_family(competency)
         if family == "dsa":
             if junior:
@@ -1631,19 +1777,31 @@ class InterviewFlow:
             if senior:
                 return "This is a SQL competency. Ask about schema design, consistency, or query planning."
             return "This is a SQL competency. Ask about window functions, indexes, or EXPLAIN."
+        if family == "deep_learning":
+            if junior:
+                return "This is a deep learning competency. Ask about neural network basics, activation functions, or backpropagation."
+            if senior:
+                return "This is a deep learning competency. Ask about architecture choices, training stability, or deployment trade-offs."
+            return "This is a deep learning competency. Ask about CNNs, RNNs, regularisation, or transfer learning."
+        if family == "data_preprocessing":
+            if junior:
+                return "This is a data preprocessing competency. Ask about handling missing values, normalisation, or encoding."
+            if senior:
+                return "This is a data preprocessing competency. Ask about pipeline design, leakage prevention, or feature selection strategy."
+            return "This is a data preprocessing competency. Ask about feature engineering, scaling, or class imbalance."
         if junior:
             return (
                 "Ask a concrete, accessible question from the current competency definition. "
-                "Do not default to a DSA puzzle."
+                "Do not default to a DSA puzzle. Do not ask generic learning questions."
             )
         if senior:
             return (
                 "Ask a judgment or trade-off question from the current competency definition. "
-                "Do not default to a DSA puzzle."
+                "Do not default to a DSA puzzle. Do not ask generic learning questions."
             )
         return (
             "Ask an applied question from the current competency definition. "
-            "Do not default to a DSA puzzle."
+            "Do not default to a DSA puzzle. Do not ask generic learning questions."
         )
 
     def _resume_project_context(self) -> str:
@@ -1690,6 +1848,11 @@ class InterviewFlow:
         )
         competency_id = decision.competency_id if decision else None
         competency = competency_by_id(self.interview_definition, competency_id)
+        # Normalise soft/vague competency names so the LLM doesn't produce
+        # generic "what did you learn?" questions for competencies named "Learning".
+        competency = self._normalise_competency_for_prompt(
+            competency, jd_excerpt=self.job_description
+        )
         steps = ladder_steps(self.interview_definition, competency_id)
         intent = (decision.intent if decision else "opening") or "opening"
         objective = next(
@@ -1813,7 +1976,7 @@ class InterviewFlow:
             "candidate_framing": self._profile_type(),
             "claim_brief": claim_brief(self.candidate_profile)
             if include_resume_materials
-            else "(do not reference resume claims on this competency turn)",
+            else "RESUME CLOSED: Do NOT reference resume claims, projects, or employers this turn. Ask a standalone technical question.",
             "claim_guidance": self._claim_guidance() if include_resume_materials else "",
             "resume_excerpt": clip_source_text(self.resume_text, 800)
             if include_resume_materials
@@ -1830,19 +1993,20 @@ class InterviewFlow:
             "framing_notes": framing_notes(self._profile_type(), self._job_target_level()),
             "language_note": self._language_note(),
             "role_title": str(role.get("title") or ""),
+            "admin_competency_order": self._admin_competency_order_text(),
         }
         system = prompt_pack(self._prompt_version())
         if last_candidate_turn:
             self._validate_prompt_briefing(briefing, TURN_INSTRUCTIONS_V2, "TURN_INSTRUCTIONS_V2")
             compact = dict(briefing)
             template = TURN_INSTRUCTIONS_V2.format_map(compact)
-            for published_limit, structure_limit, jd_limit in (
-                (2_400, 1_200, 2_000),
-                (900, 400, 400),
-                (400, 240, 200),
-                (180, 120, 120),
-                (100, 60, 60),
-                (0, 0, 0),
+            for published_limit, structure_limit, jd_limit, facts_limit, turns_limit in (
+                (2_400, 1_200, 2_000, 800, 400),
+                (900, 400, 400, 400, 200),
+                (400, 240, 200, 200, 100),
+                (180, 120, 120, 100, 60),
+                (100, 60, 60, 60, 40),
+                (0, 0, 0, 0, 0),
             ):
                 if len(system) + len(template) + 2 <= TURN_PROMPT_BUDGET_CHARS:
                     break
@@ -1856,6 +2020,15 @@ class InterviewFlow:
                 compact["resume_excerpt"] = clip_source_text(
                     briefing["resume_excerpt"], min(160, jd_limit)
                 ) if jd_limit else "(omitted for brevity)"
+                compact["known_facts"] = clip_source_text(
+                    briefing.get("known_facts", ""), facts_limit
+                ) if facts_limit else "(omitted for brevity)"
+                compact["recent_turns"] = clip_source_text(
+                    briefing.get("recent_turns", ""), turns_limit
+                ) if turns_limit else "(omitted)"
+                compact["recent_questions"] = clip_source_text(
+                    briefing.get("recent_questions", ""), turns_limit
+                ) if turns_limit else "(omitted)"
                 template = TURN_INSTRUCTIONS_V2.format_map(compact)
             return system + "\n\n" + template, last_candidate_turn
         self._validate_prompt_briefing(briefing, OPENING_INSTRUCTIONS_V2, "OPENING_INSTRUCTIONS_V2")
@@ -1885,6 +2058,34 @@ class InterviewFlow:
         if self.last_answer_quality == "sufficient":
             return "increase depth by at most one level or move to the next uncovered topic"
         return "continue with the policy-required intent"
+
+    def _admin_competency_order_text(self) -> str:
+        """Numbered list of admin-defined competencies with CURRENT / done markers.
+
+        Injected into every turn prompt so the LLM knows:
+        - the exact order the admin set
+        - which competency it is currently on
+        - which ones are already done
+        - which ones are still upcoming
+
+        Only competency phases are listed (opening/project/closing phases are excluded).
+        """
+        lines: list[str] = []
+        count = 0
+        for i, phase in enumerate(self.phases):
+            cid = phase.get("competency_id")
+            if not cid:
+                continue
+            count += 1
+            name = str(phase.get("name") or cid).strip()
+            if i == self.phase_index:
+                marker = " <- CURRENT"
+            elif i < self.phase_index:
+                marker = " (done)"
+            else:
+                marker = ""
+            lines.append(f"{count}. {name}{marker}")
+        return "\n".join(lines) or "(no competencies defined by admin)"
 
     def _interview_structure_text(self, *, redact_resume_projects: bool = False) -> str:
         lines: list[str] = []
@@ -1973,25 +2174,198 @@ class InterviewFlow:
         lines.append(clip_source_text(self.job_description, 3000))
         return "\n".join(lines)[:PUBLISHED_CONTEXT_LIMIT_CHARS]
 
-    def _soft_advance_speech(self, policy: PolicyDecision | None) -> str:
-        nxt = self.next_phase()
-        name = (
-            str((nxt or {}).get("name") or "").strip()
-            or str((policy.competency_id if policy else "") or "").strip()
-            or "this area"
+    async def _emergency_llm_question(self, policy: "PolicyDecision | None") -> str:
+        """Third-tier LLM call — only fires when both the main prompt and
+        _retry_with_minimal_prompt() have failed (network crash, API down, etc.).
+
+        Uses an ultra-minimal prompt grounded in the current phase and the last
+        two candidate answers. Returns empty string on triple failure — the agent
+        stays silent and waits for the candidate to speak next.
+        NEVER returns a hardcoded template string.
+        """
+        phase = self.current_phase()
+        intent = self._phase_intent()
+        comp_name = (
+            str(phase.get("project_name") or "")
+            or str((policy.competency_id if policy else "") or "").replace("_", " ")
+            or str(phase.get("name") or "this topic")
+        ).strip()
+        last_answers = "\n".join(f"- {t}" for t in self.candidate_turns[-2:]) or "(none)"
+        recent_qs = "\n".join(f"- {q}" for q in self.interviewer_turns[-4:]) or "(none)"
+
+        if intent == "resume_project":
+            system = (
+                f"You are a technical interviewer. Ask ONE specific question about "
+                f"the candidate's project '{comp_name}'. "
+                "Base it only on what the candidate just said. "
+                "Do NOT ask a generic question. Do NOT repeat any question listed below. "
+                "Output only the spoken question, no JSON.\n\n"
+                f"Questions already asked:\n{recent_qs}"
+            )
+        else:
+            system = (
+                f"You are a technical interviewer assessing '{comp_name}'. "
+                "Ask ONE standalone technical question about this topic. "
+                "No project references. Do NOT repeat questions below. "
+                "Output only the spoken question, no JSON.\n\n"
+                f"Questions already asked:\n{recent_qs}"
+            )
+        user = f"Candidate's last answers:\n{last_answers}\n\nAsk the next question."
+        try:
+            raw = await self.llm_client.generate_reply(
+                [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                extra_body={"max_completion_tokens": 150},
+            )
+            question = (raw or "").strip().strip('"')
+            if question and "?" in question:
+                logger.info(
+                    "emergency_llm_ok",
+                    extra={"event": "emergency_llm_ok", "intent": intent, "comp": comp_name},
+                )
+                return question
+        except Exception:
+            logger.exception(
+                "emergency_llm_failed",
+                extra={"event": "emergency_llm_failed"},
+            )
+        # All three LLM tiers failed — stay silent, never speak a template
+        logger.warning(
+            "all_llm_attempts_failed_silence",
+            extra={"event": "all_llm_attempts_failed_silence", "intent": intent},
         )
-        self._used_soft_advance = True
-        options = [
-            f"Let's move on. Could you walk me through your technical approach to {name}?",
-            f"Let's move on. How do you typically approach problem-solving when working with {name}?",
-            f"Let's move on. Could you describe a challenging technical problem you solved involving {name}?",
-            f"Let's move on. What key considerations do you keep in mind when working with {name}?",
-        ]
-        asked = {q.strip().lower() for q in self.interviewer_turns}
-        for opt in options:
-            if opt.strip().lower() not in asked:
-                return opt
-        return options[0]
+        return ""
+
+
+    async def _retry_with_minimal_prompt(
+        self,
+        last_candidate_turn: str,
+        policy: PolicyDecision | None,
+    ) -> str:
+        """One LLM retry with a stripped-down prompt when the full prompt failed.
+
+        Builds a minimal but contextual prompt so the question is still grounded
+        in the current competency and the candidate's last answer — never a canned phrase.
+        Only called on exception; never on validation failure (that path already retries).
+        """
+        phase = self.current_phase()
+        intent = self._phase_intent()
+        competency_name = str(phase.get("name") or "").strip() or "the current topic"
+        jd_excerpt = (self.job_description or "")[:800]
+        last_answer = (last_candidate_turn or "").strip()[:600]
+        recent_qs = "\n".join(f"- {q}" for q in self.interviewer_turns[-4:]) or "(none)"
+
+        if intent == "resume_project":
+            focus = self.focus_item or competency_name
+            project_ctx = resume_project_excerpt(self.resume_text, focus)
+            minimal_system = (
+                "You are a live technical interviewer. Ask one clear, specific question "
+                f"about the candidate's project: {focus}. "
+                "Use the resume facts below. Do not ask about internships or general background. "
+                "Do not repeat a question already asked. Speak naturally, 1-2 sentences.\n\n"
+                f"Resume facts for {focus}:\n{project_ctx}\n\n"
+                f"Questions already asked:\n{recent_qs}"
+            )
+        else:
+            minimal_system = (
+                "You are a live technical interviewer. Ask one clear, standalone technical question "
+                f"about: {competency_name}. "
+                "Do not reference resume projects. Do not repeat a question already asked. "
+                f"Job context: {jd_excerpt[:400]}\n\n"
+                f"Questions already asked:\n{recent_qs}"
+            )
+        minimal_user = f"Candidate's last answer:\n{last_answer}\n\nAsk the next question."
+        try:
+            raw = await self.llm_client.generate_reply(
+                [
+                    {"role": "system", "content": minimal_system},
+                    {"role": "user", "content": minimal_user},
+                ],
+                extra_body={"max_completion_tokens": 256},
+            )
+            # Parse JSON if the model returned it, otherwise use plain text
+            parsed = parse_generated_question(raw)
+            question = (parsed.question if parsed else "").strip() or (raw or "").strip()
+            # Strip any JSON wrapper the model may have emitted
+            if question.startswith("{"):
+                import json as _json
+                try:
+                    obj = _json.loads(question)
+                    question = str(obj.get("question") or "").strip()
+                except Exception:
+                    pass
+            if not question:
+                return ""
+            logger.info(
+                "stage2_question_retry_minimal",
+                extra={
+                    "event": "stage2_question_retry_minimal",
+                    "intent": intent,
+                    "competency": competency_name,
+                },
+            )
+            return question
+        except Exception:
+            logger.exception(
+                "stage2_question_retry_minimal_failed",
+                extra={"event": "stage2_question_retry_minimal_failed"},
+            )
+            return ""
+
+    async def _emergency_llm_question(self, policy: PolicyDecision | None) -> str:
+        """Third-tier LLM call. Fires only when main prompt AND _retry_with_minimal_prompt
+        have both failed (or when validator rejects a question and no soft spoken fallback is permitted).
+
+        Ultra-minimal prompt: competency name + last 2 candidate answers + recent questions.
+        If this also fails -> return "" (silence, never a template string).
+        """
+        phase = self.current_phase()
+        intent = self._phase_intent()
+        comp_name = (
+            str(phase.get("project_name") or "")
+            or (str((policy.competency_id or "").replace("_", " ")) if policy else "")
+            or str(phase.get("name") or "this topic")
+        ).strip()
+        last_answers = "\n".join(f"- {t}" for t in self.candidate_turns[-2:]) or "(none)"
+        recent_qs = "\n".join(f"- {q}" for q in self.interviewer_turns[-4:]) or "(none)"
+
+        if intent == "resume_project":
+            system = (
+                f"You are a technical interviewer. Ask ONE specific question about "
+                f"the candidate's project '{comp_name}'. Base it on what they just said. "
+                "Do not repeat any question listed below. Output the question only.\n\n"
+                f"Questions already asked:\n{recent_qs}"
+            )
+        else:
+            system = (
+                f"You are a technical interviewer assessing '{comp_name}'. "
+                "Ask ONE standalone technical question. No project references. "
+                "Do not repeat questions below. Output the question only.\n\n"
+                f"Questions already asked:\n{recent_qs}"
+            )
+        user = f"Candidate's last answers:\n{last_answers}\n\nAsk the next question."
+        try:
+            raw = await self.llm_client.generate_reply(
+                [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                extra_body={"max_completion_tokens": 150},
+            )
+            parsed = parse_generated_question(raw)
+            question = (parsed.question if parsed else "").strip() or (raw or "").strip()
+            if question.startswith("{"):
+                import json as _json
+                try:
+                    obj = _json.loads(question)
+                    question = str(obj.get("question") or "").strip()
+                except Exception:
+                    pass
+            if question.startswith('"') and question.endswith('"'):
+                question = question[1:-1].strip()
+            if question and "?" in question:
+                logger.info("emergency_llm_ok", extra={"event": "emergency_llm_ok"})
+                return question
+        except Exception:
+            logger.exception("emergency_llm_failed", extra={"event": "emergency_llm_failed"})
+        logger.warning("all_llm_failed_silence", extra={"event": "all_llm_failed_silence"})
+        return ""
 
     def _fallback_spoken_question(
         self,
@@ -2000,11 +2374,18 @@ class InterviewFlow:
         *,
         last_turn: str | None = None,
     ) -> str:
+        """Deterministic fallback used only by offline replay testing (replay.py).
+
+        Never called in live interview turns (live turns use _emergency_llm_question).
+        """
         del last_candidate_turn, last_turn
-        if not self.policy_mode:
-            self._used_soft_advance = True
-            return FALLBACK_FOLLOWUP
-        return self._soft_advance_speech(policy)
+        cid = (policy.competency_id if policy else None) or self.focus_item
+        topic = (
+            str(cid or "").replace("_", " ").strip()
+            or (self.jd_requirements[0] if self.jd_requirements else "")
+            or "this topic"
+        )
+        return f"Let's move on to {topic}. What can you tell me about how you have worked with it?"
 
     _REPAIR_HINTS = {
         "duplicate_question": "that question repeats one already asked — ask about a different, unexplored angle",
@@ -2019,6 +2400,10 @@ class InterviewFlow:
         "empty_question": "the question field was empty",
         "generic_parrot_question": (
             "do not say Regarding or tell me more; name the topic and ask a real question"
+        ),
+        "generic_learning_question": (
+            "do not ask generic learning questions like 'what did you learn' or 'what was your learning experience'; "
+            "ask a concrete technical question about the current competency instead"
         ),
     }
 
@@ -2080,12 +2465,13 @@ class InterviewFlow:
             return False
         return is_speakable(result.reasons) and bool(candidate.question.strip())
 
-    def _coerce_generated(
+    async def _coerce_generated(
         self,
         raw: str,
         *,
         policy: PolicyDecision | None,
         last_candidate_turn: str | None,
+        allow_fallback: bool = True,
     ) -> GeneratedQuestion:
         parsed = parse_generated_question(raw)
         if parsed is None:
@@ -2163,8 +2549,9 @@ class InterviewFlow:
                 validator_ok=False,
                 reasons=["invalid_structured_output"],
             )
+            fallback = await self._emergency_llm_question(policy) if allow_fallback else ""
             return GeneratedQuestion(
-                question=self._fallback_spoken_question(policy, last_candidate_turn),
+                question=fallback,
                 competency_id=policy.competency_id if policy else None,
                 intent=policy.intent if policy else "live_question",
                 depth=policy.current_depth if policy else 1,
@@ -2205,7 +2592,7 @@ class InterviewFlow:
         # questions are replaced.
         if is_speakable(result.reasons) and result.question.question.strip():
             return result.question
-        fallback = self._fallback_spoken_question(policy, last_candidate_turn)
+        fallback = await self._emergency_llm_question(policy) if allow_fallback else ""
         return GeneratedQuestion(
             question=fallback,
             competency_id=policy.competency_id if policy else None,
@@ -2342,13 +2729,30 @@ class InterviewFlow:
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": user_content},
                 ],
-                extra_body={"max_completion_tokens": 1024},
+                extra_body={"max_completion_tokens": 1024, "response_format": {"type": "json_object"}},
             )
         except Exception:
             logger.exception(
                 "stage2_question_failed",
                 extra={"event": "stage2_question_failed"},
             )
+            # For mid-interview turns: attempt one retry with a minimal prompt
+            # before ever touching a canned phrase. Canned phrases are never
+            # spoken during active competency or project turns.
+            if last_candidate_turn is not None and not self.completed:
+                retry_question = await self._retry_with_minimal_prompt(
+                    last_candidate_turn, policy
+                )
+                if retry_question:
+                    if last_candidate_turn:
+                        is_intro_reply = not self.candidate_turns
+                        self.candidate_turns.append(last_candidate_turn)
+                        self._apply_turn_decision(
+                            self._normalize_decision("probe", is_intro_reply=is_intro_reply),
+                            is_intro_reply=is_intro_reply,
+                        )
+                    self._remember_question(retry_question)
+                    return retry_question
             if last_candidate_turn:
                 is_intro_reply = not self.candidate_turns
                 self.candidate_turns.append(last_candidate_turn)
@@ -2359,7 +2763,7 @@ class InterviewFlow:
             fallback = (
                 self._fallback_opening()
                 if last_candidate_turn is None
-                else self._fallback_spoken_question(policy, last_candidate_turn)
+                else await self._emergency_llm_question(policy)
             )
             if self.completed:
                 fallback = CLOSING_MESSAGE
@@ -2393,8 +2797,11 @@ class InterviewFlow:
     ) -> str:
         policy = self.last_policy_decision
         if self.policy_mode:
-            generated = self._coerce_generated(
-                raw, policy=policy, last_candidate_turn=last_candidate_turn
+            generated = await self._coerce_generated(
+                raw,
+                policy=policy,
+                last_candidate_turn=last_candidate_turn,
+                allow_fallback=not allow_retry,
             )
             if allow_retry and self.last_validator_ok is False:
                 repair = self._repair_instruction(self.last_validator_reasons)
@@ -2404,21 +2811,26 @@ class InterviewFlow:
                             {"role": "system", "content": prompt},
                             {"role": "user", "content": user_content + repair},
                         ],
-                        extra_body={"max_completion_tokens": 1024},
+                        extra_body={"max_completion_tokens": 1024, "response_format": {"type": "json_object"}},
                     )
-                    retried = self._coerce_generated(
-                        raw, policy=policy, last_candidate_turn=last_candidate_turn
+                    retried = await self._coerce_generated(
+                        raw, policy=policy, last_candidate_turn=last_candidate_turn, allow_fallback=False
                     )
                     if self.last_validator_ok or (
                         retried.question
                         and is_speakable(self.last_validator_reasons)
                     ):
                         generated = retried
+                    else:
+                        generated.question = await self._emergency_llm_question(policy)
                 except Exception:
                     logger.exception(
                         "stage2_question_retry_failed",
                         extra={"event": "stage2_question_retry_failed"},
                     )
+                    generated.question = await self._emergency_llm_question(policy)
+            if not generated.question and not (self.last_validator_ok or is_speakable(self.last_validator_reasons)):
+                generated.question = await self._emergency_llm_question(policy)
             if spoken_question:
                 generated.question = spoken_question
             if getattr(self, "_used_soft_advance", False):
@@ -2607,9 +3019,10 @@ class InterviewFlow:
             question = (
                 self._fallback_opening()
                 if is_opening
-                else self._fallback_spoken_question(self.last_policy_decision)
+                else await self._emergency_llm_question(self.last_policy_decision)
             )
-            yield question
+            if question:
+                yield question
         self._commit_turn(
             last_candidate_turn,
             parser.decision or "probe",
@@ -2647,7 +3060,8 @@ class InterviewFlow:
                 [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": user_content},
-                ]
+                ],
+                extra_body={"response_format": {"type": "json_object"}},
             ):
                 raw_parts.append(delta or "")
                 parser.push(delta or "")
@@ -2663,10 +3077,27 @@ class InterviewFlow:
                 "stage2_question_failed",
                 extra={"event": "stage2_question_failed"},
             )
+            # For mid-interview turns: attempt one retry with a minimal prompt
+            # before falling back to a soft-advance phrase.
+            if last_candidate_turn is not None and not self.completed and not spoken_any:
+                retry_question = await self._retry_with_minimal_prompt(
+                    last_candidate_turn, policy
+                )
+                if retry_question:
+                    if last_candidate_turn:
+                        is_intro_reply = not self.candidate_turns
+                        self.candidate_turns.append(last_candidate_turn)
+                        self._apply_turn_decision(
+                            self._normalize_decision("probe", is_intro_reply=is_intro_reply),
+                            is_intro_reply=is_intro_reply,
+                        )
+                    self._remember_question(retry_question)
+                    yield retry_question
+                    return
             fallback = (
                 self._fallback_opening()
                 if last_candidate_turn is None
-                else self._fallback_spoken_question(policy)
+                else await self._emergency_llm_question(policy)
             )
             if self.completed:
                 fallback = CLOSING_MESSAGE
@@ -2686,7 +3117,7 @@ class InterviewFlow:
             )
             self._remember_generated(generated, policy)
             self._remember_question(question)
-            if not spoken_any:
+            if not spoken_any and question:
                 yield question
             return
         # Stream ended mid-question or as plain text: gate whatever arrived.

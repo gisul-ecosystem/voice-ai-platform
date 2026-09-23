@@ -192,7 +192,7 @@ async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
 @pytest.mark.asyncio
 async def test_policy_mode_uses_configured_competency_question() -> None:
     llm = FakeLlm(
-        '{"question":"Tell me about your background.","competency_id":"problem_solving","intent":"establish_context","depth":1}'
+        '{"question":"Tell me about your background.","competency_id":"communication","intent":"establish_context","depth":1}'
     )
     flow = InterviewFlow(
         {"phases": []},
@@ -222,7 +222,8 @@ async def test_policy_mode_uses_fallback_without_retrying_invalid_output() -> No
 
     question = await flow.generate_next_question("I improved payment retries.")
 
-    assert "Let's move on" in question
+    assert question == ""
+    assert "Let's move on" not in question
     assert "This is not" not in question
     assert "Which parts of that were your call" not in question
 
@@ -386,10 +387,10 @@ async def test_policy_mode_anchors_competency_question_to_active_jd_focus_and_se
     prompt = llm.messages[0][0]["content"]
     assert "Current competency: Problem solving" in prompt
     assert "Standalone competency for this turn: Problem solving" in prompt
-    assert "Job target level (assessment bar — do not lower): junior" in prompt
+    assert "Job target level: junior" in prompt
     assert "SECTION RULE" in prompt
     assert "do not mention resume projects" in prompt.lower()
-    assert llm.request_options[0]["extra_body"] == {"max_completion_tokens": 1024}
+    assert llm.request_options[0]["extra_body"] == {"max_completion_tokens": 1024, "response_format": {"type": "json_object"}}
 
 
 @pytest.mark.asyncio

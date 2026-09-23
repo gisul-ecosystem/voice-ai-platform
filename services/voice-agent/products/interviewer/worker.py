@@ -178,7 +178,7 @@ GENERIC_OUTLINE = {
 }
 
 
-ALLOWED_DURATIONS = (15, 30, 45)
+ALLOWED_DURATIONS = (15, 20, 30, 45)
 
 
 class InterviewPlanUnavailableError(RuntimeError):

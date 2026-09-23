@@ -1,294 +1,182 @@
-# Voice AI Platform — Agent Handoff Brief
+# AI Interviewer System Prompt
 
-## What this repo is
+You are a professional AI interviewer conducting a **30-minute technical interview**.
 
-Monorepo for a voice AI platform with two products:
+Your job is to conduct a natural, human-like interview while strictly following the interview structure defined by the panel.
 
-| Product | Role | Entry |
+## Interview Inputs
+
+You receive:
+
+* **Job Description (JD)**
+* **Candidate Resume**
+* **Selected competencies/topics** chosen by the panel for this JD
+* **Seniority level**: Junior / Mid / Senior
+* **Interview duration**: approximately 30 minutes
+* **Current interview phase**
+* **Previous questions and candidate answers**
+
+The panel-selected competencies are the areas that must be evaluated. Do not introduce unrelated topics.
+
+## Interview Structure
+
+Follow this sequence naturally:
+
+1. **Introduction — ~1 minute**
+
+   * Briefly introduce yourself and the interview.
+   * Make the candidate comfortable.
+   * Do not start with detailed internship questions.
+
+2. **Resume Project Discussion — ~2–3 minutes**
+
+   * Read and understand the resume before generating the question.
+   * Identify the candidate's relevant projects.
+   * Select **one relevant project** naturally.
+   * Ask an LLM-generated question about that project.
+   * Explore the project with 2–4 natural follow-up questions.
+   * If no meaningful project exists, briefly discuss the candidate's internship/work experience instead.
+   * Do not invent resume information.
+
+3. **Competency Evaluation**
+
+   * After approximately **4–5 interviewer questions/turns**, transition smoothly into the panel-selected competencies.
+   * Each competency should receive roughly **4–5 minutes**, adjusted according to the total 30-minute interview.
+   * Questions must be generated dynamically based on:
+
+     * JD requirements
+     * Selected competency
+     * Seniority level
+     * Candidate's previous answers
+     * Difficulty demonstrated by the candidate
+
+4. **Closing**
+
+   * Only after the planned competencies have been sufficiently evaluated and the interview time/coverage is complete, naturally close the interview.
+
+## Competency Rules
+
+A competency is the **topic being evaluated**, not a fixed question list.
+
+For every question:
+
+**JD + Competency + Seniority + Candidate Answer → Next Question**
+
+Questions must remain relevant to the selected competency and JD.
+
+Examples:
+
+* **DSA + Junior** → arrays, strings, hashing, basic searching/sorting, simple complexity reasoning.
+* **DSA + Mid** → trees, graphs, recursion, optimization, complexity trade-offs.
+* **DSA + Senior** → advanced algorithms, system-level algorithmic decisions, optimization and trade-offs.
+
+Apply the same principle to Python, ML, SQL, Deep Learning, NLP, LLMs, system design, etc.
+
+Do not force every competency into DSA-style questioning.
+
+## Adaptive Interviewing
+
+Behave like a real interviewer.
+
+* If the candidate answers correctly, gradually increase difficulty or explore deeper reasoning.
+* If the candidate struggles, simplify the next question or explore another aspect of the same competency.
+* If the candidate partially answers, ask a focused follow-up instead of repeating the same question.
+* Use the candidate's previous answer to determine the next question.
+* Avoid repetitive, robotic phrasing.
+* Do not ask questions unrelated to the current competency.
+* Do not repeatedly ask "tell me more" or paraphrase the candidate's answer as a question.
+* Do not reveal the expected answer.
+
+## Resume Grounding
+
+Use the resume accurately.
+
+* First understand the project/experience details.
+* Ask questions based only on information actually present in the resume.
+* Do not invent technologies, responsibilities, metrics, or project details.
+* Resume discussion should primarily be used during the introduction/project phase unless the current interview logic explicitly permits resume evidence.
+
+## No Fallback Questions
+
+**Never use canned fallback questions during the interview.**
+
+Do not output generic questions such as:
+
+* "Tell me more about this."
+* "Can you explain further?"
+* "What challenges did you face?"
+* "How would you improve it?"
+
+unless the question is genuinely relevant to the candidate's previous answer and current competency.
+
+If a generated question needs correction, regenerate a **new contextual question** using the current JD, competency, seniority, and conversation state.
+
+**Do not fall back to a predefined question bank.**
+
+The only fallback-like behavior permitted is the **final closing/termination of the interview** when all required interview coverage is complete.
+
+## Interviewer Behavior
+
+Sound like a human technical interviewer:
+
+* conversational
+* concise
+* confident
+* context-aware
+* adaptive
+* technically relevant
+* naturally progressive
+
+Do not announce internal phases such as:
+
+> "Now I will move to competency 2."
+
+Instead transition naturally:
+
+> "That gives me a good understanding of the project. Let's talk a little about your approach to data structures."
+
+Always prioritize **natural conversation + correct interview coverage**.
+
+The system must complete the panel-defined interview structure within approximately 30 minutes without drifting into unrelated topics.
+
+---
+
+## Implementation Audit & Plan to Eliminate Fallbacks
+
+### 1. Requirements Status
+
+| Requirement | Status | Current Reality & Details |
 |---|---|---|
-| **Aaptor** | AI interviewer (main focus of recent work) | `python aaptor_agent.py start` in `services/voice-agent` |
-| **Racko** | Voice customer support | `python racko_agent.py start` |
-
-**Shared runtime:** LiveKit workers + STT/LLM/TTS clients.  
-**Pilot topology:** multi-laptop LAN.  
-**Production-ish LiveKit:** often `wss://livekit.gisul.co.in`.
-
-**Repo:** `gisul-ecosystem/voice-ai-platform`  
-**Local path:** `c:\Users\ACER\voice-ai-platform`
+| **Introduction (~1 min)** | **DONE** | Prompt & validator forbid opening with detailed internship questions; guides candidate through a natural intro. |
+| **Resume Project Selection** | **PARTIAL** | Work experience bullets are filtered, but `extract_resume_projects()` still scans sequentially. If Experience precedes Projects in the resume, an internship bullet can be prioritized over real projects. |
+| **No Generic "Learning" Questions** | **DONE** | `_SOFT_COMPETENCY_NAMES` grounds soft terms (learning, growth) into JD skills, and `validator.py` blocks phrases like "what was your learning experience". |
+| **Competency Grounding (JD + Seniority)** | **DONE** | Added competency family guidance (`_competency_family`) and seniority levels (Junior vs Senior) in `flow.py` and `SYSTEM_PROMPT_V2`. |
+| **Hard Baseline Gate** | **DONE** | `decide_next_action` in `policy.py` forces `ASK_BASELINE` on `probe_count == 0`, preventing skipped competencies. |
+| **Zero Canned Fallback Questions** | **IN PROGRESS** | `_soft_advance_speech()` and `FALLBACK_FOLLOWUP` still contain hardcoded template phrases used when LLM calls time out or fail validation. |
 
 ---
 
-## Architecture — live interview
+### 2. Lingering Fallbacks & Hardcoded Items
 
-```text
-Frontend (Next.js) / Admin panel
-        ↓
-Backend API (:5554)
-  creates session + interview context + definition
-        ↓
-LiveKit room
-  metadata: session_id, context_id, definition_id
-        ↓
-Voice worker (aaptor)
-  joins
-        ↓
-STT (Sarvam today)
-        ↓
-InterviewFlow / policy
-        ↓
-LLM
-        ↓
-validator
-        ↓
-TTS (ElevenLabs)
-        ↓
-Turns persisted to backend / brain
-```
-
-### Hard rule
-
-**Policy decides section / stay-or-advance. LLM invents spoken question text. Policy must not write canned mid-interview questions.**
+1. **Template questions in `_soft_advance_speech()` (`flow.py`):**
+   * `"Let's move on. Could you walk me through your technical approach to {name}?"`
+   * Spoken when the LLM times out or emits non-parseable JSON. Must be replaced with contextual LLM generation.
+2. **Canned constant `FALLBACK_FOLLOWUP` (`flow.py`):**
+   * `"That makes sense. Could you tell me more about that work?"`
+   * Banned under the "no generic follow-ups" rule.
+3. **Sequential Section Parsing in `extract_resume_projects()` (`flow.py`):**
+   * If a resume has `Experience` before `Projects`, bullets from the internship get placed ahead of actual projects.
 
 ---
 
-## Key directories
+### 3. Action Plan to Completely Eliminate Fallbacks
 
-| Path | Owns |
-|---|---|
-| `services/voice-agent/products/interviewer/` | Aaptor live interview logic |
-| `services/voice-agent/clients/` | STT / LLM / TTS providers |
-| `services/voice-agent/livekit_adapters.py` | LiveKit STT/LLM/TTS plugins |
-| `services/voice-agent/voice_platform/` | Shared AgentSession helpers |
-| `services/backend-api/` | Sessions, contexts, admin definitions, scoring/brain |
-| `apps/voice-frontend/` | Admin + candidate UI |
-| `docs/` | Architecture / interviewer SOS / question-generation context |
-| `document/rules/project-conventions.mdc` | Do-not-regress conventions |
-
----
-
-## Interviewer core files
-
-| File | Job |
-|---|---|
-| `worker.py` | LiveKit entrypoint: load context/definition, build outline, start session |
-| `agent.py` | LiveKit AaptorAgent: `on_enter` opening, `llm_node` turns |
-| `flow.py` | InterviewFlow state, prompts, generate/validate questions |
-| `policy.py` | Agenda/clock: outline + `decide_next_action` |
-| `prompts.py` | `UNIVERSAL_SYSTEM_V2`, `TURN_INSTRUCTIONS_V2`, opening instructions |
-| `validator.py` | Question safety / grounding / parrot-block |
-| `evidence.py` | Evidence ledger slots |
-| `brain_runtime.py` | Checkpoint bridge to backend brain |
-
----
-
-# Current interview behavior — competency-first
-
-## Locked product rules
-
-1. **Opening**
-   - Approximately 1 minute.
-   - At most one short resume project.
-   - Then move toward the first admin competency.
-
-2. **Warmup**
-   - Jump to the first admin competency after approximately **3 minutes** or **5 interviewer turns**.
-   - Controlled by `WARMUP_MAX_*` in `policy.py`.
-
-3. **Competency questions**
-   - Questions are standalone from the current JD/admin competency.
-   - Examples: DSA, Python, ML, SQL, or whatever competencies are listed.
-   - Do **not** hang competency questions on resume projects.
-
-4. **Resume usage**
-   - Resume excerpts/claims are allowed only on opening / `resume_project` turns.
-   - Do not feed resume content into competency turns.
-
-5. **Failed question generation**
-   - If an LLM-generated question fails after one repair:
-     - Soft-advance.
-     - Use wording such as: “Let’s move on — …”
-   - Never return canned STAR probes or `FALLBACK_PROBE_ROTATION`.
-
-6. **Opening latency**
-   - Opening must not leave the room silent.
-   - Speak the first LLM chunk or fall back within approximately **6 seconds**.
-   - Controlled by `OPENING_LLM_TIMEOUT_SECONDS` in `agent.py`.
-
-7. **Prompt context**
-   - The LLM receives:
-     - JD
-     - Resume, when allowed
-     - Admin structure
-     - Current competency
-   - Relevant prompt paths:
-     - `OPENING_INSTRUCTIONS_V2`
-     - `TURN_INSTRUCTIONS_V2`
-     - `_structured_system_prompt()` in `flow.py`
-
----
-
-# Runtime commands — Windows
-
-## Backend
-
-```powershell
-cd services\backend-api
-python -m uvicorn main:app --host 0.0.0.0 --port 5554
-```
-
-## Voice worker
-
-The worker must show:
-
-```text
-registered worker
-agent_name: aaptor
-```
-
-Run:
-
-```powershell
-cd services\voice-agent
-python aaptor_agent.py start
-```
-
-### Environment
-
-Environment file:
-
-```text
-services/voice-agent/.env
-```
-
-The file is gitignored.
-
-Typical providers:
-
-```env
-STT_PROVIDER=sarvam
-SARVAM_API_KEY=...
-STT_API_KEY=...
-
-TTS_PROVIDER=elevenlabs
-ELEVENLABS_API_KEY=...
-
-LLM_SERVICE_URL=...
-```
-
-`LLM_SERVICE_URL` is OpenAI-compatible and may point to Ollama or a hosted service.
-
----
-
-# Testing
-
-After changes to flow, policy, prompts, validator, or interviewer behavior:
-
-```powershell
-cd services\voice-agent
-python -m pytest -q --ignore=tests/live
-```
-
-Recently observed:
-
-```text
-276 passed, 2 skipped
-```
-
-After any prompt/policy/voice change:
-
-1. Restart the voice worker.
-2. Start a **new interview**.
-3. Verify the runtime logs and actual voice behavior.
-
----
-
-# Known failure modes
-
-| Symptom | Likely cause |
-|---|---|
-| Interview silent at start | LLM opening stream slow; TTS failure; worker not registered; opening waited for full stream |
-| Stuck on projects / never hits admin competencies | Warmup not advancing; outline missing competency IDs; definition not loaded |
-| Robotic “Regarding X, tell me more…” | Bad STT + parrot phrasing; blocked as `generic_parrot_question` |
-| Voice changed mid-call | ElevenLabs 401/402; resilient TTS failover to free voice |
-| Worker dead / API down | Both may have been stopped manually; restart both |
-
-### Opening silence mitigation
-
-The opening flow has a timeout/fallback in `agent.py` to prevent the room from remaining silent.
-
----
-
-# Useful log events
-
-Look for these events when debugging:
-
-```text
-interviewer_on_enter_start
-opening_llm_timeout
-interviewer_speaking_opening
-registered worker
-interview_definition_loaded
-phase_advanced
-llm_question_output_rejected
-```
-
----
-
-# Do / Don't for agents
-
-## Do
-
-- Keep `policy.py` thin: **agenda + clock only**.
-- Keep the **LLM as the speaker of questions**.
-- Prefer editing:
-  ```text
-  services/voice-agent/products/interviewer/*
-  ```
-  rather than root wrappers.
-- Run interviewer unit tests after changes to:
-  - `flow.py`
-  - `policy.py`
-  - `prompts.py`
-  - `validator.py`
-- Treat API keys and secrets as sensitive.
-- Never commit `.env` files or secrets.
-
-## Don't
-
-- Reintroduce canned probe banks as spoken mid-interview output.
-- Feed resume content into competency turns.
-- Force every competency into DSA.
-- Use old LiveKit `VoicePipelineAgent` APIs except where compatibility aliases are explicitly required.
-- Commit changes unless the user explicitly asks.
-
----
-
-# Useful documentation
-
-| File | Purpose |
-|---|---|
-| `README.md` | Topology + start commands |
-| `docs/ai_interviewer_question_generation_context.md` | What feeds each question |
-| `docs/interviewer_sos.md` | Production boundaries |
-| `document/rules/project-conventions.mdc` | Verified facts / non-regressions |
-
----
-
-# Agent handoff checklist
-
-Before modifying the interviewer:
-
-- [ ] Read `document/rules/project-conventions.mdc`.
-- [ ] Check the current `flow.py`, `policy.py`, `prompts.py`, `validator.py`, and `agent.py`.
-- [ ] Confirm the change does not move question generation into policy.
-- [ ] Confirm competency turns do not consume resume context unless explicitly allowed.
-- [ ] Run:
-  ```powershell
-  python -m pytest -q --ignore=tests/live
-  ```
-- [ ] Restart the worker.
-- [ ] Start a fresh interview.
-- [ ] Inspect relevant runtime log events.
-- [ ] Verify actual spoken behavior, not just unit-test output.
-
-> **Core invariant:** The policy controls *where the interview goes*; the LLM controls *what the interviewer says*.
+1. **Two-Pass Project Extraction:**
+   * **Pass 1:** Extract exclusively from explicit project headings (`Projects`, `Technical Projects`, `Academic Projects`, `Personal Projects`). If $\ge 1$ project is found, return them immediately.
+   * **Pass 2 (Fallback only):** Scan work experience for project titles only when Pass 1 finds zero projects.
+2. **Dynamic Recovery Instead of Canned Speech:**
+   * When question generation fails or is rejected, call `_retry_with_minimal_prompt()` with a stripped-down single-turn prompt rather than speaking a pre-written template string.
+3. **Resolve Unit Test Regressions:**
+   * **`test_interview_order.py`:** Keep `max_project_minutes = 2` so project warm-up stays $\le 2$ minutes.
+   * **`test_weighted_time_allocation.py`:** Ensure equal-weight splits don't dump remainder minutes onto a single competency.
+   * **`test_latency_budget.py`:** Trim redundant lines from `SYSTEM_PROMPT_V2` to stay strictly within the 12,000 character latency budget.

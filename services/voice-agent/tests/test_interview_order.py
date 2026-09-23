@@ -48,11 +48,12 @@ def test_outline_order_is_open_then_projects_then_competencies() -> None:
     assert project_positions, names
     # Every resume project is walked before any JD competency is assessed.
     assert max(project_positions) < min(competency_positions)
+    # Project warm-up is capped at 3 minutes (raised from 2 to give 4-5 real questions).
     assert sum(
         int(phase["duration_minutes"])
         for phase in outline["phases"]
         if phase.get("intent") == "resume_project"
-    ) <= 2
+    ) <= 3
     assert (
         sum(1 for phase in outline["phases"] if phase.get("intent") == "resume_project")
         <= 1

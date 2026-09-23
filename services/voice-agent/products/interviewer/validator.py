@@ -61,8 +61,9 @@ HOOK_STOPWORDS = frozenset(
     }
 )
 
-# Soft validation reasons: a question failing only these is still spoken because a
-# real question beats a canned one that ignores what the candidate just said.
+# Hard-block reasons cause a full LLM retry (never a template string).
+# Soft reasons are logged but the question is still spoken — a real answer-grounded
+# question beats any canned phrase even when it has minor framing issues.
 HARD_BLOCK_REASONS: frozenset[str] = frozenset(
     (
         "empty_question",
@@ -70,6 +71,9 @@ HARD_BLOCK_REASONS: frozenset[str] = frozenset(
         "duplicate_question",
         "project_in_competency_question",
         "generic_parrot_question",
+        # Wrong competency or wrong section — must retry, never speak a template
+        "competency_mismatch",
+        "section_violation",
     )
 )
 
@@ -142,6 +146,7 @@ HARD_BLOCK_REASONS: frozenset[str] = frozenset(
         "duplicate_question",
         "project_in_competency_question",
         "generic_parrot_question",
+        "generic_learning_question",
     )
 )
 
@@ -656,6 +661,50 @@ def _is_generic_parrot_question(lowered: str) -> bool:
     return False
 
 
+# Phrases that produce generic "what did you learn?" questions — never acceptable
+# as standalone competency questions unless the competency is literally about learning habits.
+_LEARNING_FALLBACK_PHRASES = (
+    "what did you learn",
+    "what was your learning",
+    "learning experience",
+    "what did you gain from",
+    "what did you take away",
+    "what was your takeaway",
+    "technical approach to learning",
+    "what have you learned",
+    "what lessons did you",
+    "what did this teach you",
+)
+
+# Competency names where "learning" is a real technical term — do not block for these.
+_TECHNICAL_LEARNING_COMPETENCIES = frozenset({
+    "machine learning", "deep learning", "reinforcement learning",
+    "transfer learning", "federated learning", "meta-learning",
+    "online learning", "active learning",
+})
+
+
+def _is_generic_learning_question(lowered: str, *, policy_competency_id: str | None = None,
+                                   policy_intent: str | None = None) -> bool:
+    """Return True when the question is a generic learning/growth fallback.
+
+    Never fires when:
+    - The competency is a legitimate ML/DL competency (learning IS the topic).
+    - The intent is opening/candidate_map (background questions are fine there).
+    """
+    # Only block during competency assessment turns.
+    if (policy_intent or "") in {
+        "opening", "candidate_map", "await_introduction", "baseline",
+        "clarify", "final_addition", "gap_check", "closing",
+    }:
+        return False
+    # If the competency name is a real technical learning domain, allow it.
+    competency_blob = (policy_competency_id or "").lower().replace("_", " ")
+    if any(term in competency_blob for term in _TECHNICAL_LEARNING_COMPETENCIES):
+        return False
+    return any(phrase in lowered for phrase in _LEARNING_FALLBACK_PHRASES)
+
+
 def validate_generated_question(
     generated: GeneratedQuestion,
     *,
@@ -695,6 +744,12 @@ def validate_generated_question(
         reasons.append("trivia_question")
     if _is_generic_parrot_question(lowered):
         reasons.append("generic_parrot_question")
+    if _is_generic_learning_question(
+        lowered,
+        policy_competency_id=policy_competency_id,
+        policy_intent=policy_intent,
+    ):
+        reasons.append("generic_learning_question")
     live_probe = (policy_intent or "") not in SKIP_HOOK_INTENTS
     # Hook details and probe-shape rotation guide wording, but do not reject a
     # question that is otherwise safe, grounded, policy-compatible, and unique.
@@ -709,14 +764,29 @@ def validate_generated_question(
         "await_introduction",
         "baseline",
     }
-    if (policy_intent or "") not in project_intents:
+    in_project_phase = (policy_intent or "") in project_intents
+    if not in_project_phase:
+        # Competency section: any question that names a resume project is a section violation.
         names = [str(resume_focus).strip()] if resume_focus else []
         names.extend(str(item).strip() for item in (resume_projects or []) if str(item).strip())
         for name in names:
             if len(name) > 3 and name.lower() in lowered:
                 reasons.append("project_in_competency_question")
                 reasons.append("competency_mismatch")
+                reasons.append("section_violation")
                 break
+    if in_project_phase and require_resume_grounding:
+        # Project section: a question that drifts to a different named competency
+        # (e.g. starts a DSA puzzle mid-project) is also a section violation.
+        drift_markers = (
+            "data structure", "algorithm", "time complexity", "space complexity",
+            "big o", "leetcode", "sorting", "binary search", "graph", "tree",
+            "sql query", "join", "index", "normaliz",
+        )
+        if any(marker in lowered for marker in drift_markers) and not (
+            resume_focus and resume_focus.lower() in lowered
+        ):
+            reasons.append("section_violation")
     # The policy owns the assessment intent. The model's intent tag is metadata
     # and must not reject otherwise safe, grounded wording.
     if generated.depth > max(1, int(max_depth)):

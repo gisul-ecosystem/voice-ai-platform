@@ -161,7 +161,10 @@ def outline_from_definition(
         return None
     time_policy = definition.get("time_policy") if isinstance(definition.get("time_policy"), dict) else {}
     duration = int(time_policy.get("duration_minutes") or 30)
-    duration = 15 if duration < 20 else 45 if duration > 40 else 30
+    # Accept 15, 20, 30, or 45. Snap to nearest allowed value.
+    # 20-minute interviews are fully supported for focused 3-4 competency sessions.
+    ALLOWED = (15, 20, 30, 45)
+    duration = min(ALLOWED, key=lambda d: abs(d - duration))
 
     phases: list[dict[str, Any]] = [
         {
@@ -175,9 +178,14 @@ def outline_from_definition(
     # Keep intro+projects short so admin competencies start within ~3 minutes.
     # Opening 1 + closing 1; at most one brief project question before JD skills.
     generic_minutes = 2
-    min_per_competency = 3
+    # Guarantee every competency gets at least 4 minutes (1 baseline + 3 probes).
+    # With 6 competencies this gives floor of 24 min — leaves 6 min for opening/project/closing.
+    min_per_competency = 4
     competency_floor = min_per_competency * max(len(valid), 1)
-    project_pool = min(2, max(0, duration - generic_minutes - competency_floor))
+    # Project warm-up: only allow if budget permits without cutting competency floor.
+    # Hard cap: 3 minutes total for project regardless of total duration.
+    max_project_minutes = 3
+    project_pool = min(max_project_minutes, max(0, duration - generic_minutes - competency_floor))
     projects = [
         str(name).strip()
         for name in (resume_projects or [])
@@ -193,7 +201,7 @@ def outline_from_definition(
                 "intent": "resume_project",
                 "project_name": project,
                 "max_depth": 3,
-                "max_probes": 3,
+                "max_probes": 4,  # 1 opening + 4 probes = 5 total project turns
             }
         )
 
@@ -203,16 +211,41 @@ def outline_from_definition(
         if phase.get("intent") == "resume_project"
     )
     remaining = max(competency_floor, duration - reserved)
-    # Recruiter weighting decides how the competency time is split, not an even share.
+    # Distribute remaining time by recruiter weight.
+    # Uses round() so equal-weight competencies always get the same value.
+    # Rounding may produce sum != remaining by at most ±n; we correct by trimming
+    # or adding to the competency with the largest/smallest share without breaking
+    # equal-weight symmetry (equal items all round identically — only one needs trim).
     weights = [max(0.0, float(item.get("weight") or 0)) for item in valid]
     weight_total = sum(weights)
-    even = max(3, remaining // max(len(valid), 1))
-    for item, weight in zip(valid, weights, strict=True):
-        share = (
-            max(3, round(remaining * weight / weight_total))
-            if weight_total > 0
-            else even
-        )
+    n_valid = max(len(valid), 1)
+
+    if weight_total > 0:
+        raw_shares = [
+            max(min_per_competency, round(remaining * w / weight_total))
+            for w in weights
+        ]
+    else:
+        # Pure equal split: integer division so all shares identical when n divides evenly.
+        base = remaining // n_valid
+        raw_shares = [max(min_per_competency, base)] * n_valid
+
+    # Correct sum to exactly equal remaining by adjusting one item at a time,
+    # always picking the item where the adjustment is least noticeable (largest
+    # or smallest share). Equal-weight items all have the same value so this
+    # only ever adjusts one of them, preserving practical symmetry.
+    diff = remaining - sum(raw_shares)
+    if diff > 0:
+        for _ in range(diff):
+            # Add to the item with the smallest current share (most underserved)
+            raw_shares[min(range(n_valid), key=lambda i: raw_shares[i])] += 1
+    elif diff < 0:
+        for _ in range(-diff):
+            # Remove from the item with the largest current share
+            idx = max(range(n_valid), key=lambda i: raw_shares[i])
+            raw_shares[idx] = max(min_per_competency, raw_shares[idx] - 1)
+
+    for item, share in zip(valid, raw_shares, strict=True):
         name = str(item.get("name") or item.get("id") or "competency").strip()
         evidence = [
             str(x).strip()
@@ -281,7 +314,19 @@ def time_bounds_from_definition(definition: dict[str, Any] | None) -> dict[str, 
         }
     policy = definition.get("time_policy") if isinstance(definition.get("time_policy"), dict) else {}
     duration = int(policy.get("duration_minutes") or 30)
-    soft = int(policy.get("soft_end_minutes") or max(duration - 3, 1))
+    # Compute a competency-count-aware soft end so the breadth-first rush
+    # only fires after all competencies have had at least one real question.
+    # Minimum: 4 min per competency + 4 min for opening/project/closing.
+    n_competencies = len([
+        c for c in (definition.get("competencies") or [])
+        if isinstance(c, dict)
+    ])
+    min_competency_coverage_minutes = max(n_competencies * 4, 0)
+    earliest_soft = min(min_competency_coverage_minutes + 4, duration - 2)
+    soft_from_policy = int(policy.get("soft_end_minutes") or max(duration - 3, 1))
+    # Use whichever is later — never rush before all competencies are reachable.
+    soft = max(soft_from_policy, earliest_soft)
+    soft = min(soft, duration - 1)  # never exceed duration
     target = int(policy.get("target_end_minutes") or duration)
     hard = int(policy.get("hard_end_minutes") or duration + 5)
     return {
@@ -333,10 +378,44 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="closing",
         )
 
+    # Hard cap: resume/project warm-up never exceeds 3 follow-up probes.
+    # After 3 probes the engine forces advance to the first competency.
+    # This is checked BEFORE any clarify/unusable logic so a run of unclear
+    # answers during the project cannot extend it indefinitely.
+    _in_project_phase = "resume project" in (state.phase_name or "").lower()
+    if _in_project_phase and state.probe_count >= 3:
+        return PolicyDecision(
+            action=MOVE_TO_NEXT_COMPETENCY,
+            forced_flow_decision="advance",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="coverage",
+            reason="resume project 3-probe cap reached — advancing to competencies",
+            section="competency_assessment",
+        )
+
     if (
         state.consecutive_unusable >= state.clarify_after
         and state.consecutive_unusable < state.change_topic_after
     ):
+        # Inside a resume-project phase, CLARIFY fires the same full prompt and
+        # the LLM tends to produce the identical question (as seen in Q3/Q4).
+        # Instead, route to WALK_RESUME_PROJECT with a 'different angle' reason
+        # so the LLM knows to ask about mechanism/decision/challenge, not repeat.
+        if _in_project_phase:
+            return PolicyDecision(
+                action=WALK_RESUME_PROJECT,
+                forced_flow_decision="probe",
+                allow_llm_decision=False,
+                current_depth=max(1, min(state.probe_count + 1, state.max_depth)),
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="establish_ownership",
+                reason="unclear answer in project phase — ask a different project angle (mechanism/decision/challenge, not a repeat)",
+                section="resume_project",
+            )
         intent = (
             "rephrase"
             if state.consecutive_unusable >= state.rephrase_after
@@ -577,6 +656,21 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
 
     depth = max(1, min(state.probe_count + 1, state.max_depth))
     probes_exhausted = state.probe_count >= state.max_probes or depth >= state.max_depth
+
+    # Hard gate: if we haven't asked a single real question on this competency yet,
+    # never advance — force a baseline question regardless of other policy signals.
+    if state.probe_count == 0 and state.competency_id and section == "competency_assessment":
+        return PolicyDecision(
+            action=ASK_BASELINE,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="establish_context",
+            reason="no question asked on this competency yet — must ask at least one",
+            section="competency_assessment",
+        )
 
     # Diminishing returns: stop drilling a seam that has stopped producing evidence.
     if (
