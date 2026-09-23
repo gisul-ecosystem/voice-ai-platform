@@ -150,6 +150,9 @@ async def test_session_dispatches_agent_exactly_once(monkeypatch) -> None:
     assert not list(getattr(created, "agents", None) or [])
     assert room_configs == []
 
+
+@pytest.mark.asyncio
+async def test_session_metadata_includes_published_definition(monkeypatch) -> None:
     FakeLiveKitApi.room_service = FakeRoomService()
     FakeLiveKitApi.dispatch_service = FakeAgentDispatchService()
     monkeypatch.setattr(sessions.api, "LiveKitAPI", FakeLiveKitApi)
@@ -173,6 +176,10 @@ async def test_session_dispatches_agent_exactly_once(monkeypatch) -> None:
 
     metadata = json.loads(FakeLiveKitApi.room_service.created[0].metadata)
     assert metadata["definition_id"] == "ai-engineer-junior-v1"
+    assert len(FakeLiveKitApi.dispatch_service.created) == 1
+    assert not list(
+        getattr(FakeLiveKitApi.room_service.created[0], "agents", None) or []
+    )
 
 
 def test_unknown_worker_is_rejected_by_schema() -> None:
