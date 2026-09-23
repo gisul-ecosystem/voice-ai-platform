@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useState, useSyncExternalStore } from "react";
 
 const DRAFT_KEY = "ai-interview:role-draft";
 
@@ -18,7 +19,11 @@ type DraftState = {
   published?: unknown;
 };
 
-function readDraft(): { state?: DraftState; error: string } {
+type DraftBundle = { state?: DraftState; error: string };
+
+const EMPTY_DRAFT: DraftBundle = { error: "" };
+
+function readDraft(): DraftBundle {
   try {
     const saved = sessionStorage.getItem(DRAFT_KEY);
     return {
@@ -30,26 +35,37 @@ function readDraft(): { state?: DraftState; error: string } {
   }
 }
 
+function subscribeDraft() {
+  return () => undefined;
+}
+
 export default function ReviewAlignmentPage() {
-  const [ready, setReady] = useState(false);
-  const [state, setState] = useState<DraftState | undefined>();
+  const router = useRouter();
+  const ready = useSyncExternalStore(
+    subscribeDraft,
+    () => true,
+    () => false,
+  );
+  const boot = useSyncExternalStore(subscribeDraft, readDraft, () => EMPTY_DRAFT);
+  // null = use sessionStorage boot; otherwise local edits after load.
+  const [edits, setEdits] = useState<DraftState | null>(null);
   const [selected, setSelected] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
-  useEffect(() => {
-    const boot = readDraft();
-    setState(boot.state);
-    setError(boot.error);
-    setReady(true);
-  }, []);
+  const state = edits ?? boot.state;
+  const displayError = error || (edits === null ? boot.error : "");
 
   const competencies =
     state?.draft && Array.isArray(state.draft.competencies)
       ? (state.draft.competencies as Array<Record<string, unknown>>)
       : [];
+
+  function setState(next: DraftState) {
+    setEdits(next);
+  }
 
   function update(index: number, patch: Record<string, unknown>) {
     if (!state) return;
@@ -133,7 +149,7 @@ export default function ReviewAlignmentPage() {
       const publishedState = { ...state, definitionId, published: data };
       setState(publishedState);
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify(publishedState));
-      window.location.assign("/interviewer/admin/invite");
+      router.push("/interviewer/admin/invite");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Publish failed.");
     } finally {
@@ -159,6 +175,7 @@ export default function ReviewAlignmentPage() {
           <Link className="button secondary" href="/interviewer/admin/design">
             Start role design
           </Link>
+          {displayError ? <p className="error-text">{displayError}</p> : null}
         </div>
       </main>
     );
@@ -182,9 +199,9 @@ export default function ReviewAlignmentPage() {
         </p>
       </section>
       <section className="demo-card alignment-review admin-review-page">
-        {error ? (
+        {displayError ? (
           <div className="alert" role="alert">
-            {error}
+            {displayError}
           </div>
         ) : null}
         <div className="competency-picker" aria-label="Interview competencies">

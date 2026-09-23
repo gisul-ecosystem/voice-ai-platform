@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 const DRAFT_KEY = "ai-interview:role-draft";
+
 type Candidate = {
   name: string;
   email: string;
@@ -23,6 +24,8 @@ type DraftBundle = {
   error: string;
 };
 
+const EMPTY_DRAFT: DraftBundle = { error: "" };
+
 function readDraft(): DraftBundle {
   try {
     const saved = sessionStorage.getItem(DRAFT_KEY);
@@ -35,19 +38,26 @@ function readDraft(): DraftBundle {
   }
 }
 
+function subscribeDraft() {
+  return () => undefined;
+}
+
 export default function InviteCandidatesPage() {
-  // Keep SSR + first client paint identical; load sessionStorage after mount.
-  const [ready, setReady] = useState(false);
-  const [draftBundle, setDraftBundle] = useState<DraftBundle>({ error: "" });
+  // sessionStorage via useSyncExternalStore — SSR snapshot stays empty; no setState-in-effect.
+  const ready = useSyncExternalStore(
+    subscribeDraft,
+    () => true,
+    () => false,
+  );
+  const draftBundle = useSyncExternalStore(
+    subscribeDraft,
+    readDraft,
+    () => EMPTY_DRAFT,
+  );
   const [candidates, setCandidates] = useState<Candidate[]>([
     { name: "", email: "", resume: null },
   ]);
   const [pipeline, setPipeline] = useState<Pipeline>();
-
-  useEffect(() => {
-    setDraftBundle(readDraft());
-    setReady(true);
-  }, []);
 
   useEffect(() => {
     fetch("/api/admin/pipeline")

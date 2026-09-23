@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 const defaultStart = new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
@@ -13,6 +14,7 @@ type RoleDraft = {
 };
 
 export default function DesignRolePage() {
+  const router = useRouter();
   const [value, setValue] = useState<RoleDraft>({
     title: "AI Engineer interview", role: "AI Engineer", seniority: "junior",
     durationMinutes: "30", jobDescription: "", competencies: "Problem solving, Role expertise, Communication",
@@ -51,7 +53,7 @@ export default function DesignRolePage() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(String(data.error || data.detail || "Alignment generation failed."));
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ ...value, draft: data }));
-      window.location.assign("/interviewer/admin/review");
+      router.push("/interviewer/admin/review");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Alignment generation failed."); }
     finally { setBusy(false); }
   }
