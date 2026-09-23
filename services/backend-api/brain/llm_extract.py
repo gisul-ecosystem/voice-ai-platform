@@ -227,45 +227,6 @@ async def recommend_competencies_async(
         system_prompt=_COMPETENCY_SYSTEM,
         user_prompt=user_prompt,
     )
-    # #region agent log
-    try:
-        import json as _json
-        import time as _time
-        from pathlib import Path as _Path
-
-        _names = []
-        if payload and isinstance(payload.get("competencies"), list):
-            _names = [
-                str((item or {}).get("name") or "")[:80]
-                for item in payload["competencies"]
-                if isinstance(item, dict)
-            ]
-        _Path(r"c:\Users\aksha\OneDrive\Documents\AI-Interviewer\debug-4e4b73.log").open(
-            "a", encoding="utf-8"
-        ).write(
-            _json.dumps(
-                {
-                    "sessionId": "4e4b73",
-                    "runId": "post-fix",
-                    "hypothesisId": "B,D",
-                    "location": "llm_extract.py:recommend_competencies_async",
-                    "message": "LLM competency recommendation",
-                    "data": {
-                        "llm_payload_present": bool(payload),
-                        "recommended_names": _names,
-                        "guidance": guidance,
-                        "role_title": (job.role.title or "")[:120],
-                        "duration_minutes": duration_minutes,
-                        "context_chars": len(user_prompt),
-                    },
-                    "timestamp": int(_time.time() * 1000),
-                }
-            )
-            + "\n"
-        )
-    except Exception:
-        pass
-    # #endregion
     if not payload or not isinstance(payload.get("competencies"), list):
         return []
 
@@ -421,47 +382,6 @@ async def extract_job_intelligence_async(
         system_prompt=_JD_SYSTEM,
         user_prompt=f"JOB DESCRIPTION:\n{heuristic.raw_job_description[:20_000]}",
     )
-    # #region agent log
-    try:
-        import json as _json
-        import time as _time
-        from pathlib import Path as _Path
-
-        _Path(r"c:\Users\aksha\OneDrive\Documents\AI-Interviewer\debug-4e4b73.log").open(
-            "a", encoding="utf-8"
-        ).write(
-            _json.dumps(
-                {
-                    "sessionId": "4e4b73",
-                    "runId": "pre-fix",
-                    "hypothesisId": "C,D",
-                    "location": "llm_extract.py:extract_job_intelligence_async",
-                    "message": "JD LLM extract result",
-                    "data": {
-                        "llm_payload_present": bool(payload),
-                        "jd_chars": len(heuristic.raw_job_description or ""),
-                        "system_prompt_mentions_competencies": "competenc"
-                        in _JD_SYSTEM.lower(),
-                        "schema_has_competencies": "competencies"
-                        in JD_EXTRACT_SCHEMA.get("properties", {}),
-                        "llm_skill_count": len((payload or {}).get("skills") or [])
-                        if payload
-                        else 0,
-                        "llm_mandatory_count": len(
-                            (payload or {}).get("mandatory_requirements") or []
-                        )
-                        if payload
-                        else 0,
-                        "user_prompt_has_role_seniority": False,
-                    },
-                    "timestamp": int(_time.time() * 1000),
-                }
-            )
-            + "\n"
-        )
-    except Exception:
-        pass
-    # #endregion
     if not payload:
         return heuristic
 

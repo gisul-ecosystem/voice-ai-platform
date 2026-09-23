@@ -189,14 +189,8 @@ def _candidate_competency_seeds(
     """Return (id_base, display_name, jd_hint_texts, required)."""
     seeds: list[tuple[str, str, list[str], bool]] = []
     seen_names: set[str] = set()
-    # #region agent log
-    _dbg_creator: list[str] = []
-    _dbg_jd_added: list[str] = []
-    _dbg_rejected: list[dict[str, object]] = []
-    _dbg_fallbacks: list[str] = []
-    # #endregion
 
-    def add(name: str, hints: list[str], *, required: bool, _src: str = "other") -> None:
+    def add(name: str, hints: list[str], *, required: bool) -> None:
         cleaned = normalize_skill_label(name)
         if len(cleaned) < 2:
             return
@@ -209,15 +203,9 @@ def _candidate_competency_seeds(
         seeds.append(
             (_slugify(cleaned, fallback="competency"), cleaned[:120], hints, required)
         )
-        # #region agent log
-        if _src == "creator":
-            _dbg_creator.append(cleaned[:120])
-        elif _src.startswith("jd"):
-            _dbg_jd_added.append(f"{_src}:{cleaned[:80]}")
-        # #endregion
 
     for name in creator_competencies or []:
-        add(name, [], required=True, _src="creator")
+        add(name, [], required=True)
 
     # LLM / explicit creator recommendations should own the interview plan.
     # Only fall back to JD fragment heuristics when we do not have enough.
@@ -229,26 +217,8 @@ def _candidate_competency_seeds(
         if "," in text:
             text = text.split(",", 1)[0].strip()
         if len(text) < 2 or len(text) > max_len:
-            # #region agent log
-            _dbg_rejected.append(
-                {
-                    "text": item.text.strip()[:80],
-                    "reason": "len",
-                    "len": len(item.text.strip()),
-                }
-            )
-            # #endregion
             return False
         if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
-            # #region agent log
-            _dbg_rejected.append(
-                {
-                    "text": text[:80],
-                    "reason": "low_confidence",
-                    "confidence": item.provenance.confidence,
-                }
-            )
-            # #endregion
             return False
         return True
 
@@ -258,12 +228,12 @@ def _candidate_competency_seeds(
                 label = item.text.strip()
                 if "," in label:
                     label = label.split(",", 1)[0].strip()
-                add(label, [item.text], required=True, _src="jd_skill_req")
+                add(label, [item.text], required=True)
 
         for item in job.responsibilities[:4]:
             text = item.text.strip()
             if 8 <= len(text) <= 72 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
-                add(text, [text], required=True, _src="jd_resp")
+                add(text, [text], required=True)
 
         preferred_pool = (
             list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
@@ -273,7 +243,7 @@ def _candidate_competency_seeds(
                 label = item.text.strip()
                 if "," in label:
                     label = label.split(",", 1)[0].strip()
-                add(label, [item.text], required=False, _src="jd_pref")
+                add(label, [item.text], required=False)
 
     required_seeds = [seed for seed in seeds if seed[3]]
     preferred_seeds = [seed for seed in seeds if not seed[3]]
@@ -284,52 +254,10 @@ def _candidate_competency_seeds(
             if name.lower() not in seen_names:
                 combined.append((competency_id, name, [], True))
                 seen_names.add(name.lower())
-                # #region agent log
-                _dbg_fallbacks.append(name)
-                # #endregion
             if len(combined) >= _MIN_COMPETENCIES:
                 break
 
-    result = combined[:_MAX_COMPETENCIES]
-    # #region agent log
-    try:
-        import json as _json
-        import time as _time
-        from pathlib import Path as _Path
-
-        _Path(r"c:\Users\aksha\OneDrive\Documents\AI-Interviewer\debug-4e4b73.log").open(
-            "a", encoding="utf-8"
-        ).write(
-            _json.dumps(
-                {
-                    "sessionId": "4e4b73",
-                    "runId": "post-fix",
-                    "hypothesisId": "A,B,C,E",
-                    "location": "compiler.py:_candidate_competency_seeds",
-                    "message": "competency seed selection",
-                    "data": {
-                        "creator_in": list(creator_competencies or []),
-                        "creator_kept": _dbg_creator,
-                        "creator_exclusive": creator_exclusive,
-                        "skip_jd_pad": skip_jd_pad,
-                        "jd_added": _dbg_jd_added[:12],
-                        "rejected_sample": _dbg_rejected[:8],
-                        "rejected_count": len(_dbg_rejected),
-                        "fallbacks": _dbg_fallbacks,
-                        "final_names": [s[1] for s in result],
-                        "job_skill_count": len(job.skills),
-                        "job_mandatory_count": len(job.mandatory_requirements),
-                        "role_title": (job.role.title or "")[:120],
-                    },
-                    "timestamp": int(_time.time() * 1000),
-                }
-            )
-            + "\n"
-        )
-    except Exception:
-        pass
-    # #endregion
-    return result
+    return combined[:_MAX_COMPETENCIES]
 
 
 def _build_competency(

@@ -25,38 +25,6 @@ export async function POST(request: Request) {
   }
   try {
     if (body.action === "compile") {
-      // #region agent log
-      const _creatorComps = Array.isArray(body.competencies)
-        ? (body.competencies as unknown[]).map(String)
-        : [];
-      fetch("http://127.0.0.1:7619/ingest/592842c5-e50e-49f4-b4c6-a3e4948bc915", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "4e4b73",
-        },
-        body: JSON.stringify({
-          sessionId: "4e4b73",
-          runId: "post-fix",
-          hypothesisId: "A",
-          location: "blueprint/route.ts:compile",
-          message: "compile request payload",
-          data: {
-            title: body.title,
-            role: body.role,
-            seniority: body.seniority,
-            durationMinutes: body.durationMinutes,
-            jdChars:
-              typeof body.jobDescription === "string"
-                ? body.jobDescription.length
-                : 0,
-            creatorCompetencies: _creatorComps,
-            creatorCount: _creatorComps.length,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       const extracted = await backendRequest("/interview-brain/jd/extract", {
         job_description: body.jobDescription,
         target_level: body.seniority,
@@ -89,43 +57,6 @@ export async function POST(request: Request) {
         };
       }
 
-      // #region agent log
-      const _role = (extractedData.role as Record<string, unknown> | undefined) || {};
-      fetch("http://127.0.0.1:7619/ingest/592842c5-e50e-49f4-b4c6-a3e4948bc915", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "4e4b73",
-        },
-        body: JSON.stringify({
-          sessionId: "4e4b73",
-          runId: "post-fix",
-          hypothesisId: "C",
-          location: "blueprint/route.ts:after-extract",
-          message: "JD extract summary before compile",
-          data: {
-            extractionVersion: extractedData.extraction_version,
-            roleTitle: _role.title,
-            targetLevel: _role.target_level,
-            skills: Array.isArray(extractedData.skills)
-              ? extractedData.skills.length
-              : -1,
-            mandatory: Array.isArray(extractedData.mandatory_requirements)
-              ? extractedData.mandatory_requirements.length
-              : -1,
-            responsibilities: Array.isArray(extractedData.responsibilities)
-              ? extractedData.responsibilities.length
-              : -1,
-            skillSamples: Array.isArray(extractedData.skills)
-              ? (extractedData.skills as Array<{ text?: string }>)
-                  .slice(0, 8)
-                  .map((s) => String(s?.text || "").slice(0, 80))
-              : [],
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       const compiled = await backendRequest("/interview-brain/blueprint/compile", {
         job_intelligence: extractedData,
         title: body.title,
@@ -137,31 +68,6 @@ export async function POST(request: Request) {
         include_scenarios: true,
       });
       const data = await compiled.json().catch(() => ({}));
-      // #region agent log
-      const _comps = Array.isArray((data as { competencies?: unknown }).competencies)
-        ? ((data as { competencies: Array<{ name?: string; id?: string }> }).competencies)
-        : [];
-      fetch("http://127.0.0.1:7619/ingest/592842c5-e50e-49f4-b4c6-a3e4948bc915", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "4e4b73",
-        },
-        body: JSON.stringify({
-          sessionId: "4e4b73",
-          runId: "post-fix",
-          hypothesisId: "B",
-          location: "blueprint/route.ts:after-compile",
-          message: "compiled competency names",
-          data: {
-            status: compiled.status,
-            competencyNames: _comps.map((c) => String(c?.name || "")),
-            competencyIds: _comps.map((c) => String(c?.id || "")),
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       return NextResponse.json(data, { status: compiled.status });
     }
     if (body.action === "publish") {
