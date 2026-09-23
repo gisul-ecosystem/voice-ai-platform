@@ -12,6 +12,8 @@ type CompetencyScore = {
   excerpts?: string[];
   missing_intents?: string[];
   missing_evidence?: string[];
+  proven_dimensions?: string[];
+  claimed_dimensions?: string[];
 };
 
 type Scorecard = {
@@ -176,6 +178,12 @@ export default function ScorecardReviewPage() {
                   <span>{item.rating == null ? label(item.outcome) : `Rating ${item.rating}`}</span>
                 </header>
                 {item.anchor ? <p className="scorecard-anchor">{item.anchor}</p> : null}
+                {(item.proven_dimensions || []).length ? (
+                  <p className="scorecard-proven">Demonstrated: {(item.proven_dimensions || []).map(label).join(", ")}</p>
+                ) : null}
+                {(item.claimed_dimensions || []).length ? (
+                  <p className="scorecard-missing">Claimed but not demonstrated: {(item.claimed_dimensions || []).map(label).join(", ")}</p>
+                ) : null}
                 {(item.excerpts || []).length ? (
                   <ul className="scorecard-excerpts">
                     {(item.excerpts || []).map((excerpt, index) => (

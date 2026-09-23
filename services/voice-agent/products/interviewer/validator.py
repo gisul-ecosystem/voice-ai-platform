@@ -39,6 +39,23 @@ LEADING_PATTERNS = (
     re.compile(r"\bi\s+(?:assume|presume|take it)\b"),
 )
 
+# Only these justify discarding the model's question. Everything else is a
+# quality note: worth a repair retry and worth logging, but a slightly imperfect
+# real question beats a canned one that ignores what the candidate just said.
+HARD_BLOCK_REASONS: frozenset[str] = frozenset(
+    (
+        "empty_question",
+        "protected_topic",
+        "duplicate_question",
+    )
+)
+
+
+def is_speakable(reasons: list[str]) -> bool:
+    """True when the question may be spoken despite failing validation."""
+    return not any(reason in HARD_BLOCK_REASONS for reason in reasons)
+
+
 TECH_TERMS = (
     "api",
     "schema",
@@ -253,7 +270,9 @@ def _near_duplicate(left: str, right: str) -> bool:
     if len(left_tokens) < 2 or len(right_tokens) < 2:
         return False
     overlap = len(left_tokens & right_tokens)
-    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.7
+    # 0.85 rather than 0.7: a false positive here discards a grounded question
+    # in favour of a canned one, which is the worse outcome.
+    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.85
 
 
 def parse_generated_question(raw: str) -> GeneratedQuestion | None:

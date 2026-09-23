@@ -35,16 +35,22 @@ export default function ReviewAlignmentPage() {
   }, []);
 
   const competencies = state?.draft && Array.isArray(state.draft.competencies) ? state.draft.competencies as Array<Record<string, unknown>> : [];
-  // Publishing rejects weights that do not total 100, so any change to the set must rebalance.
+  const weightTotal = Math.round(competencies.reduce((sum, item) => sum + (Number(item.weight) || 0), 0) * 100) / 100;
+  // Publishing rejects weights that do not total 100. Scale proportionally so a
+  // recruiter's relative weighting survives; fall back to an even split only
+  // when no weights were set at all.
   function rebalance(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
     if (items.length === 0) return items;
-    const each = Math.round((100 / items.length) * 100) / 100;
-    return items.map((item, index) => ({
-      ...item,
-      weight: index === items.length - 1
-        ? Math.round((100 - each * (items.length - 1)) * 100) / 100
-        : each,
-    }));
+    const total = items.reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
+    const scaled = items.map((item) => {
+      const share = total > 0 ? (Number(item.weight) || 0) / total : 1 / items.length;
+      return Math.round(share * 100 * 100) / 100;
+    });
+    // Put any rounding remainder on the last entry so the total is exactly 100.
+    const head = scaled.slice(0, -1);
+    const last = Math.round((100 - head.reduce((sum, value) => sum + value, 0)) * 100) / 100;
+    const weights = [...head, last];
+    return items.map((item, index) => ({ ...item, weight: weights[index] }));
   }
   function update(index: number, patch: Record<string, unknown>) {
     if (!state) return;
@@ -193,7 +199,8 @@ export default function ReviewAlignmentPage() {
         <legend><span className="drag-handle" aria-hidden="true">⠿</span> Competency {selected + 1}</legend>
         <div className="card-order-actions"><button type="button" disabled={selected === 0} onClick={() => move(selected, -1)}>↑</button><button type="button" disabled={selected === competencies.length - 1} onClick={() => move(selected, 1)}>↓</button></div>
         <label>Main topic<input value={String(competency.name || "")} onChange={(e) => update(selected, { name: e.target.value })} /></label>
-        <div className="admin-field-grid"><label>Maximum depth<input type="number" min="1" max="5" value={String(competency.max_depth ?? 4)} onChange={(e) => update(selected, { max_depth: Number(e.target.value) })} /></label><label>Maximum follow-ups<input type="number" min="0" max="8" value={String(competency.max_probes ?? 3)} onChange={(e) => update(selected, { max_probes: Number(e.target.value) })} /></label></div>
+        <div className="admin-field-grid"><label>Maximum depth<input type="number" min="1" max="5" value={String(competency.max_depth ?? 4)} onChange={(e) => update(selected, { max_depth: Number(e.target.value) })} /></label><label>Maximum follow-ups<input type="number" min="0" max="8" value={String(competency.max_probes ?? 3)} onChange={(e) => update(selected, { max_probes: Number(e.target.value) })} /></label><label>Weighting %<input type="number" min="0" max="100" step="1" value={String(competency.weight ?? 0)} onChange={(e) => update(selected, { weight: Number(e.target.value) })} /></label></div>
+        <p className="section-help">Weighting decides how much interview time this competency gets and how much it counts in the score. Totals are normalised to 100% on publish{weightTotal !== 100 ? ` (currently ${weightTotal}%)` : ""}.</p>
         <button className="button danger-button" type="button" onClick={() => remove(selected)}>Delete competency</button>
       </fieldset> : null}
       <div className="admin-page-actions"><span>{competencies.length} competencies · ID {state.definitionId}</span><button className="button primary" disabled={busy || competencies.length === 0} onClick={() => void publish()}>{busy ? "Publishing..." : "Approve and publish"}</button></div>

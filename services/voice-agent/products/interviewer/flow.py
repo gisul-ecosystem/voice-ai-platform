@@ -45,6 +45,7 @@ from products.interviewer.prompts import (
 from products.interviewer.validator import (
     GeneratedQuestion,
     fingerprint,
+    is_speakable,
     ladder_fallback_question,
     parse_generated_question,
     validate_generated_question,
@@ -221,6 +222,11 @@ def extract_resume_projects(resume_text: str) -> list[str]:
         if in_section:
             bullet = _BULLET.match(line)
             candidate = bullet.group(1) if bullet else line.strip()
+            # A wrapped description continues the previous entry; treating it as
+            # its own project produces mid-sentence fragments like
+            # "against Stripe payouts, cutting manual reconciliation from 6".
+            if not bullet and candidate[:1].islower():
+                continue
             title = _project_title(candidate)
             if title and not _NEXT_HEADING.match(title):
                 titles.append(title)
@@ -579,6 +585,7 @@ class InterviewFlow:
         candidate_profile: dict[str, Any] | None = None,
         initial_coverage: dict[str, Any] | None = None,
         difficulty: str | None = None,
+        language: str | None = None,
     ) -> None:
         policy_outline = outline_from_definition(
             interview_definition,
@@ -636,7 +643,10 @@ class InterviewFlow:
         self.last_probe_shape: dict[str, str] = {}
         self.probes_without_gain = 0
         self.contradiction_pending = False
+        self.final_addition_offered = False
+        self._last_target_sent = ""
         self.difficulty = (difficulty or "applied").strip().lower()
+        self.language = (language or "English").strip() or "English"
         self.difficulty_profile = difficulty_profile(self.difficulty)
         self.evidence_ledger = build_ledger(
             self.interview_definition,
@@ -847,6 +857,7 @@ class InterviewFlow:
             probes_without_gain=self.probes_without_gain,
             target_slot=ledger_entry.weakest_slot() if ledger_entry else None,
             contradiction_pending=self.contradiction_pending,
+            final_addition_offered=self.final_addition_offered,
             project_name=str(phase.get("project_name") or "") or None,
             clarify_after=self.clarify_after,
             rephrase_after=self.rephrase_after,
@@ -1293,6 +1304,8 @@ class InterviewFlow:
     def _remember_generated(self, generated: GeneratedQuestion, policy: PolicyDecision | None) -> None:
         if policy and policy.intent == "consistency_check":
             self.contradiction_pending = False
+        if policy and policy.intent == "final_addition":
+            self.final_addition_offered = True
         self.last_question_competency_id = generated.competency_id or (
             policy.competency_id if policy else None
         )
@@ -1397,6 +1410,7 @@ class InterviewFlow:
         missing = list((self.coverage.get(competency_id) or {}).get("missing_intents") or [])
         ledger_entry = self.evidence_ledger.get(competency_id or "")
         target_slot, slot_instruction = target_slot_brief(ledger_entry)
+        self._last_target_sent = target_slot
         phase = self.current_phase()
         project_name = str(phase.get("project_name") or "").strip()
         if project_name:
@@ -1463,6 +1477,7 @@ class InterviewFlow:
             "answer_quality": self.last_answer_quality,
             "answer_adaptation": self._answer_adaptation_hint(),
             "framing_notes": framing_notes(self._profile_type(), self._job_target_level()),
+            "language_note": self._language_note(),
             "role_title": str(role.get("title") or ""),
         }
         system = prompt_pack(self._prompt_version())
@@ -1470,6 +1485,14 @@ class InterviewFlow:
             return system + "\n\n" + TURN_INSTRUCTIONS_V2.format(**briefing), last_candidate_turn
         return system + "\n\n" + OPENING_INSTRUCTIONS_V2.format(**briefing), (
             "Open the interview in your own words and invite them to introduce themselves."
+        )
+
+    def _language_note(self) -> str:
+        if self.language.strip().lower() in {"english", "en", ""}:
+            return "Speak English."
+        return (
+            f"Speak {self.language}. Ask every question in {self.language}, but keep "
+            "technical terms, tool names and code identifiers in their original form."
         )
 
     def _answer_adaptation_hint(self) -> str:
@@ -1561,7 +1584,9 @@ class InterviewFlow:
         competency_id = policy.competency_id if policy else None
         if not self.policy_mode:
             return FALLBACK_FOLLOWUP
-        asked = {fingerprint(q) for q in self.interviewer_turns[-8:]}
+        # Checked against the whole interview, not a recent window: a canned
+        # question reappearing ten turns later is still a repeat to the candidate.
+        asked = {fingerprint(q) for q in self.interviewer_turns}
         candidate = ladder_fallback_question(
             self.interview_definition,
             competency_id=competency_id,
@@ -1578,7 +1603,16 @@ class InterviewFlow:
         for generic in FALLBACK_PROBE_ROTATION:
             if fingerprint(generic) not in asked:
                 return generic
-        return candidate
+        # Everything canned has been used. Repeat the one asked longest ago so the
+        # repetition is at least maximally spaced.
+        order = [fingerprint(q) for q in self.interviewer_turns]
+        pool = [candidate, *FALLBACK_PROBE_ROTATION]
+        return min(
+            pool,
+            key=lambda text: order.index(fingerprint(text))
+            if fingerprint(text) in order
+            else -1,
+        )
 
     _REPAIR_HINTS = {
         "duplicate_question": "that question repeats one already asked — ask about a different, unexplored angle",
@@ -1644,6 +1678,9 @@ class InterviewFlow:
                     "prompt_version": self._prompt_version(),
                 },
             )
+        # Strict here on purpose: blocking buys a repair retry. The relaxed rule
+        # lives in _coerce_generated, which decides what to say once the model
+        # has had that second attempt.
         return result.ok
 
     def _coerce_generated(
@@ -1685,15 +1722,25 @@ class InterviewFlow:
             extra={
                 "event": "question_validation_failed",
                 "reasons": result.reasons,
+                "speakable": is_speakable(result.reasons),
                 "prompt_version": self._prompt_version(),
             },
         )
+        # Soft failures (leading phrasing, depth jump, odd intent) are logged and
+        # still spoken: the model's question is grounded in what the candidate
+        # just said, which a canned line can never be. Only unsafe or repeated
+        # questions are replaced.
+        if is_speakable(result.reasons) and result.question.question.strip():
+            return result.question
         fallback = self._fallback_spoken_question(policy)
         return GeneratedQuestion(
             question=fallback,
             competency_id=policy.competency_id if policy else None,
             intent=policy.intent if policy else "live_question",
             depth=policy.current_depth if policy else 1,
+            # The verdict is about the candidate's previous answer, so a rejected
+            # question must not discard it — that stalls the evidence ledger.
+            answer_evaluation=parsed.answer_evaluation,
         )
 
     def _prompt_for_turn(

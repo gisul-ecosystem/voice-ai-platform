@@ -611,6 +611,7 @@ async def entrypoint(ctx: JobContext) -> None:
     target_duration_minutes = 30
     max_probes_per_phase = 2
     difficulty = "applied"
+    language = "English"
     job_description = ""
     resume_text = ""
     competencies: list[str] = []
@@ -627,6 +628,7 @@ async def entrypoint(ctx: JobContext) -> None:
                     setup.get("maxProbesPerPhase")
                 )
                 difficulty = str(setup.get("difficulty") or "applied").strip().lower()
+                language = str(setup.get("language") or "English").strip() or "English"
                 raw_skills = setup.get("competencies") or []
                 if isinstance(raw_skills, list):
                     competencies = [
@@ -738,6 +740,7 @@ async def entrypoint(ctx: JobContext) -> None:
             interview_definition=interview_definition,
             candidate_profile=candidate_profile,
             difficulty=difficulty,
+            language=language,
         ),
         room=ctx.room,
     )
