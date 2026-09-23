@@ -200,12 +200,15 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     try:
         try:
             if existing_session is None:
+                # Single dispatch path only. Creating the room with
+                # RoomAgentDispatch *and* calling create_dispatch (and/or putting
+                # agents on the participant token) can start two workers in one
+                # room — the candidate hears the opening twice.
                 await lk.room.create_room(
                     api.CreateRoomRequest(
                         name=room_name,
                         metadata=metadata_json,
                         max_participants=max_participants,
-                        agents=[api.RoomAgentDispatch(agent_name=agent_name)],
                     )
                 )
                 dispatch = await lk.agent_dispatch.create_dispatch(
@@ -336,11 +339,6 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
                 can_publish=True,
                 can_subscribe=True,
                 can_publish_data=False,
-            )
-        )
-        .with_room_config(
-            api.RoomConfiguration(
-                agents=[api.RoomAgentDispatch(agent_name=agent_name)]
             )
         )
         .to_jwt()
