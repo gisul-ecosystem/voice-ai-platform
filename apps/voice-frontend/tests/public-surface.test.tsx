@@ -2,11 +2,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("public product surface", () => {
   const redirect = vi.fn();
+  const push = vi.fn();
 
   beforeEach(() => {
     vi.resetModules();
     redirect.mockClear();
-    vi.doMock("next/navigation", () => ({ redirect }));
+    push.mockClear();
+    vi.doMock("next/navigation", () => ({
+      redirect,
+      useRouter: () => ({ push }),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [] }),
+      }),
+    );
   });
 
   it("routes the public root directly to the interviewer", async () => {
