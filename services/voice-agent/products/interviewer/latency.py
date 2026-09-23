@@ -16,7 +16,9 @@ SPEECH_END_TO_FIRST_AUDIO_P50_MS = 1200.0  # optimization target
 SPEECH_END_TO_FIRST_AUDIO_P95_MS = 1500.0  # launch gate
 LLM_TTFB_BUDGET_P50_MS = 400.0  # end-of-speech → first LLM token budget share
 TURN_PROMPT_BUDGET_CHARS = 8500
-PUBLISHED_CONTEXT_LIMIT_CHARS = 2800
+# Published context is active-competency + structured job intelligence only
+# (claims/raw JD live in the turn template). Cap keeps fat definitions under budget.
+PUBLISHED_CONTEXT_LIMIT_CHARS = 1800
 
 
 def percentile(values: list[float], p: float) -> float:

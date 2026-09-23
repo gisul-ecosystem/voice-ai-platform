@@ -52,6 +52,16 @@ _INTENT_ACTIONS = {
 }
 
 
+def _assessment_intent(action: str, missing: list[str], *, depth: int) -> str:
+    """Map policy action → ladder intent; prefer uncovered intents when present."""
+    if missing:
+        return missing[0]
+    for intent, mapped in _INTENT_ACTIONS.items():
+        if mapped == action:
+            return intent
+    return _DEPTH_INTENTS.get(depth, "establish_context")
+
+
 @dataclass
 class PolicyDecision:
     action: NextAction
@@ -324,42 +334,43 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="opening",
         )
 
-    if section == "opening":
-        if state.candidate_turn_count <= 1:
-            return PolicyDecision(
-                action=MAP_CANDIDATE_BACKGROUND,
-                forced_flow_decision="probe",
-                allow_llm_decision=False,
-                current_depth=1,
-                max_depth=2,
-                competency_id=None,
-                intent="candidate_map",
-                reason="breadth-first mapping before deep probes",
-                section="candidate_map",
-            )
-        # Intro + map answer already collected while still on the opening phase —
-        # advance into candidate_map / first competency (flow may multi-hop warmups).
+    if section == "opening" and state.candidate_turn_count <= 1:
+        # Intro received while still on opening — advance into candidate_map so the
+        # spoken map question lands on the map phase (flow multi-hops warmups).
         return PolicyDecision(
-            action=ASK_BASELINE,
+            action=MAP_CANDIDATE_BACKGROUND,
             forced_flow_decision="advance",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=2,
-            competency_id=state.competency_id,
-            intent="baseline",
-            reason="opening complete — move into technical competency baseline",
-            section="baseline",
+            competency_id=None,
+            intent="candidate_map",
+            reason="breadth-first mapping before deep probes",
+            section="candidate_map",
         )
 
-    if section == "candidate_map" and state.candidate_turn_count >= 1:
+    if section == "candidate_map" and state.candidate_turn_count <= 1:
+        return PolicyDecision(
+            action=MAP_CANDIDATE_BACKGROUND,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=2,
+            competency_id=None,
+            intent="candidate_map",
+            reason="ask for relevant background before competency probes",
+            section="candidate_map",
+        )
+
+    if section in {"opening", "candidate_map"}:
         return PolicyDecision(
             action=ASK_BASELINE,
             forced_flow_decision="advance",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=2,
-            competency_id=state.competency_id,
-            intent="baseline",
+            competency_id=state.competency_id or state.gap_competency_id,
+            intent="establish_context",
             reason="candidate map complete — move into technical competency baseline",
             section="baseline",
         )
@@ -499,11 +510,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
     # Early competency turns: never allow multi-level jumps; LLM may only probe.
     if depth <= 2:
         action = ASK_BASELINE if depth == 1 else PROBE_FOR_OWNERSHIP
-        intent = (
-            state.missing_intents[0]
-            if state.missing_intents
-            else _DEPTH_INTENTS.get(depth, "establish_context")
-        )
+        intent = _assessment_intent(action, state.missing_intents, depth=depth)
         return PolicyDecision(
             action=action,
             forced_flow_decision="probe",
@@ -516,14 +523,15 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="competency_assessment",
         )
 
+    action = _DEPTH_ACTIONS.get(depth, PROBE_FOR_METHOD)
     return PolicyDecision(
-        action=_DEPTH_ACTIONS.get(depth, PROBE_FOR_METHOD),
+        action=action,
         forced_flow_decision="probe",
         allow_llm_decision=True,
         current_depth=depth,
         max_depth=state.max_depth,
         competency_id=state.competency_id,
-        intent=_DEPTH_INTENTS.get(depth, "applied_understanding"),
+        intent=_assessment_intent(action, state.missing_intents, depth=depth),
         reason="controlled progressive depth",
         section="competency_assessment",
     )
