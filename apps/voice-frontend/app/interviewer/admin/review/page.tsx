@@ -22,16 +22,24 @@ type DraftState = {
 type DraftBundle = { state?: DraftState; error: string };
 
 const EMPTY_DRAFT: DraftBundle = { error: "" };
+const LOAD_ERROR: DraftBundle = { error: "The draft could not be loaded." };
 
-function readDraft(): DraftBundle {
+/** Stable getSnapshot — new object every call would infinite-loop useSyncExternalStore. */
+let draftSnapshotCache: { raw: string | null; value: DraftBundle } | null = null;
+
+function getDraftSnapshot(): DraftBundle {
   try {
-    const saved = sessionStorage.getItem(DRAFT_KEY);
-    return {
-      state: saved ? (JSON.parse(saved) as DraftState) : undefined,
-      error: "",
-    };
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    if (draftSnapshotCache && draftSnapshotCache.raw === raw) {
+      return draftSnapshotCache.value;
+    }
+    const value: DraftBundle = raw
+      ? { state: JSON.parse(raw) as DraftState, error: "" }
+      : EMPTY_DRAFT;
+    draftSnapshotCache = { raw, value };
+    return value;
   } catch {
-    return { error: "The draft could not be loaded." };
+    return LOAD_ERROR;
   }
 }
 
@@ -46,7 +54,11 @@ export default function ReviewAlignmentPage() {
     () => true,
     () => false,
   );
-  const boot = useSyncExternalStore(subscribeDraft, readDraft, () => EMPTY_DRAFT);
+  const boot = useSyncExternalStore(
+    subscribeDraft,
+    getDraftSnapshot,
+    () => EMPTY_DRAFT,
+  );
   // null = use sessionStorage boot; otherwise local edits after load.
   const [edits, setEdits] = useState<DraftState | null>(null);
   const [selected, setSelected] = useState(0);

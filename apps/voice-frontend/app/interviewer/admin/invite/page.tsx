@@ -25,16 +25,26 @@ type DraftBundle = {
 };
 
 const EMPTY_DRAFT: DraftBundle = { error: "" };
+const LOAD_ERROR: DraftBundle = {
+  error: "Interview definition could not be loaded.",
+};
 
-function readDraft(): DraftBundle {
+/** Stable getSnapshot — new object every call would infinite-loop useSyncExternalStore. */
+let draftSnapshotCache: { raw: string | null; value: DraftBundle } | null = null;
+
+function getDraftSnapshot(): DraftBundle {
   try {
-    const saved = sessionStorage.getItem(DRAFT_KEY);
-    return {
-      state: saved ? (JSON.parse(saved) as Record<string, unknown>) : undefined,
-      error: "",
-    };
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    if (draftSnapshotCache && draftSnapshotCache.raw === raw) {
+      return draftSnapshotCache.value;
+    }
+    const value: DraftBundle = raw
+      ? { state: JSON.parse(raw) as Record<string, unknown>, error: "" }
+      : EMPTY_DRAFT;
+    draftSnapshotCache = { raw, value };
+    return value;
   } catch {
-    return { error: "Interview definition could not be loaded." };
+    return LOAD_ERROR;
   }
 }
 
@@ -51,7 +61,7 @@ export default function InviteCandidatesPage() {
   );
   const draftBundle = useSyncExternalStore(
     subscribeDraft,
-    readDraft,
+    getDraftSnapshot,
     () => EMPTY_DRAFT,
   );
   const [candidates, setCandidates] = useState<Candidate[]>([
