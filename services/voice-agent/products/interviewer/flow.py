@@ -40,12 +40,52 @@ from products.interviewer.prompts import (
 from products.interviewer.validator import (
     SKIP_HOOK_INTENTS,
     GeneratedQuestion,
+    canonical_intent,
     extract_hook_fact,
     ladder_fallback_question,
     next_probe_shape,
     parse_generated_question,
     validate_generated_question,
 )
+
+# #region agent log
+def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    payload = {
+        "sessionId": "232ea1",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        import json as _json
+        line = _json.dumps(payload)
+        logger.info("agent_debug", extra={"event": "agent_debug", **payload})
+        for _path in (
+            r"C:\Users\aksha\OneDrive\Documents\AI-Interviewer\debug-232ea1.log",
+            os.path.join(os.getcwd(), "debug-232ea1.log"),
+        ):
+            try:
+                with open(_path, "a", encoding="utf-8") as _f:
+                    _f.write(line + "\n")
+                    break
+            except Exception:
+                continue
+        import urllib.request as _u
+        _req = _u.Request(
+            "http://127.0.0.1:7619/ingest/592842c5-e50e-49f4-b4c6-a3e4948bc915",
+            data=line.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Debug-Session-Id": "232ea1",
+            },
+            method="POST",
+        )
+        _u.urlopen(_req, timeout=0.4).read()
+    except Exception:
+        pass
+# #endregion
 
 logger = logging.getLogger("voice-agent.aaptor")
 
@@ -840,16 +880,61 @@ class InterviewFlow:
             self._policy_state(pending_candidate_turn=pending_candidate_turn)
         )
         if advance_if_ready and decision.forced_flow_decision == "advance" and not self.completed:
-            # Hop the phase we're leaving now (once), so the prompt built from this
-            # decision reflects the competency we're entering (real name, ladder
-            # objective, missing intents) instead of the one we just left. Only a
-            # single hop — cascading through multiple phases in one turn would let
-            # a trivially "complete" competency get skipped without ever being asked.
-            self.apply_decision("advance")
-            decision = decide_next_action(
-                self._policy_state(pending_candidate_turn=pending_candidate_turn)
-            )
+            # Leave warmup phases (opening / candidate_map) until we land on a
+            # competency or the next decision is probe/close. Cap at 2 hops so a
+            # trivially "complete" competency cannot be skipped in one turn.
+            hops = 0
+            while (
+                advance_if_ready
+                and decision.forced_flow_decision == "advance"
+                and not self.completed
+                and hops < 2
+                and not self.current_phase().get("competency_id")
+            ):
+                from_phase = self.current_phase().get("name")
+                self.apply_decision("advance")
+                hops += 1
+                decision = decide_next_action(
+                    self._policy_state(pending_candidate_turn=pending_candidate_turn)
+                )
+                # #region agent log
+                _agent_dbg(
+                    "F",
+                    "flow.py:_current_policy_decision",
+                    "warmup_hop",
+                    {
+                        "from_phase": from_phase,
+                        "to_phase": self.current_phase().get("name"),
+                        "hops": hops,
+                        "action": decision.action,
+                        "intent": decision.intent,
+                        "competency_id": decision.competency_id,
+                        "forced": decision.forced_flow_decision,
+                    },
+                )
+                # #endregion
         self.last_policy_decision = decision
+        # #region agent log
+        _agent_dbg(
+            "B",
+            "flow.py:_current_policy_decision",
+            "policy_decision",
+            {
+                "action": decision.action,
+                "intent": decision.intent,
+                "competency_id": decision.competency_id,
+                "reason": decision.reason,
+                "forced": decision.forced_flow_decision,
+                "missing": list(
+                    (self.coverage.get(str(decision.competency_id or "")) or {}).get(
+                        "missing_intents"
+                    )
+                    or []
+                ),
+                "probe_count": self.probe_count,
+            },
+        )
+        # #endregion
         return decision
 
     def _is_warmup_phase(self) -> bool:
@@ -1159,18 +1244,18 @@ class InterviewFlow:
             self._remember_known_facts(competency_id, answer_eval)
         logger.info(
             "answer_quality_evaluated",
-            extra={
-                "event": "answer_quality_evaluated",
-                "llm_substance": getattr(answer_eval, "technical_substance", None)
-                if answer_eval is not None
-                else None,
-                "keyword_quality": quality,
-                "applied_quality": self.last_answer_quality,
-                "hinted_intents": hinted,
-                "evidenced_intents": covered,
-                "competency_id": competency_id,
-            },
-        )
+                extra={
+                    "event": "answer_quality_evaluated",
+                    "llm_substance": getattr(answer_eval, "technical_substance", None)
+                    if answer_eval is not None
+                    else None,
+                    "keyword_quality": quality,
+                    "applied_quality": self.last_answer_quality,
+                    "hinted_intents": hinted,
+                    "evidenced_intents": covered,
+                    "competency_id": competency_id,
+                },
+            )
         if update_counters:
             if usability == "usable":
                 self.consecutive_unusable = 0
@@ -1189,6 +1274,26 @@ class InterviewFlow:
                 ),
                 answer_eval=answer_eval,
             )
+        # #region agent log
+        _agent_dbg(
+            "B",
+            "flow.py:_record_answer_quality",
+            "coverage_after_answer",
+            {
+                "asked_intent": self.last_question_intent,
+                "competency_id": competency_id,
+                "usability": usability,
+                "quality": self.last_answer_quality,
+                "hinted": hinted,
+                "evidenced": covered,
+                "missing": list(
+                    (self.coverage.get(competency_id or "") or {}).get("missing_intents")
+                    or []
+                ),
+                "answer_words": len((last_candidate_turn or "").split()),
+            },
+        )
+        # #endregion
 
     def _remember_known_facts(self, competency_id: str | None, answer_eval: Any) -> None:
         if not competency_id:
@@ -1515,7 +1620,7 @@ class InterviewFlow:
         policy: PolicyDecision | None,
         last_turn: str | None = None,
     ) -> str:
-        intent = policy.intent if policy else "opening"
+        intent = canonical_intent(policy.intent if policy else "opening")
         competency_id = policy.competency_id if policy else None
         if self._uses_legacy_decision_flow():
             return FALLBACK_FOLLOWUP
@@ -1531,15 +1636,30 @@ class InterviewFlow:
             intent,
         )
         if hook and hook.lower() not in spoken.lower():
-            return f"You mentioned {hook}. {spoken}"
+            spoken = f"You mentioned {hook}. {spoken}"
+        # #region agent log
+        _agent_dbg(
+            "A",
+            "flow.py:_fallback_spoken_question",
+            "ladder_fallback",
+            {
+                "intent": intent,
+                "competency_id": competency_id,
+                "used_configured_ladder": bool(configured),
+                "hook": (hook or "")[:40],
+                "spoken": spoken[:120],
+            },
+        )
+        # #endregion
         return spoken
 
     def _configured_ladder_question(self, policy: PolicyDecision | None) -> str:
         if not policy or not policy.competency_id:
             return ""
+        intent = canonical_intent(policy.intent)
         for step in ladder_steps(self.interview_definition, policy.competency_id):
             if (
-                str(step.get("intent") or "").strip() == policy.intent
+                str(step.get("intent") or "").strip() == intent
                 and str(step.get("example_question") or "").strip()
             ):
                 return str(step["example_question"]).strip()
@@ -1584,6 +1704,21 @@ class InterviewFlow:
             last_probe_shape=self.last_probe_shape.get(competency_id or "") or None,
         )
         self._capture_replay(raw, validator_ok=result.ok, reasons=result.reasons)
+        # #region agent log
+        _agent_dbg(
+            "A",
+            "flow.py:_coerce_generated",
+            "validator_result",
+            {
+                "ok": result.ok,
+                "reasons": result.reasons,
+                "policy_intent": policy_intent,
+                "hook": (hook_fact or "")[:40],
+                "shape": required_shape,
+                "llm_q": (parsed.question or "")[:120],
+            },
+        )
+        # #endregion
         if result.ok:
             return result.question
         logger.info(
@@ -1814,6 +1949,21 @@ class InterviewFlow:
             decision, question = generated.decision, generated.question
             self._remember_generated(generated, policy)
             self._refine_answer_quality(last_candidate_turn, generated)
+            # #region agent log
+            _agent_dbg(
+                "D",
+                "flow.py:_complete_generated_turn",
+                "spoken_vs_coerced",
+                {
+                    "spoken_any": spoken_any,
+                    "overwrote": bool(spoken_any and spoken_question),
+                    "final_q": (question or "")[:120],
+                    "last_q": (self.interviewer_turns[-1][:80] if self.interviewer_turns else ""),
+                    "validator_ok": self.last_validator_ok,
+                    "validator_reasons": self.last_validator_reasons,
+                },
+            )
+            # #endregion
         else:
             decision, question = parse_stage2(raw)
             if spoken_any and spoken_question:
@@ -2101,6 +2251,19 @@ class InterviewFlow:
                 yield question
             return
 
+        # #region agent log
+        _agent_dbg(
+            "C",
+            "flow.py:_stream_policy_question",
+            "stream_outcome",
+            {
+                "spoken_any": spoken_any,
+                "failed": failed,
+                "raw_chars": len("".join(raw_parts)),
+                "streamed_q": (parser.question or "")[:120],
+            },
+        )
+        # #endregion
         question = await self._complete_generated_turn(
             "".join(raw_parts),
             last_candidate_turn,

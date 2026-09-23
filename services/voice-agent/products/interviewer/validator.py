@@ -58,6 +58,14 @@ HOOK_STOPWORDS = frozenset(
         "please",
         "briefly",
         "recent",
+        "mostly",
+        "really",
+        "actually",
+        "basically",
+        "something",
+        "anything",
+        "interned",
+        "student",
     }
 )
 
@@ -127,6 +135,23 @@ INTENT_PROBE_ALIASES: dict[str, tuple[str, ...]] = {
     "closing": ("thank", "concludes"),
     "recovery": ("move", "another"),
 }
+
+_ACTION_TO_INTENT = {
+    "PROBE_FOR_CONTEXT": "establish_context",
+    "PROBE_FOR_OWNERSHIP": "establish_ownership",
+    "PROBE_FOR_METHOD": "applied_understanding",
+    "PROBE_FOR_REASONING": "problem_or_complexity",
+    "PROBE_FOR_RESULT": "problem_or_complexity",
+    "PROBE_FOR_REFLECTION": "tradeoff_or_transfer",
+    "ASK_BASELINE": "establish_context",
+}
+
+
+def canonical_intent(intent: str | None) -> str:
+    value = (intent or "").strip()
+    if value == "baseline":
+        return "establish_context"
+    return _ACTION_TO_INTENT.get(value, value)
 
 
 TechnicalSubstance = Literal[
@@ -401,6 +426,12 @@ def ladder_fallback_question(
         ),
         "clarify": "Sorry, I did not catch that. Please say a bit more, in a full sentence.",
         "final_addition": "Before we close, is there one example you would still like to add?",
+        "closing": (
+            "Thank you for your time and for sharing your experience. "
+            "This concludes the interview."
+        ),
+        "rephrase": "Let me put that another way — can you give one concrete example?",
+        "recovery": "Let's take another example from your work. What was the situation?",
     }
     return defaults.get(
         intent,
@@ -439,8 +470,13 @@ def _grounding_corpus(
     return " ".join(parts).lower()
 
 
-def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
-    if intent in {
+_POLICY_MANDATED_INTENTS = frozenset(
+    {
+        "establish_context",
+        "establish_ownership",
+        "applied_understanding",
+        "problem_or_complexity",
+        "tradeoff_or_transfer",
         "opening",
         "candidate_map",
         "clarify",
@@ -451,7 +487,15 @@ def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
         "recovery",
         "coverage",
         "await_introduction",
-    }:
+    }
+)
+
+
+def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
+    intent = canonical_intent(intent)
+    # Policy already chose this intent. STAR allowed_probes lists must not reject
+    # establish_context just because they never mention "situation" / "describe".
+    if intent in _POLICY_MANDATED_INTENTS:
         return True
     if not allowed_probes:
         return True
@@ -482,6 +526,7 @@ def validate_generated_question(
 ) -> ValidationResult:
     reasons: list[str] = []
     question = (generated.question or "").strip()
+    policy_intent = canonical_intent(policy_intent)
     if not question:
         reasons.append("empty_question")
     if question.count("?") > 1:
@@ -512,10 +557,9 @@ def validate_generated_question(
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:
         reasons.append("competency_mismatch")
-    if policy_intent and generated.intent not in {policy_intent, "live_question"}:
-        # Opening/map can be phrased with nearby intents; still record mismatch for probes.
-        if policy_intent not in {"opening", "candidate_map", "await_introduction"}:
-            reasons.append("intent_mismatch")
+    # JSON `intent` is metadata. Normalized output already overwrites it to
+    # policy_intent. Failing the turn for a label mismatch discarded hooked
+    # follow-ups and spoke the same ladder line instead.
     if generated.depth > max(1, int(max_depth)):
         reasons.append("depth_exceeded")
     if generated.depth > max(1, int(policy_depth) + 1):

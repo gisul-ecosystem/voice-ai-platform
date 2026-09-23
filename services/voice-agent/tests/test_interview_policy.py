@@ -68,24 +68,88 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
         )
     )
     assert mapping.action == MAP_CANDIDATE_BACKGROUND
+    assert mapping.forced_flow_decision == "advance"
     assert mapping.allow_llm_decision is False
+
+    map_question = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=1,
+            candidate_turn_count=1,
+            phase_name="candidate_map",
+        )
+    )
+    assert map_question.action == MAP_CANDIDATE_BACKGROUND
+    assert map_question.forced_flow_decision == "probe"
 
     after_map = decide_next_action(
         PolicyState(
             interviewer_turn_count=2,
             candidate_turn_count=2,
             phase_name="candidate_map",
+            gap_competency_id="problem_solving",
         )
     )
     assert after_map.action == ASK_BASELINE
     assert after_map.forced_flow_decision == "advance"
+    assert after_map.intent == "establish_context"
+    assert after_map.competency_id == "problem_solving"
+
+    still_on_opening = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=2,
+            candidate_turn_count=2,
+            phase_name="opening",
+        )
+    )
+    assert still_on_opening.action == ASK_BASELINE
+    assert still_on_opening.forced_flow_decision == "advance"
+
+
+def test_baseline_alias_canonicalizes_to_establish_context() -> None:
+    from products.interviewer.validator import canonical_intent
+
+    assert canonical_intent("baseline") == "establish_context"
+    assert canonical_intent("ASK_BASELINE") == "establish_context"
+    assert canonical_intent("PROBE_FOR_OWNERSHIP") == "establish_ownership"
+
+
+def test_progressive_depth_uses_assessment_intent_not_action_name() -> None:
+    decision = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=3,
+            candidate_turn_count=3,
+            phase_name="Problem solving",
+            competency_id="problem_solving",
+            probe_count=1,
+            max_depth=3,
+            max_probes=3,
+            missing_intents=["establish_context", "establish_ownership"],
+        )
+    )
+    assert decision.intent == "establish_context"
+    assert not decision.intent.startswith("PROBE_")
+
+    no_missing = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=3,
+            candidate_turn_count=3,
+            phase_name="Problem solving",
+            competency_id="problem_solving",
+            probe_count=1,
+            max_depth=3,
+            max_probes=3,
+            missing_intents=[],
+        )
+    )
+    assert no_missing.intent == "establish_ownership"
+    assert no_missing.action == "PROBE_FOR_OWNERSHIP"
 
 
 def test_baseline_then_depth_caps_force_advance() -> None:
     baseline = decide_next_action(
         PolicyState(
-            interviewer_turn_count=1,
-            candidate_turn_count=1,
+            interviewer_turn_count=2,
+            candidate_turn_count=2,
             phase_name="candidate_map",
             competency_id="problem_solving",
         )
