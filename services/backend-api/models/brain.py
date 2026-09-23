@@ -240,9 +240,9 @@ class EndingPolicy(BaseModel):
 class VoicePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = Field(default="elevenlabs", min_length=2, max_length=64)
-    voice_id: str = Field(default="", max_length=128)
-    model_id: str = Field(default="", max_length=128)
+    provider: str = Field(default="deepgram", min_length=2, max_length=64)
+    voice_id: str = Field(default="aura-asteria-en", max_length=128)
+    model_id: str = Field(default="aura-asteria-en", max_length=128)
     stability: float | None = Field(default=None, ge=0, le=1)
     speed: float | None = Field(default=None, ge=0.5, le=1.5)
     fallback_policy: Literal[

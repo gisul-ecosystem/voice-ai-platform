@@ -1,4 +1,4 @@
-﻿"""Session-pinned TTS voice policy (Milestone 5 / PBI-A3).
+"""Session-pinned TTS voice policy (Milestone 5 / PBI-A3).
 
 Pin voice at session start, preflight before admission, retry the same voice
 only, then pause or end — never silently switch provider or voice_id.
@@ -88,6 +88,8 @@ def _default_voice_id(provider: str) -> str:
     normalized = (provider or "").strip().lower()
     if normalized in {"elevenlabs", "11labs", "eleven_labs"}:
         return (ELEVENLABS_VOICE_ID or "EXAVITQu4vr4xnSDxMaL").strip()
+    if normalized == "deepgram":
+        return (TTS_VOICE or "aura-asteria-en").strip()
     return (TTS_VOICE or "alloy").strip()
 
 
@@ -95,6 +97,8 @@ def _default_model_id(provider: str) -> str:
     normalized = (provider or "").strip().lower()
     if normalized in {"elevenlabs", "11labs", "eleven_labs"}:
         return (ELEVENLABS_MODEL_ID or "eleven_flash_v2_5").strip()
+    if normalized == "deepgram":
+        return "aura-asteria-en"
     if normalized == "openai":
         return "tts-1"
     return ""
@@ -114,6 +118,7 @@ def resolve_voice_policy(
     )
     voice_id = _opt_str(payload.get("voice_id")) or _default_voice_id(provider)
     model_id = _opt_str(payload.get("model_id")) or _default_model_id(provider)
+
     fallback = _opt_str(payload.get("fallback_policy")) or "same_voice_retry_then_pause"
     if fallback not in _ALLOWED_FALLBACK:
         fallback = "same_voice_retry_then_pause"

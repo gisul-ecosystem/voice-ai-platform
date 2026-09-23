@@ -22,13 +22,14 @@ SELF_HOSTED_ALIASES = frozenset(
 )
 OPENAI_ALIASES = frozenset({"openai", "openai_api", "api"})
 ELEVENLABS_ALIASES = frozenset({"elevenlabs", "eleven_labs", "eleven-labs", "11labs"})
+DEEPGRAM_ALIASES = frozenset({"deepgram", "deep_gram"})
 SARVAM_ALIASES = frozenset({"sarvam", "sarvaam", "saaras", "s3", "saaras_v3", "saaras:v3"})
-KEYED_PROVIDERS = frozenset({"openai", "sarvam", "elevenlabs"})
+KEYED_PROVIDERS = frozenset({"openai", "sarvam", "elevenlabs", "deepgram"})
 
 SUPPORTED_BY_SERVICE = {
     "llm": frozenset({"self_hosted", "openai"}),
     "stt": frozenset({"self_hosted", "openai", "sarvam"}),
-    "tts": frozenset({"self_hosted", "openai", "elevenlabs"}),
+    "tts": frozenset({"self_hosted", "openai", "elevenlabs", "deepgram"}),
 }
 
 _ENV_KEY = {"llm": LLM_API_KEY, "stt": STT_API_KEY, "tts": TTS_API_KEY}
@@ -53,6 +54,8 @@ def normalize_provider(
         provider = "sarvam"
     elif name in ELEVENLABS_ALIASES:
         provider = "elevenlabs"
+    elif name in DEEPGRAM_ALIASES:
+        provider = "deepgram"
 
     if provider is None:
         raise ProviderConfigError(
@@ -94,6 +97,8 @@ def resolve_api_key(service: str, provider: str, api_key_override: str | None) -
         return OPENAI_API_KEY
     if provider == "elevenlabs":
         return ELEVENLABS_API_KEY or TTS_API_KEY
+    if provider == "deepgram":
+        return DEEPGRAM_API_KEY or TTS_API_KEY
     return ""
 
 
@@ -103,6 +108,7 @@ def require_key_if_needed(service: str, provider: str, api_key: str) -> None:
             "openai": "OPENAI_API_KEY",
             "sarvam": "SARVAM_API_KEY",
             "elevenlabs": "ELEVENLABS_API_KEY",
+            "deepgram": "DEEPGRAM_API_KEY",
         }[provider]
         extra = f" or {provider_env}"
         env_names = f"{service.upper()}_API_KEY{extra}"

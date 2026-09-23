@@ -801,7 +801,6 @@ async def entrypoint(ctx: JobContext) -> None:
             brain_bridge=brain_bridge,
             interview_definition=interview_definition,
             candidate_profile=candidate_profile,
-            difficulty=difficulty,
             language=language,
         ),
         room=ctx.room,

@@ -66,8 +66,6 @@ class AaptorAgent(Agent):
             flow_kwargs["interview_definition"] = interview_definition
         if candidate_profile is not None:
             flow_kwargs["candidate_profile"] = candidate_profile
-        if difficulty:
-            flow_kwargs["difficulty"] = difficulty
         if language:
             flow_kwargs["language"] = language
         restored_state = dict(initial_state or {})

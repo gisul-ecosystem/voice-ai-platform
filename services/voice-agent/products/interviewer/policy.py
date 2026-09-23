@@ -221,8 +221,8 @@ def outline_from_definition(
     even = max(3, remaining // max(len(valid), 1))
     for item, weight in zip(valid, weights, strict=True):
         if weight_total > 0:
-            share = max(3, round(remaining * weight / weight_total))
-            normalized_weight = (weight / weight_total) * 100
+            share = max(3, round(remaining * (weight / 100.0)))
+            normalized_weight = weight
         else:
             share = even
             normalized_weight = 100.0 / max(len(valid), 1)

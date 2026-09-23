@@ -675,6 +675,8 @@ class InterviewFlow:
         candidate_profile: dict[str, Any] | None = None,
         initial_coverage: dict[str, Any] | None = None,
         allow_legacy_flow: bool | None = None,
+        difficulty: str | None = None,
+        language: str | None = None,
     ) -> None:
         if candidate_profile and candidate_profile.get("claims"):
             projects = [
@@ -2620,6 +2622,8 @@ class InterviewFlow:
         if last_candidate_turn is None:
             question = self._ensure_opening_cites_context(question)
         self._remember_question(question)
+        state = self._policy_state()
+        budget_left = max(0, state.target_end_seconds - state.elapsed_seconds)
         logger.info(
             "stage2_question",
             extra={
@@ -2633,8 +2637,10 @@ class InterviewFlow:
                     else None
                 ),
                 "phase": self.current_phase().get("name"),
+                "competency": state.competency_id,
                 "phase_index": self.phase_index,
                 "probe_count": self.probe_count,
+                "budget_left_seconds": budget_left,
                 "is_opening": last_candidate_turn is None,
                 "prompt_chars": len(prompt),
             },

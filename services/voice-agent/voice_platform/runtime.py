@@ -1,4 +1,4 @@
-﻿"""Shared LiveKit session construction for all voice products."""
+"""Shared LiveKit session construction for all voice products."""
 from __future__ import annotations
 
 import logging
@@ -108,7 +108,7 @@ def build_agent_session(
         # Preemptive drafting made the agent commit to replying on partial/paused
         # speech before the candidate finished their sentence — disabled so the
         # full final utterance reaches the LLM before a reply is generated.
-        preemptive_generation=True,
+        preemptive_generation=False,
     )
 
 

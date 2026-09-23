@@ -175,12 +175,13 @@ export default function ReviewAlignmentPage() {
       (sum, item) => sum + (Number(item.weight) || 0),
       0,
     );
-    let publishComps = competencies;
     if (Math.abs(weightSum - 100) > 0.01) {
-      publishComps = rebalanceWeights(competencies);
-      const synced = syncDraftCompetencies(publishComps);
-      if (synced) setState(synced);
+      setError(
+        `Competency weights must total 100%. Currently they total ${Math.round(weightSum * 10) / 10}%.`,
+      );
+      return;
     }
+    const publishComps = competencies;
     setBusy(true);
     setError("");
     try {

@@ -241,43 +241,8 @@ def _candidate_competency_seeds(
     for name in creator_competencies or []:
         add(name, [], required=True, source="creator")
 
-    # LLM / explicit creator recommendations should own the interview plan.
-    # Only fall back to JD fragment heuristics when we do not have enough.
-    skip_jd_pad = creator_exclusive and len(seeds) >= _MIN_COMPETENCIES
-
-    def _usable(item: ExtractedItem, *, max_len: int = 96) -> bool:
-        text = item.text.strip()
-        # Allow comma-separated skill lists by using the first segment when long.
-        if "," in text:
-            text = text.split(",", 1)[0].strip()
-        if len(text) < 2 or len(text) > max_len:
-            return False
-        if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
-            return False
-        return True
-
-    if not skip_jd_pad:
-        for item in job.skills + job.mandatory_requirements:
-            if _usable(item):
-                label = item.text.strip()
-                if "," in label:
-                    label = label.split(",", 1)[0].strip()
-                add(label, [item.text], required=True)
-
-        for item in job.responsibilities[:4]:
-            text = item.text.strip()
-            if 8 <= len(text) <= 72 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
-                add(text, [text], required=True)
-
-        preferred_pool = (
-            list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
-        )
-        for item in preferred_pool:
-            if _usable(item, max_len=72):
-                label = item.text.strip()
-                if "," in label:
-                    label = label.split(",", 1)[0].strip()
-                add(label, [item.text], required=False)
+    # We no longer fall back to raw JD sentences. The LLM extraction
+    # or explicit creator guidance must own the interview plan.
 
     required_seeds = [seed for seed in seeds if seed[3]]
     preferred_seeds = [seed for seed in seeds if not seed[3]]
@@ -304,6 +269,7 @@ def _build_competency(
     required: bool = True,
     definition: str | None = None,
     evidence_expected: list[str] | None = None,
+    source: str = "jd",
 ) -> CompetencyDefinition:
     evidence = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
     if not evidence:
@@ -492,6 +458,7 @@ def compile_blueprint(
                 required=required,
                 definition=llm_definition or core_defs.get(id_base),
                 evidence_expected=evidence_list,
+                source=source,
             )
         )
 

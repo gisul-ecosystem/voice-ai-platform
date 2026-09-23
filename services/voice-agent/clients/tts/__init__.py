@@ -1,4 +1,4 @@
-﻿"""TTS client factory. Env URL is the default; session can override provider+key."""
+"""TTS client factory. Env URL is the default; session can override provider+key."""
 from __future__ import annotations
 
 from typing import Any
@@ -18,12 +18,13 @@ from clients.settings import (
     TTS_SERVICE_URL,
 )
 from clients.tts.elevenlabs import ElevenLabsTts
+from clients.tts.deepgram import DeepgramTts
 from clients.tts.openai import OpenAITts
 from clients.tts.resilient import ResilientTts
 from clients.tts.self_hosted import SelfHostedTts
 from clients.tts.voice_policy import ResolvedVoicePolicy, resolve_voice_policy
 
-TtsClient = ResilientTts | SelfHostedTts | OpenAITts | ElevenLabsTts
+TtsClient = ResilientTts | SelfHostedTts | OpenAITts | ElevenLabsTts | DeepgramTts
 
 
 def _build(
@@ -48,6 +49,14 @@ def _build(
             voice_id=voice_id,
             model_id=model_id,
             stability=stability,
+        )
+    if provider == "deepgram":
+        from clients.settings import DEEPGRAM_BASE_URL
+        return DeepgramTts(
+            base_url=DEEPGRAM_BASE_URL or "https://api.deepgram.com/v1",
+            api_key=api_key,
+            model=model_id,
+            voice_id=voice_id,
         )
     return SelfHostedTts(
         base_url=TTS_SERVICE_URL,
@@ -114,6 +123,7 @@ def get_tts_client(
 
 
 __all__ = [
+    "DeepgramTts",
     "ElevenLabsTts",
     "OpenAITts",
     "ResilientTts",

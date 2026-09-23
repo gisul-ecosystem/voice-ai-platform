@@ -56,15 +56,6 @@ export default function InviteCandidatesPage() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [startsAtOverride, setStartsAtOverride] = useState<string | null>(null);
 
-  // sessionStorage is client-only; reading it during render breaks hydration.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
-    const boot = readDraft();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setState(boot.state);
-    setError(boot.error);
-    setHydrated(true);
-  }, []);
 
   useEffect(() => {
     fetch("/api/admin/pipeline")

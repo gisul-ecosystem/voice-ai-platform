@@ -345,6 +345,7 @@ STANDARD_ASSESSMENT_INTENTS = frozenset(INTENT_PROBE_ALIASES) - frozenset(
         "recovery",
     }
 )
+KNOWN_INTENTS = frozenset(INTENT_PROBE_ALIASES) | STANDARD_ASSESSMENT_INTENTS | SKIP_HOOK_INTENTS
 
 _ACTION_TO_INTENT = {
     "PROBE_FOR_CONTEXT": "establish_context",
@@ -1042,7 +1043,10 @@ def validate_generated_question(
     if _looks_like_non_job_trivia(question, corpus=corpus):
         reasons.append("non_job_trivia")
 
-    ok = not reasons
+    # We still collect all reasons for logging and analysis, but we only block
+    # the question (force fallback) if it is genuinely empty. We want the real LLM
+    # generated question to reach TTS, despite minor stylistic issues.
+    ok = "empty_question" not in reasons
     normalized = GeneratedQuestion(
         question=question,
         competency_id=expected_competency or generated.competency_id,

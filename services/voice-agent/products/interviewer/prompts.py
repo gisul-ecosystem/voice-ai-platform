@@ -115,7 +115,14 @@ Respond with a single JSON object in exactly this shape:
   "depth": 1,
   "depth_tag": "concept | applied | trade_off",
   "probe_shape": "why | trade_off | failure_mode | metric | other",
-  "source_claim_ids": []
+  "source_claim_ids": [],
+  "answer_evaluation": {{
+    "technical_substance": "surface | partial | deep | incorrect | not_applicable",
+    "factually_correct": true,
+    "key_facts_stated": ["fact 1", "fact 2"],
+    "reasoning": "...",
+    "matches_evidence_expected": false
+  }}
 }}
 
 {framing_notes}

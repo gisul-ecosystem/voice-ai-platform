@@ -48,7 +48,9 @@ DEFAULT_ENDING_POLICY = EndingPolicy(
 )
 
 DEFAULT_VOICE_POLICY = VoicePolicy(
-    provider="elevenlabs",
+    provider="deepgram",
+    voice_id="aura-asteria-en",
+    model_id="aura-asteria-en",
     fallback_policy="same_voice_retry_then_pause",
     preflight_required=True,
 )
