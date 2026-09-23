@@ -698,7 +698,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 logger.warning("status_report_unavailable", extra={"event": "status_report_unavailable"})
 
     target_duration_minutes = 30
-    max_probes_per_phase = 2
+    max_probes_per_phase = 3
     difficulty = "applied"
     language = "English"
     job_description = ""
@@ -714,7 +714,7 @@ async def entrypoint(ctx: JobContext) -> None:
                     setup.get("durationMinutes")
                 )
                 max_probes_per_phase = normalize_probe_count(
-                    setup.get("maxProbesPerPhase")
+                    setup.get("maxProbesPerPhase"), default=3
                 )
                 difficulty = str(setup.get("difficulty") or "applied").strip().lower()
                 language = str(setup.get("language") or "English").strip() or "English"

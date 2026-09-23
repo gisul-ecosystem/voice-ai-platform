@@ -166,12 +166,38 @@ def clip_source_text(text: str, limit: int) -> str:
     return f"{trimmed}…"
 
 
+_ACTION_VERBS = re.compile(
+    r"^(?:implemented|developing|developed|build|built|designing|designed|created|creating|"
+    r"engineered|trained|training|utilized|utilizing|deployed|deploying|orchestrated|"
+    r"collaborated|conducted|achieved|configured|optimized|automated|integrated|"
+    r"assisted|analyzed|evaluated|fine-tuned|finetuned|maintained|led|wrote|leveraged|"
+    r"explored|established|prepared|spearheaded|programmed|tested|architected)\b",
+    re.I,
+)
+
+
 def _project_title(raw: str) -> str:
     text = " ".join((raw or "").split())
     if not text:
         return ""
     text = re.split(r"\s[:|–—-]\s", text, maxsplit=1)[0]
     text = text.split(":")[0].strip(" •-\t")
+    clean_first = re.sub(r"^(?:a|an|the|this)\s+", "", text, flags=re.I).strip()
+    match = _ACTION_VERBS.match(clean_first)
+    if match:
+        remainder = clean_first[match.end():].strip()
+        remainder = re.sub(r"^(?:a|an|the|this)\s+", "", remainder, flags=re.I).strip()
+        first_word = remainder.split()[0] if remainder.split() else ""
+        _GENERIC_DESCRIPTORS = frozenset({
+            "deep", "machine", "model", "models", "pipeline", "pipelines",
+            "end-to-end", "various", "multiple", "several", "internal", "new",
+            "robust", "scalable", "custom", "high-performance", "simple", "full-stack",
+            "web", "system", "systems", "service", "services", "application", "tool",
+        })
+        if remainder and remainder[0].isupper() and first_word.lower() not in _GENERIC_DESCRIPTORS:
+            text = remainder
+        else:
+            return ""
     words = text.split()
     if len(words) > 8:
         text = " ".join(words[:8])
@@ -230,6 +256,11 @@ def extract_resume_projects(resume_text: str) -> list[str]:
                 candidate = bullet.group(1) if bullet else line.strip()
                 if not bullet and candidate[:1].islower():
                     continue
+                # Descriptive bullets without title separators are descriptions, not titles
+                if bullet:
+                    has_title_separator = bool(re.search(r"[:|–—]|\s-\s", candidate))
+                    if not has_title_separator:
+                        continue
                 if strict_filter and not _looks_like_project_title_in_experience(candidate):
                     continue
                 title = _project_title(candidate)
@@ -943,7 +974,8 @@ class InterviewFlow:
     def _phase_probe_limit(self) -> int:
         if self.policy_mode:
             phase_cap = int(self.current_phase().get("max_probes") or self.max_probes_per_phase)
-            return max(1, min(self.max_probes_per_phase, phase_cap))
+            min_cap = 2 if self.current_phase().get("competency_id") else 1
+            return max(min_cap, min(self.max_probes_per_phase, phase_cap))
         flow_limit = max(3, self._phase_minutes() // 2)
         return min(self.max_probes_per_phase, flow_limit)
 
@@ -979,7 +1011,13 @@ class InterviewFlow:
         # Named-but-unproven evidence must not close a competency; probe caps and
         # the time guard remain the only other way out.
         evidence_satisfied = ledger_entry is None or ledger_entry.is_satisfied()
-        coverage_complete = bool(required) and not missing and evidence_satisfied
+        min_probes = min(2, self._phase_probe_limit())
+        coverage_complete = (
+            bool(required)
+            and not missing
+            and evidence_satisfied
+            and self.probe_count >= min_probes
+        )
         competency_ids = [
             str(item.get("competency_id"))
             for item in self.phases
@@ -1267,10 +1305,9 @@ class InterviewFlow:
 
     def _normalize_decision(self, decision: str, *, is_intro_reply: bool) -> str:
         if self.policy_mode:
-            policy = self._current_policy_decision()
+            policy = self.last_policy_decision or self._current_policy_decision()
             if policy is not None:
                 if policy.forced_flow_decision == "close":
-                    self.completed = True
                     return "advance"
                 if not policy.allow_llm_decision:
                     return policy.forced_flow_decision
@@ -1300,8 +1337,12 @@ class InterviewFlow:
             if not competency_id:
                 return self.probe_count >= min(2, self.max_probes_per_phase)
             # Hard gate: never leave a competency phase with zero real turns.
-            # probe_count==0 means the LLM hasn't asked a single real question yet.
             if self.probe_count == 0:
+                return False
+            min_probes = min(2, self._phase_probe_limit())
+            phase_elapsed = time.monotonic() - self.phase_started_at
+            time_remaining_for_phase = phase_elapsed < self._phase_minutes() * 60
+            if self.probe_count < min_probes and time_remaining_for_phase and not self._time_up():
                 return False
             missing = list((self.coverage.get(str(competency_id)) or {}).get("missing_intents") or [])
             ledger_entry = self.evidence_ledger.get(str(competency_id))
@@ -1309,7 +1350,7 @@ class InterviewFlow:
                 return self.probe_count >= self._phase_probe_limit()
             if missing and self.probe_count < self._phase_probe_limit():
                 return False
-            if not missing and self.probe_count >= 1:
+            if not missing and self.probe_count >= min_probes:
                 return True
             return self.probe_count >= self._phase_probe_limit()
         if self._is_warmup_phase():
@@ -2004,9 +2045,9 @@ class InterviewFlow:
                 (2_400, 1_200, 2_000, 800, 400),
                 (900, 400, 400, 400, 200),
                 (400, 240, 200, 200, 100),
-                (180, 120, 120, 100, 60),
-                (100, 60, 60, 60, 40),
-                (0, 0, 0, 0, 0),
+                (180, 120, 120, 100, 80),
+                (60, 40, 40, 40, 60),
+                (0, 0, 0, 0, 60),
             ):
                 if len(system) + len(template) + 2 <= TURN_PROMPT_BUDGET_CHARS:
                     break
@@ -2023,12 +2064,24 @@ class InterviewFlow:
                 compact["known_facts"] = clip_source_text(
                     briefing.get("known_facts", ""), facts_limit
                 ) if facts_limit else "(omitted for brevity)"
-                compact["recent_turns"] = clip_source_text(
+                def _clip_from_end(raw_text: str, lim: int) -> str:
+                    items = [l.strip() for l in raw_text.splitlines() if l.strip()]
+                    if not items or not lim:
+                        return "(omitted)"
+                    kept = []
+                    cur = 0
+                    for line in reversed(items):
+                        if cur + len(line) + 1 > lim and kept:
+                            break
+                        kept.insert(0, line)
+                        cur += len(line) + 1
+                    return "\n".join(kept) if kept else "(omitted)"
+                compact["recent_turns"] = _clip_from_end(
                     briefing.get("recent_turns", ""), turns_limit
-                ) if turns_limit else "(omitted)"
-                compact["recent_questions"] = clip_source_text(
+                )
+                compact["recent_questions"] = _clip_from_end(
                     briefing.get("recent_questions", ""), turns_limit
-                ) if turns_limit else "(omitted)"
+                )
                 template = TURN_INSTRUCTIONS_V2.format_map(compact)
             return system + "\n\n" + template, last_candidate_turn
         self._validate_prompt_briefing(briefing, OPENING_INSTRUCTIONS_V2, "OPENING_INSTRUCTIONS_V2")
@@ -2860,7 +2913,7 @@ class InterviewFlow:
                 decision, is_intro_reply=is_intro_reply
             )
             self._apply_turn_decision(decision, is_intro_reply=is_intro_reply)
-            if self.completed:
+            if self.completed and not spoken_question:
                 question = CLOSING_MESSAGE
         if last_candidate_turn is None:
             question = self._ensure_opening_cites_context(question)
@@ -3137,7 +3190,7 @@ class InterviewFlow:
             spoken_question=parser.question.strip() if spoken_any else None,
         )
         if question == CLOSING_MESSAGE:
-            if parser.question.strip() != CLOSING_MESSAGE:
+            if not spoken_any and parser.question.strip() != CLOSING_MESSAGE:
                 yield question
             return
         if not spoken_any and question:

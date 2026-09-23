@@ -754,9 +754,13 @@ def validate_generated_question(
     # Hook details and probe-shape rotation guide wording, but do not reject a
     # question that is otherwise safe, grounded, policy-compatible, and unique.
 
-    expected_competency = policy_competency_id
-    if expected_competency and generated.competency_id not in {None, "", expected_competency}:
-        reasons.append("competency_mismatch")
+    expected_competency = (policy_competency_id or "").strip().lower()
+    gen_comp = (generated.competency_id or "").strip().lower()
+    if expected_competency and gen_comp and gen_comp != expected_competency:
+        expected_tokens = set(re.findall(r"[a-z0-9]+", expected_competency))
+        gen_tokens = set(re.findall(r"[a-z0-9]+", gen_comp))
+        if not (expected_tokens & gen_tokens):
+            reasons.append("competency_mismatch")
     project_intents = {
         "resume_project",
         "opening",
@@ -767,14 +771,24 @@ def validate_generated_question(
     in_project_phase = (policy_intent or "") in project_intents
     if not in_project_phase:
         # Competency section: any question that names a resume project is a section violation.
+        _GENERIC_TECH_WORDS = frozenset({
+            "project", "projects", "pipeline", "pipelines", "model", "models",
+            "service", "services", "system", "systems", "data", "app", "application",
+            "web", "database", "api", "apis", "code", "tool", "tools", "platform",
+            "learning", "python", "backend", "frontend", "server", "cloud",
+            "feature", "features", "module", "modules", "process", "interface",
+        })
         names = [str(resume_focus).strip()] if resume_focus else []
         names.extend(str(item).strip() for item in (resume_projects or []) if str(item).strip())
         for name in names:
-            if len(name) > 3 and name.lower() in lowered:
-                reasons.append("project_in_competency_question")
-                reasons.append("competency_mismatch")
-                reasons.append("section_violation")
-                break
+            clean_name = name.strip()
+            if len(clean_name) > 3 and clean_name.lower() not in _GENERIC_TECH_WORDS:
+                pattern = rf"\b{re.escape(clean_name.lower())}\b"
+                if re.search(pattern, lowered):
+                    reasons.append("project_in_competency_question")
+                    reasons.append("competency_mismatch")
+                    reasons.append("section_violation")
+                    break
     if in_project_phase and require_resume_grounding:
         # Project section: a question that drifts to a different named competency
         # (e.g. starts a DSA puzzle mid-project) is also a section violation.

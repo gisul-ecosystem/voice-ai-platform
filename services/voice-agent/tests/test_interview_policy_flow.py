@@ -479,3 +479,62 @@ def test_python_ml_sql_guidance_stays_in_domain() -> None:
         assert "Resume project excerpt" not in prompt
         assert "Resume facts:" not in prompt
 
+
+def test_competency_requires_multiple_probes_before_advancing() -> None:
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=_definition(),
+        resume_text="Projects\n- Payments Gateway: checkout",
+        interviewer_turns=["Hello and welcome.", "Tell me about Payments Gateway."],
+        candidate_turns=["I am a software engineer.", "I worked on the payments service."],
+    )
+    # Move to the first competency phase
+    comp_idx = next(i for i, p in enumerate(flow.phases) if p.get("competency_id"))
+    flow.phase_index = comp_idx
+    flow.probe_count = 0
+
+    # Turn 1 on competency
+    assert flow._should_leave_phase() is False
+    flow.apply_decision("probe")
+    assert flow.phase_index == comp_idx
+    assert flow.probe_count == 1
+
+    # After 1 probe, it must NOT leave phase early
+    assert flow._should_leave_phase() is False
+
+
+def test_extract_resume_projects_filters_bullet_descriptions() -> None:
+    from products.interviewer.flow import extract_resume_projects
+
+    resume = """
+Aditya Bargujar
+AI Engineer
+
+Projects
+MoleCheck - Skin Cancer Detection System
+• Developed a deep learning model using MobileNet V2 for multiclass classification of skin lesions with 88% accuracy.
+• Implemented an end-to-end TensorFlow/Keras pipeline with data augmentation and preprocessing.
+• Deployed as a web app using Flask and Docker.
+Mental Health Chatbot
+• Built a conversational agent using PyTorch and transformers.
+• Engineered a clean REST API backend for dialogue handling.
+"""
+    projects = extract_resume_projects(resume)
+    assert "MoleCheck" in projects
+    assert "Mental Health Chatbot" in projects
+    # Bullet points should never be extracted as project names
+    for p in projects:
+        assert not p.lower().startswith(("developed", "implemented", "deployed", "built", "engineered"))
+        assert "pipeline" not in p.lower()
+
+
+def test_project_walkthrough_does_not_ask_ownership() -> None:
+    from products.interviewer.prompts import ACTION_PHRASING, UNIVERSAL_SYSTEM_V2, TURN_INSTRUCTIONS_V2
+
+    walk_phrasing = ACTION_PHRASING["WALK_RESUME_PROJECT"]
+    assert "Do NOT ask about personal ownership" in walk_phrasing
+    assert "NEVER interrogate personal ownership" in UNIVERSAL_SYSTEM_V2
+    assert "Do NOT ask about personal ownership, responsibility" in TURN_INSTRUCTIONS_V2
+
+

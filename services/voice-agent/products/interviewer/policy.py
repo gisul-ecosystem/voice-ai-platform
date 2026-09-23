@@ -70,7 +70,7 @@ SLOT_ACTIONS: dict[str, str] = {
 
 _DEPTH_ACTIONS = {
     1: PROBE_FOR_CONTEXT,
-    2: PROBE_FOR_OWNERSHIP,
+    2: PROBE_FOR_METHOD,
     3: PROBE_FOR_METHOD,
     4: PROBE_FOR_REASONING,
     5: PROBE_FOR_REFLECTION,
@@ -764,7 +764,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
 
     # Early competency turns: never allow multi-level jumps; LLM may only probe.
     if depth <= 2:
-        action = ASK_BASELINE if depth == 1 else PROBE_FOR_OWNERSHIP
+        action = ASK_BASELINE if depth == 1 else PROBE_FOR_METHOD
         intent = state.missing_intents[0] if state.missing_intents else _DEPTH_INTENTS.get(
             depth, "establish_context"
         )
@@ -776,7 +776,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=state.max_depth,
             competency_id=state.competency_id,
             intent=intent,
-            reason="progressive depth — establish context/ownership first",
+            reason="progressive depth — baseline concept followed by applied method",
             section="competency_assessment",
         )
 
