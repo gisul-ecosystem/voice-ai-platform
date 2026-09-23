@@ -3,7 +3,16 @@
 import Link from "next/link";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-const DRAFT_KEY = "ai-interview:role-draft";
+import {
+  AdminProgress,
+  LandingNav,
+} from "@/components/interviewer/LandingNav";
+import {
+  EMPTY_ROLE_DRAFT,
+  getRoleDraftSnapshot,
+  subscribeRoleDraft,
+  type RoleDraftState,
+} from "@/lib/interviewer/role-draft";
 
 type Candidate = {
   name: string;
@@ -19,55 +28,30 @@ type Pipeline = {
   services: Array<{ name: string; provider: string; configured: boolean }>;
 };
 
-type DraftBundle = {
-  state?: Record<string, unknown>;
-  error: string;
-};
-
-const EMPTY_DRAFT: DraftBundle = { error: "" };
-const LOAD_ERROR: DraftBundle = {
-  error: "Interview definition could not be loaded.",
-};
-
-/** Stable getSnapshot — new object every call would infinite-loop useSyncExternalStore. */
-let draftSnapshotCache: { raw: string | null; value: DraftBundle } | null = null;
-
-function getDraftSnapshot(): DraftBundle {
-  try {
-    const raw = sessionStorage.getItem(DRAFT_KEY);
-    if (draftSnapshotCache && draftSnapshotCache.raw === raw) {
-      return draftSnapshotCache.value;
-    }
-    const value: DraftBundle = raw
-      ? { state: JSON.parse(raw) as Record<string, unknown>, error: "" }
-      : EMPTY_DRAFT;
-    draftSnapshotCache = { raw, value };
-    return value;
-  } catch {
-    return LOAD_ERROR;
-  }
-}
-
-function subscribeDraft() {
-  return () => undefined;
+function scheduleStartsAt(state: RoleDraftState): string {
+  const raw = (state.startsAt || "").trim();
+  if (!raw) return new Date().toISOString();
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return new Date().toISOString();
+  return parsed.toISOString();
 }
 
 export default function InviteCandidatesPage() {
-  // sessionStorage via useSyncExternalStore — SSR snapshot stays empty; no setState-in-effect.
   const ready = useSyncExternalStore(
-    subscribeDraft,
+    subscribeRoleDraft,
     () => true,
     () => false,
   );
   const draftBundle = useSyncExternalStore(
-    subscribeDraft,
-    getDraftSnapshot,
-    () => EMPTY_DRAFT,
+    subscribeRoleDraft,
+    getRoleDraftSnapshot,
+    () => EMPTY_ROLE_DRAFT,
   );
   const [candidates, setCandidates] = useState<Candidate[]>([
     { name: "", email: "", resume: null },
   ]);
   const [pipeline, setPipeline] = useState<Pipeline>();
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/pipeline")
@@ -93,6 +77,20 @@ export default function InviteCandidatesPage() {
 
   function addCandidate() {
     setCandidates((items) => [...items, { name: "", email: "", resume: null }]);
+  }
+
+  async function copyInvite(index: number, path: string) {
+    const absolute =
+      typeof window !== "undefined"
+        ? `${window.location.origin}${path}`
+        : path;
+    try {
+      await navigator.clipboard.writeText(absolute);
+      setCopiedIndex(index);
+      window.setTimeout(() => setCopiedIndex(null), 2000);
+    } catch {
+      update(index, { error: "Could not copy link." });
+    }
   }
 
   async function invite(index: number) {
@@ -128,7 +126,6 @@ export default function InviteCandidatesPage() {
         { method: "POST", body: form },
       );
       if (!upload.ok) throw new Error("CV upload failed.");
-      const settings = state as Record<string, unknown>;
       const schedule = await fetch("/api/interviews", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -137,21 +134,21 @@ export default function InviteCandidatesPage() {
           definitionId,
           candidateName: candidate.name,
           candidateEmail: candidate.email,
-          startsAt: new Date().toISOString(),
-          joinEarlyMinutes: 0,
+          startsAt: scheduleStartsAt(state),
+          joinEarlyMinutes: 15,
           lateGraceMinutes: 120,
           timezone:
             Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-          jobDescription: settings.jobDescription,
+          jobDescription: state.jobDescription,
           resumeText: "stored on candidate record",
           interviewSetup: {
-            title: settings.title,
-            role: settings.role,
-            seniority: settings.seniority,
+            title: state.title,
+            role: state.role,
+            seniority: state.seniority,
             difficulty: "applied",
-            durationMinutes: Number(settings.durationMinutes || 30),
+            durationMinutes: Number(state.durationMinutes || 30),
             language: "English",
-            competencies: String(settings.competencies || "")
+            competencies: String(state.competencies || "")
               .split(",")
               .map((item) => item.trim())
               .filter(Boolean),
@@ -190,6 +187,7 @@ export default function InviteCandidatesPage() {
   if (!state || !published) {
     return (
       <main className="interviewer-home admin-builder-page">
+        <LandingNav ariaLabel="Admin navigation" badge="03 Invite candidates" />
         <div className="center-state">
           <h2>Publish the interview first</h2>
           <Link className="button primary" href="/interviewer/admin/design">
@@ -202,12 +200,8 @@ export default function InviteCandidatesPage() {
 
   return (
     <main className="interviewer-home admin-builder-page">
-      <nav className="landing-nav" aria-label="Admin navigation">
-        <Link href="/interviewer" className="brand">
-          <span className="brand-mark">AI</span>AI Interviewer
-        </Link>
-        <span className="environment-badge">03 Invite candidates</span>
-      </nav>
+      <LandingNav ariaLabel="Admin navigation" badge="03 Invite candidates" />
+      <AdminProgress current="invite" />
       <section className="demo-intro">
         <p className="eyebrow">Published interview</p>
         <h1>Invite candidates</h1>
@@ -285,10 +279,19 @@ export default function InviteCandidatesPage() {
             {candidate.invite ? (
               <div className="invitation-link">
                 <label>Secure invite link</label>
-                <input
-                  readOnly
-                  value={`${typeof window !== "undefined" ? window.location.origin : ""}${candidate.invite}`}
-                />
+                <div className="invitation-link-row">
+                  <input
+                    readOnly
+                    value={`${typeof window !== "undefined" ? window.location.origin : ""}${candidate.invite}`}
+                  />
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={() => void copyInvite(index, candidate.invite!)}
+                  >
+                    {copiedIndex === index ? "Copied" : "Copy"}
+                  </button>
+                </div>
               </div>
             ) : (
               <button

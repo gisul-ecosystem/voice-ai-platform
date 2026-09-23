@@ -29,5 +29,20 @@ describe("public product surface", () => {
       "href",
       "/interviewer/results",
     );
+    expect(screen.getByRole("link", { name: "Create an interview" })).toHaveAttribute(
+      "href",
+      "/interviewer/admin/design",
+    );
+  });
+
+  it("redirects legacy admin and setup entries to the design wizard", async () => {
+    const { default: AdminPage } = await import("@/app/interviewer/admin/page");
+    AdminPage();
+    expect(redirect).toHaveBeenCalledWith("/interviewer/admin/design");
+
+    redirect.mockClear();
+    const { default: SetupPage } = await import("@/app/interviewer/setup/page");
+    SetupPage();
+    expect(redirect).toHaveBeenCalledWith("/interviewer/admin/design");
   });
 });
