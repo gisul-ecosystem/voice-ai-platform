@@ -30,7 +30,7 @@ CLOSE_INTERVIEW = "CLOSE_INTERVIEW"
 
 # Intro + optional project must yield to admin competencies quickly.
 WARMUP_MAX_SECONDS = 180
-WARMUP_MAX_INTERVIEWER_TURNS = 4
+WARMUP_MAX_INTERVIEWER_TURNS = 5
 WARMUP_SECTIONS = frozenset({"opening", "candidate_map", "resume_project", "baseline"})
 
 # Probe rungs (design spec section 5). The policy picks the rung; the model
@@ -192,8 +192,8 @@ def outline_from_definition(
                 "source": "resume",
                 "intent": "resume_project",
                 "project_name": project,
-                "max_depth": 1,
-                "max_probes": 1,
+                "max_depth": 3,
+                "max_probes": 3,
             }
         )
 

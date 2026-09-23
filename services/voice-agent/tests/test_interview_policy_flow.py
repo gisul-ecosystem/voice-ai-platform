@@ -303,8 +303,8 @@ async def test_policy_mode_opening_cites_resume_or_jd_materials() -> None:
     await flow.generate_next_question(None)
 
     prompt = llm.messages[0][0]["content"]
-    assert "cite exactly ONE concrete signal" in prompt
-    assert "machine learning classifier" in prompt
+    assert "warm, natural, human opening greeting" in prompt
+    assert "DO NOT recite raw resume bullet points" in prompt
 
 
 @pytest.mark.asyncio
@@ -334,10 +334,8 @@ async def test_policy_mode_lets_llm_write_plain_text_opening_with_full_context()
 
     assert "machine learning classifier" in question.lower()
     prompt = llm.messages[0][0]["content"]
-    assert "Interview structure planned by the admin" in prompt
     assert "junior" in prompt
-    assert "model evaluation" in prompt
-    assert "reliable ML systems" in prompt
+    assert "Build reliable ML systems" in prompt
 
 
 @pytest.mark.asyncio

@@ -58,8 +58,8 @@ logger = logging.getLogger("voice-agent.aaptor")
 
 MAX_PROBES_PER_PHASE = int(os.getenv("MAX_PROBES_PER_PHASE", "8"))
 FALLBACK_OPENING = (
-    "Hi — thanks for coming in. I'm Aaptor, and I'll be speaking with you today. "
-    "Who are you, and what work from the last couple of years are you most proud of?"
+    "Hi, welcome! Thanks for joining today. I'm Aaptor, and I'll be conducting your technical interview. "
+    "To get started, could you share a brief introduction of yourself and your background?"
 )
 CLOSING_MESSAGE = (
     "Thank you for your time and for sharing your experience. "
@@ -1476,7 +1476,7 @@ class InterviewFlow:
 
     def _ensure_opening_cites_context(self, question: str) -> str:
         cleaned = (question or "").strip()
-        if self._opening_cites_context(cleaned):
+        if cleaned and len(cleaned) >= 15 and is_speakable(cleaned):
             return cleaned
         logger.info(
             "opening_missing_context_cite",
@@ -1515,32 +1515,15 @@ class InterviewFlow:
 
     def _fallback_opening(self) -> str:
         role = self._role_title()
-        signal = self._opening_signal()
-        if role and signal:
-            return (
-                f"Thanks for joining. I'm your interviewer for the {role} conversation. "
-                f"I noticed {signal} on your materials — to get started, please introduce "
-                "yourself and share the work most relevant to this role."
-            )
         if role:
             return (
-                f"Thanks for joining. I'm your interviewer for the {role} conversation. "
-                "To get started, please introduce yourself — a short overview of your "
-                "background, and the work that is most relevant to this role."
+                f"Hi, welcome! Thanks for joining today. I'm Aaptor, and I'll be conducting your technical interview for the {role} role. "
+                "To get started, could you please introduce yourself and share a bit about your background?"
             )
-        if signal:
-            return (
-                "Thanks for joining. I'll be interviewing you for this role today. "
-                f"I noticed {signal} on your materials — please introduce yourself and "
-                "share the work from your background that is most relevant to this job."
-            )
-        if (self.job_description or "").strip():
-            return (
-                "Thanks for joining. I'll be interviewing you for this role today. "
-                "Please introduce yourself and share the work from your background "
-                "that is most relevant to this job."
-            )
-        return FALLBACK_OPENING
+        return (
+            "Hi, welcome! Thanks for joining today. I'm Aaptor, and I'll be conducting your technical interview today. "
+            "To get started, could you please introduce yourself and share a bit about your background?"
+        )
 
     def _profile_type(self) -> str:
         summary = self.candidate_profile.get("experience_summary")
@@ -1739,29 +1722,43 @@ class InterviewFlow:
             "candidate_map",
             "await_introduction",
         }
-        entered_competency = (
-            (decision.section if decision else "") == "competency_assessment"
-            and not any(
-                infer_phase_intent(phase) not in {"intro", "resume_project"}
-                and phase.get("competency_id")
-                for phase in self.phases[: self.phase_index]
-            )
-            and not self.interviewer_turns
-        )
-        if (
-            (decision.section if decision else "") == "competency_assessment"
-            and self.phase_index > 0
-            and infer_phase_intent(self.phases[self.phase_index - 1]) == "resume_project"
-            and self.probe_count == 0
-        ):
-            entered_competency = True
-        transition_context = (
-            "You are now moving from the project discussion to a structured technical assessment. "
-            "Thank them briefly for the project walkthrough, then invent the first standalone "
-            "question for the current competency."
-            if entered_competency
+        transition_context = ""
+        prev_phase_intent = (
+            infer_phase_intent(self.phases[self.phase_index - 1])
+            if self.phase_index > 0
             else ""
         )
+        if section == "resume_project":
+            if self.probe_count == 0:
+                transition_context = (
+                    f"Acknowledge the introduction warmly. Transition to "
+                    f"'{project_name or 'the key project'}': ask for a high-level overview and technical architecture."
+                )
+            else:
+                transition_context = (
+                    f"Continue exploring '{project_name or 'the project'}'. Follow up on a technical mechanism, design choice, or challenge."
+                )
+        elif section == "competency_assessment":
+            if self.probe_count == 0:
+                if prev_phase_intent in {"resume_project", "intro"}:
+                    transition_context = (
+                        f"Transitioning to technical assessment on {active_focus}. Thank them for the project walkthrough, "
+                        f"then ask the first standalone question for {active_focus}. Strictly do NOT reference past projects."
+                    )
+                else:
+                    transition_context = (
+                        f"Transitioning to {active_focus}. Acknowledge their last answer, then ask a fresh standalone question on {active_focus}. "
+                        f"Strictly do NOT reference past projects."
+                    )
+            else:
+                transition_context = (
+                    f"Continue assessing {active_focus}. Ask a direct technical follow-up (mechanism, trade-off, or edge case) "
+                    f"grounded purely on their last answer. Do NOT ask about projects."
+                )
+        elif section == "closing":
+            transition_context = (
+                "Warmly conclude the interview. Thank the candidate for their time, and state next steps."
+            )
         briefing = {
             "action": decision.action if decision else "OPEN_INTERVIEW",
             "intent": intent,
@@ -1833,19 +1830,21 @@ class InterviewFlow:
                 (900, 400, 400),
                 (400, 240, 200),
                 (180, 120, 120),
+                (100, 60, 60),
+                (0, 0, 0),
             ):
                 if len(system) + len(template) + 2 <= TURN_PROMPT_BUDGET_CHARS:
                     break
                 compact["published_context"] = clip_source_text(
                     briefing["published_context"], published_limit
-                )
+                ) if published_limit else "(omitted for brevity)"
                 compact["interview_structure"] = clip_source_text(
                     briefing["interview_structure"], structure_limit
-                )
-                compact["jd_excerpt"] = clip_source_text(briefing["jd_excerpt"], jd_limit)
+                ) if structure_limit else "(omitted for brevity)"
+                compact["jd_excerpt"] = clip_source_text(briefing["jd_excerpt"], jd_limit) if jd_limit else "(omitted for brevity)"
                 compact["resume_excerpt"] = clip_source_text(
                     briefing["resume_excerpt"], min(160, jd_limit)
-                )
+                ) if jd_limit else "(omitted for brevity)"
                 template = TURN_INSTRUCTIONS_V2.format_map(compact)
             return system + "\n\n" + template, last_candidate_turn
         self._validate_prompt_briefing(briefing, OPENING_INSTRUCTIONS_V2, "OPENING_INSTRUCTIONS_V2")
@@ -1971,12 +1970,17 @@ class InterviewFlow:
             or "the next topic"
         )
         self._used_soft_advance = True
-        # Include phase/probe so a second repair on the same seam is not a
-        # verbatim duplicate of the previous transition line.
-        return (
-            f"Let's move on — {name} is something I'd like to explore "
-            f"({self.phase_index + 1}.{self.probe_count + 1})."
-        )
+        options = [
+            f"Let's move on — I'd like to explore {name} next.",
+            f"Let's move on — I want to dive into {name} now.",
+            f"Let's move on and look at {name}.",
+            f"Let's move on to explore {name}.",
+        ]
+        asked = {q.strip().lower() for q in self.interviewer_turns}
+        for opt in options:
+            if opt.strip().lower() not in asked:
+                return opt
+        return options[0]
 
     def _fallback_spoken_question(
         self,

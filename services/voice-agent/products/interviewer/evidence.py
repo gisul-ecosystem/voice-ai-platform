@@ -98,10 +98,25 @@ _LEVEL_SLOTS: dict[str, tuple[str, ...]] = {
         "mechanism",
         "complexity_or_cost",
         "tradeoff",
-        "measurement",
     ),
-    "senior": SLOT_KEYS,
-    "lead": SLOT_KEYS,
+    "senior": (
+        "ownership",
+        "approach",
+        "mechanism",
+        "complexity_or_cost",
+        "tradeoff",
+        "failure_mode",
+        "optimization",
+    ),
+    "lead": (
+        "ownership",
+        "approach",
+        "mechanism",
+        "complexity_or_cost",
+        "tradeoff",
+        "failure_mode",
+        "optimization",
+    ),
 }
 
 
@@ -125,7 +140,7 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     # Stops at mechanism: never asks for cost or trade-offs.
     "foundational": DifficultyProfile(start_slot=0, max_slot=2),
     "applied": DifficultyProfile(start_slot=0, max_slot=4),
-    # Opens past ownership and presses all the way to optimisation.
+    # Opens past basic approach and presses all the way to optimisation.
     "diagnostic": DifficultyProfile(start_slot=1, max_slot=None),
     "strategic": DifficultyProfile(start_slot=1, max_slot=None),
 }
@@ -280,12 +295,18 @@ def ledger_brief(entry: CompetencyLedger | None) -> str:
 def target_slot_brief(entry: CompetencyLedger | None) -> tuple[str, str]:
     """Return (slot_key, instruction) for the weakest unproven slot."""
     if entry is None:
-        return "", "Ask one job-related question."
+        return "", "Ask one standalone technical question for this competency."
     key = entry.weakest_slot()
     if not key:
         return "", "All required evidence is in. Move on."
     spec = SLOTS_BY_KEY[key]
+    if key == "ownership":
+        return key, (
+            "Target evidence: technical approach and core mechanics. "
+            "Ask a direct, standalone technical, conceptual, algorithmic, or problem question. "
+            "Do NOT ask what project they implemented it in."
+        )
     return key, (
-        f"Target evidence: {spec.label}. The answer must contain {spec.bar}. "
-        f"Ask the one question most likely to produce exactly that."
+        f"Target evidence: {spec.label}. The answer must cover {spec.bar}. "
+        f"Ask a direct, standalone technical, conceptual, algorithmic, or problem question without asking about past projects."
     )

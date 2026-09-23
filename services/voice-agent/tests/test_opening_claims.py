@@ -1,4 +1,4 @@
-﻿"""PBI-B1/B2: claim-aware opening and project ranking."""
+"""PBI-B1/B2: claim-aware opening and project ranking."""
 from __future__ import annotations
 
 import pytest
@@ -104,10 +104,9 @@ async def test_fallback_opening_cites_one_resume_claim() -> None:
     )
     question = await flow.generate_next_question(None)
     assert "Backend Engineer" in question
-    assert "FastAPI billing retries" in question
     assert "introduce yourself" in question.lower()
-    # Must not dump multiple claims
-    assert question.lower().count("fastapi billing") == 1
+    assert "Aaptor" in question
+    assert "FastAPI billing retries" not in question
 
 
 def test_same_jd_different_experience_keeps_job_bar() -> None:

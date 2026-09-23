@@ -1,4 +1,4 @@
-﻿"""Soft-check: LLM opening without claim cite is replaced."""
+"""Soft-check: LLM opening without claim cite is replaced."""
 from __future__ import annotations
 
 import pytest
@@ -72,5 +72,5 @@ async def test_opening_without_claim_cite_is_replaced() -> None:
         },
     )
     question = await flow.generate_next_question(None)
-    assert "FastAPI billing retries" in question
-    assert "Backend Engineer" in question
+    assert "introduce yourself" in question.lower()
+    assert "FastAPI billing retries" not in question
