@@ -24,6 +24,11 @@ from products.interviewer.worker import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _allow_legacy_interview_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALLOW_LEGACY_INTERVIEW_FLOW", "1")
+
+
 class FakeStreamingLlm:
     def __init__(self, *chunks: str) -> None:
         self.chunks = list(chunks)

@@ -1,6 +1,7 @@
 """LiveKit adapter for the provider-neutral interview flow."""
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -9,6 +10,8 @@ from livekit.agents import Agent, ModelSettings, llm
 from products.interviewer.brain_runtime import BrainSessionBridge
 from products.interviewer.flow import CLOSING_MESSAGE, FALLBACK_FOLLOWUP, InterviewFlow
 from voice_platform.chat import is_usable_candidate_turn, last_text
+
+logger = logging.getLogger("voice-agent.interviewer")
 
 CLARIFY_TURN = (
     "Sorry, I did not catch that. Please say a bit more, in a full sentence."
@@ -40,9 +43,10 @@ class AaptorAgent(Agent):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are Aaptor, a live technical interviewer. Invent each "
-                "spoken question from the resume, job, and the candidate's last "
-                "answer. Sound like a person in the room."
+                "You are a professional structured interviewer. A policy engine "
+                "already chose the evidence and depth for this turn. Phrase exactly "
+                "one spoken question. Do not invent employers, projects, or skills. "
+                "Do not mention phases, probes, or scores."
             )
         )
         flow_kwargs: dict = {}
@@ -194,12 +198,28 @@ class AaptorAgent(Agent):
         if self._opened:
             # Rejoin/restore: do not re-speak the opening or double-write brain.
             return
-        parts: list[str] = []
-        async for chunk in self.flow.generate_next_question_stream(None):
-            parts.append(chunk)
-        opening = "".join(parts).strip() or self.flow._fallback_opening()
-        await self.session.say(opening, allow_interruptions=False)
+        # Claim the opening before any await so a concurrent llm_node cannot
+        # also stream/speak the greeting (candidate hears TTS twice).
         self._opened = True
+        parts: list[str] = []
+        try:
+            async for chunk in self.flow.generate_next_question_stream(None):
+                parts.append(chunk)
+        except Exception:
+            logger.exception(
+                "opening_stream_failed",
+                extra={"event": "opening_stream_failed"},
+            )
+        opening = "".join(parts).strip() or self.flow._fallback_opening()
+        try:
+            await self.session.say(opening, allow_interruptions=False)
+        except Exception:
+            logger.exception(
+                "opening_say_failed",
+                extra={"event": "opening_say_failed", "opening_len": len(opening)},
+            )
+            self._last_agent_text = opening
+            raise
         self._last_agent_text = opening
         turn_id = await self._record("agent", opening)
         await self._persist_brain_after_exchange(
@@ -215,12 +235,12 @@ class AaptorAgent(Agent):
         model_settings: ModelSettings,
     ):
         candidate_turn = last_text(chat_ctx)
-        opening = not self._opened
+        # Opening TTS is owned exclusively by on_enter — never stream a greeting
+        # from llm_node (that produced a second voice when both paths raced).
+        if not self._opened:
+            return
         candidate_brain_turn_id = None
-        if opening:
-            self._opened = True
-            candidate_turn = None
-        elif not is_usable_candidate_turn(
+        if not is_usable_candidate_turn(
             candidate_turn,
             self._last_agent_text,
             min_words=1 if not self.flow.candidate_turns else 3,
@@ -236,7 +256,7 @@ class AaptorAgent(Agent):
                 turn_id=turn_id,
             )
             return
-        elif candidate_turn:
+        if candidate_turn:
             turn_id = await self._record("candidate", candidate_turn)
             candidate_brain_turn_id = turn_id
         parts: list[str] = []
@@ -260,8 +280,11 @@ class AaptorAgent(Agent):
             question = CLOSING_MESSAGE
         if not question:
             question = (
-                self.flow._fallback_spoken_question(self.flow.last_policy_decision)
-                if getattr(self.flow, "policy_mode", False)
+                self.flow._fallback_spoken_question(
+                    self.flow.last_policy_decision,
+                    last_turn=candidate_turn,
+                )
+                if not self.flow._uses_legacy_decision_flow()
                 else FALLBACK_FOLLOWUP
             )
             yield question

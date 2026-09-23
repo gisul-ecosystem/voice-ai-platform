@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 
 from brain.compiler import compile_blueprint
-from brain.llm_extract import extract_job_intelligence_async
+from brain.llm_extract import (
+    extract_job_intelligence_async,
+)
 from brain.publish import publish_definition
 from db import definitions, interviews
 from models.brain import DurationMinutes, InterviewDefinitionVersion, SeniorityLevel
@@ -71,8 +73,6 @@ async def publish_and_store(
         target_level=level,
         domain=None,
     )
-    # Recruiter-named competencies are the review payload. Extract APIs never
-    # stamp approved=True; schedule/publish only does so after this explicit list.
     job = job.model_copy(
         update={
             "approved": True,
@@ -85,6 +85,8 @@ async def publish_and_store(
             ),
         }
     )
+    # Setup competencies already structure the interview (design/review or
+    # explicit chips). Do not re-run LLM recommend and replace that structure.
     logger.info(
         "job_intelligence_approved_for_publish",
         extra={
@@ -100,6 +102,7 @@ async def publish_and_store(
         timezone=timezone,
         duration_minutes=duration,
         creator_competencies=list(interview_setup.competencies),
+        creator_exclusive=True,
         include_scenarios=False,
     )
     published = publish_definition(draft, published_by=published_by)

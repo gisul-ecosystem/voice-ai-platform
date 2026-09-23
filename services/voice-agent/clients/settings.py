@@ -50,6 +50,12 @@ TTS_VOICE = os.getenv("TTS_VOICE", "af_heart")
 LLM_PROVIDER = (os.getenv("LLM_PROVIDER") or "self_hosted").strip() or "self_hosted"
 STT_PROVIDER = (os.getenv("STT_PROVIDER") or "self_hosted").strip() or "self_hosted"
 TTS_PROVIDER = (os.getenv("TTS_PROVIDER") or "self_hosted").strip() or "self_hosted"
+TTS_FALLBACK_PROVIDER = (os.getenv("TTS_FALLBACK_PROVIDER") or "").strip()
+TTS_PIN_VOICE = (os.getenv("TTS_PIN_VOICE") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 LLM_API_KEY = (os.getenv("LLM_API_KEY") or "").strip()
 STT_API_KEY = (os.getenv("STT_API_KEY") or "").strip()
 TTS_API_KEY = (os.getenv("TTS_API_KEY") or "").strip()
@@ -57,7 +63,7 @@ OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 ELEVENLABS_API_KEY = (os.getenv("ELEVENLABS_API_KEY") or "").strip()
 ELEVENLABS_BASE_URL = os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io/v1").rstrip("/")
-ELEVENLABS_VOICE_ID = (os.getenv("ELEVENLABS_VOICE_ID") or "EXAVITQu4vr4xnSDxMaL").strip()
+ELEVENLABS_VOICE_ID = (os.getenv("ELEVENLABS_VOICE_ID") or "y3bFrCRcSPphE8Ksv5BW").strip()
 ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5").strip()
 ELEVENLABS_STABILITY = _float("ELEVENLABS_STABILITY", 0.45)
 ELEVENLABS_SIMILARITY_BOOST = _float("ELEVENLABS_SIMILARITY_BOOST", 0.80)

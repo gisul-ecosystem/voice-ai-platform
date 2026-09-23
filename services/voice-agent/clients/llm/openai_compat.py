@@ -49,9 +49,17 @@ class OpenAICompatLlm:
     async def generate_reply(
         self, messages: list[dict], *, extra_body: dict | None = None
     ) -> str:
-        payload: dict = {"model": self.model, "messages": messages}
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            # Interviewer evidence/phrasing must be stable across identical prompts.
+            "temperature": 0,
+        }
         if extra_body:
             payload.update(extra_body)
+            # Keep temperature pinned unless the caller explicitly overrides it.
+            if "temperature" not in extra_body:
+                payload["temperature"] = 0
 
         started = time.perf_counter()
         resp = await request(
@@ -80,10 +88,17 @@ class OpenAICompatLlm:
     async def generate_reply_stream(
         self, messages: list[dict], *, extra_body: dict | None = None
     ) -> AsyncIterator[str]:
-        payload: dict = {"model": self.model, "messages": messages, "stream": True}
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "temperature": 0,
+        }
         if extra_body:
             payload.update(extra_body)
             payload["stream"] = True
+            if "temperature" not in extra_body:
+                payload["temperature"] = 0
 
         url = f"{self.base_url}/chat/completions"
         started = time.perf_counter()

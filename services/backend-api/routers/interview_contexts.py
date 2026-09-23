@@ -38,7 +38,7 @@ async def create_interview_context(
         )
         if req.interview_setup
         else await interviews.create_context(
-            *args, 
+            *args,
             definition_id=req.definition_id,
             candidate_profile=req.candidate_profile,
         )

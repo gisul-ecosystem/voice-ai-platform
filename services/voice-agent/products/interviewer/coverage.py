@@ -11,10 +11,12 @@ _WS = re.compile(r"\s+")
 INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "establish_context": (
         "situation",
-        "when",
-        "team",
-        "project",
-        "role",
+        "when i",
+        "when we",
+        "time when",
+        "my team",
+        "the project",
+        "my role",
         "context",
         "working on",
         "assigned",
@@ -86,9 +88,203 @@ DEFAULT_INTENTS = (
     "applied_understanding",
 )
 
+_NUMBER = re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|%|k|m|b)?\b", re.IGNORECASE)
+_QUOTED = re.compile(r"\"([^\"]+)\"|'([^']+)'")
+_FIRST_PERSON = re.compile(
+    r"\b(?:i|we)\s+(handled|led|built|owned|implemented|designed|wrote|ran|"
+    r"managed|reduced|set|rewrote|chose|moved|used|added|configured|"
+    r"introduced|measured|rate[- ]?limited|migrated|shipped|launched|scaled|"
+    r"rewrote|refactored)\s+([^.,;]+)",
+    re.IGNORECASE,
+)
+_OWNERSHIP_CUES = (
+    "i handled",
+    "i led",
+    "i built",
+    "i owned",
+    "i implemented",
+    "i designed",
+    "i wrote",
+    "i ran",
+    "i managed",
+    "i reduced",
+    "i set",
+    "i rewrote",
+)
+# Thin first-person actions ("I set TTL…") can proxy for a context ask, but must
+# not also seal ownership — that still needs a dedicated ownership probe.
+_STRONG_OWNERSHIP_CUES = (
+    "i handled",
+    "i led",
+    "i built",
+    "i owned",
+    "i implemented",
+    "i designed",
+    "i wrote",
+    "i ran",
+    "i managed",
+    "i was responsible",
+    "my responsibility",
+    "personally",
+)
+# Avoid bare " when " / " at " — those match hobby answers ("when it rains").
+_CONTEXT_CUES = (
+    " when i ",
+    " when we ",
+    " at the ",
+    " at my ",
+    " for the ",
+    " for a ",
+    " with the ",
+    " on the ",
+    " my team ",
+    " the project ",
+    " the service ",
+)
+# Match "I used X", "we used X", "using X", not only " using " with padding quirks.
+_METHOD_CUES = (
+    " by ",
+    " using ",
+    "i used",
+    "we used",
+    " steps",
+    " mechanism",
+    " implemented",
+    " designed",
+    "configured",
+    "backoff",
+    "idempotency",
+    "with redis",
+    "with postgres",
+)
+_PROBLEM_CUES = (
+    "failed",
+    "broke",
+    "timeout",
+    "incident",
+    "blocked",
+    "constraint",
+    "failure mode",
+    "failure",
+    "storm",
+    "outage",
+    "dead-letter",
+    "dead letter",
+    "rate-limit",
+    "rate limited",
+    "webhook",
+)
+_TRADEOFF_CUES = ("instead", "rather than", "trade-off", "tradeoff", "would change")
+# Workplace / role vocabulary that keeps an answer on-topic even without
+# evidence_expected token overlap (ownership dodges still count as work talk).
+_WORKPLACE_CUES = (
+    " team ",
+    " manager ",
+    " service ",
+    " services ",
+    " api ",
+    " apis ",
+    " redis ",
+    " postgres ",
+    " rollout ",
+    " production ",
+    " billing ",
+    " payments ",
+    " payment ",
+    " project ",
+    " plan ",
+    " owned ",
+    " decided ",
+    " executed ",
+    " practices ",
+    " responsibility ",
+    " delivered ",
+    " implemented ",
+    " incident ",
+    " customer ",
+    " client ",
+    " monolith ",
+    " microservice ",
+    " migrated ",
+    " migration ",
+    " fastapi ",
+    " deploy ",
+    " deployed ",
+)
+# Stem hits catch plurals / tense variants (services, migrated, payments).
+_TECH_STEMS = (
+    "servic",
+    "migrat",
+    "payment",
+    "billing",
+    "monolith",
+    "microservice",
+    "fastapi",
+    "django",
+    "flask",
+    "postgres",
+    "redis",
+    "kafka",
+    "kubernetes",
+    "deploy",
+    "produc",
+    "incident",
+    "latency",
+    "timeout",
+    "backend",
+    "frontend",
+    "database",
+    "pipeline",
+    "webhook",
+    "retries",
+    "retry",
+)
+_WEAK_OBJECTS = frozenset({"it", "that", "this", "them", "things", "stuff"})
+_STOP_TOKENS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "about",
+        "than",
+        "then",
+        "when",
+        "where",
+        "what",
+        "which",
+        "while",
+        "your",
+        "their",
+        "ours",
+        "have",
+        "been",
+        "were",
+        "was",
+        "are",
+        "is",
+        "was",
+        "a",
+        "an",
+        "of",
+        "or",
+        "to",
+        "in",
+        "on",
+        "at",
+    }
+)
+
 
 def _tokens(text: str) -> set[str]:
-    return {part for part in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(part) > 2}
+    return {
+        part
+        for part in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(part) > 2 and part not in _STOP_TOKENS
+    }
 
 
 def competency_by_id(definition: dict[str, Any] | None, competency_id: str | None) -> dict[str, Any]:
@@ -141,6 +337,8 @@ def empty_coverage_entry(required: list[str]) -> dict[str, Any]:
         "covered_intents": [],
         "missing_intents": list(intents),
         "evidence_ids": [],
+        # absent | asked | covered | assessed_insufficient
+        "intent_status": {intent: "absent" for intent in intents},
     }
 
 
@@ -161,12 +359,20 @@ def init_coverage(definition: dict[str, Any] | None) -> dict[str, dict[str, Any]
 
 
 def _intent_matched(text: str, intent: str) -> bool:
-    lowered = (text or "").lower()
+    lowered = f" {(text or '').lower()} "
     for marker in INTENT_KEYWORDS.get(intent, ()):
-        if marker in lowered:
+        needle = marker.lower().strip()
+        if not needle:
+            continue
+        # Phrase markers need boundaries so "when i" does not match "when it".
+        if " " in needle:
+            if f" {needle} " in lowered:
+                return True
+            continue
+        if re.search(rf"\b{re.escape(needle)}\b", lowered):
             return True
     slug = intent.replace("_", " ")
-    return slug in lowered
+    return f" {slug} " in lowered
 
 
 def classify_live_answer(
@@ -176,7 +382,11 @@ def classify_live_answer(
     evidence_expected: list[str] | None = None,
     min_words: int = 3,
 ) -> tuple[str, str, list[str]]:
-    """Return (usability, quality, newly_covered_intents)."""
+    """Return (usability, quality, hinted_intents).
+
+    ``hinted_intents`` are keyword matches for debugging only. Callers must
+    use ``evidenced_intents`` to update coverage.
+    """
     usability = classify_answer_usability(text, min_words=min_words)
     cleaned = _WS.sub(" ", (text or "").strip())
     if usability == "silence":
@@ -188,7 +398,10 @@ def classify_live_answer(
     if usability != "usable":
         return usability, "unusable", []
 
-    covered = [intent for intent in required_intents if _intent_matched(cleaned, intent)]
+    if _looks_like_jailbreak(cleaned):
+        return "off_topic", "off_topic", []
+
+    hinted = [intent for intent in required_intents if _intent_matched(cleaned, intent)]
     expected = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
     expected_hits = 0
     blob_tokens = _tokens(cleaned)
@@ -197,15 +410,225 @@ def classify_live_answer(
         if item.lower() in cleaned.lower() or (needles and needles & blob_tokens):
             expected_hits += 1
 
-    if not covered and expected and expected_hits == 0 and len(cleaned.split()) >= 8:
-        return "off_topic", "off_topic", []
-    if len(covered) >= max(1, (len(required_intents) + 1) // 2) and expected_hits >= 1:
+    if expected and expected_hits == 0 and len(cleaned.split()) >= 8:
+        # Keyword hints alone (e.g. bare "when") must not keep hobby answers usable.
+        # Require evidence overlap or a concrete work signal before staying on-topic.
+        if not _has_work_signal(cleaned):
+            return "off_topic", "off_topic", []
+    if len(hinted) >= max(1, (len(required_intents) + 1) // 2) and expected_hits >= 1:
         quality = "sufficient"
-    elif covered or expected_hits:
+    elif hinted or expected_hits:
         quality = "partial"
     else:
         quality = "unclear"
-    return "usable", quality, covered
+    # Keyword hits are a debug hint only — they never complete coverage.
+    return "usable", quality, hinted
+
+
+def _has_work_signal(text: str) -> bool:
+    """True when the answer shows job-related substance, not just common words."""
+    cleaned = _WS.sub(" ", (text or "").strip())
+    if not cleaned:
+        return False
+    facts = extract_evidence_facts(cleaned)
+    if facts:
+        return True
+    lowered = f" {cleaned.lower()} "
+    for cue in (
+        *_OWNERSHIP_CUES,
+        *_STRONG_OWNERSHIP_CUES,
+        *_METHOD_CUES,
+        *_PROBLEM_CUES,
+        *_CONTEXT_CUES,
+        *_TRADEOFF_CUES,
+        *_WORKPLACE_CUES,
+    ):
+        if cue in lowered:
+            return True
+    for tok in _tokens(cleaned):
+        if any(tok.startswith(stem) for stem in _TECH_STEMS):
+            return True
+    return False
+
+
+_JAILBREAK_MARKERS = (
+    "system prompt",
+    "ignore previous",
+    "ignore all instructions",
+    "api key",
+    "api keys",
+    "reveal your",
+    "your instructions",
+    "developer mode",
+    "jailbreak",
+    "bypass safety",
+)
+
+
+def _looks_like_jailbreak(text: str) -> bool:
+    lowered = f" {(text or '').lower()} "
+    return any(marker in lowered for marker in _JAILBREAK_MARKERS)
+
+
+def extract_evidence_facts(text: str) -> list[str]:
+    """Pull concrete facts from an answer: numbers, quotes, first-person verb+object."""
+    cleaned = _WS.sub(" ", (text or "").strip())
+    if not cleaned:
+        return []
+    facts: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str) -> None:
+        item = value.strip()
+        key = item.lower()
+        if not item or key in seen or key in _WEAK_OBJECTS:
+            return
+        seen.add(key)
+        facts.append(item)
+
+    for number in _NUMBER.findall(cleaned):
+        _add(number)
+    for group in _QUOTED.findall(cleaned):
+        quoted = next((part.strip() for part in group if part and part.strip()), "")
+        if quoted:
+            _add(quoted)
+    for match in _FIRST_PERSON.finditer(cleaned):
+        obj = match.group(2).strip()
+        head = obj.split()[0].lower() if obj else ""
+        if len(obj) >= 4 and head not in _WEAK_OBJECTS:
+            _add(f"I {match.group(1).lower()} {obj}")
+    return facts[:8]
+
+
+def _fact_maps_to_evidence(fact: str, evidence_expected: list[str]) -> bool:
+    fact_tokens = _tokens(fact)
+    if not fact_tokens:
+        return False
+    for item in evidence_expected:
+        needles = _tokens(item)
+        if needles and needles & fact_tokens:
+            return True
+    return False
+
+
+def _intent_has_concrete_evidence(intent: str, text: str, facts: list[str]) -> bool:
+    lowered = f" {(text or '').lower()} "
+    if intent == "establish_ownership":
+        cues = _OWNERSHIP_CUES
+    elif intent == "establish_context":
+        cues = _CONTEXT_CUES
+    elif intent == "applied_understanding":
+        cues = _METHOD_CUES
+    elif intent == "problem_or_complexity":
+        cues = _PROBLEM_CUES
+    elif intent == "tradeoff_or_transfer":
+        cues = _TRADEOFF_CUES
+    else:
+        return False
+    # Strong cue match is enough even when first-person fact extraction is empty
+    # (e.g. "We rate-limited…" / "failure mode was webhook storms").
+    return any(cue in lowered for cue in cues)
+
+
+def evidenced_intents(
+    *,
+    required_intents: list[str],
+    evidence_expected: list[str] | None = None,
+    answer_eval: Any | None = None,
+    asked_intent: str | None = None,
+    answer_text: str | None = None,
+) -> list[str]:
+    """Intents covered by evidenced facts or a prior evaluation — never keywords alone.
+
+    Deterministic fact/cue path is authoritative. An LLM ``surface`` verdict must not
+    erase concrete extracted facts (same transcript must score the same way).
+    """
+    required = [item for item in required_intents if item]
+    if not required:
+        return []
+    if answer_eval is not None and getattr(answer_eval, "factually_correct", True) is False:
+        return []
+    substance = str(getattr(answer_eval, "technical_substance", "") or "").strip()
+    extracted = extract_evidence_facts(answer_text or "")
+    # Incorrect / N/A never cover. Surface only blocks when there are no facts/cues.
+    if substance in {"incorrect", "not_applicable"}:
+        return []
+    if substance == "surface" and not extracted:
+        # No concrete facts — honor the judge and leave uncovered.
+        has_any_cue = any(
+            _intent_has_concrete_evidence(intent, answer_text or "", extracted)
+            for intent in required
+        )
+        if not has_any_cue:
+            return []
+
+    eval_facts = [
+        str(item).strip()
+        for item in (getattr(answer_eval, "key_facts_stated", None) or [])
+        if str(item).strip()
+    ] if answer_eval is not None else []
+    facts = list(dict.fromkeys([*eval_facts, *extracted]))
+    expected = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
+    eval_ok = bool(
+        answer_eval is not None
+        and substance in {"deep", "partial"}
+        and (
+            getattr(answer_eval, "matches_evidence_expected", False)
+            or eval_facts
+            or any(_fact_maps_to_evidence(fact, expected) for fact in facts)
+        )
+    )
+    if not facts and not eval_ok:
+        # Still allow pure cue hits (failure mode / webhook storms, etc.).
+        cue_only = [
+            intent
+            for intent in required
+            if _intent_has_concrete_evidence(intent, answer_text or "", facts)
+        ]
+        if not cue_only:
+            return []
+        return cue_only
+
+    covered: list[str] = []
+    target = asked_intent if asked_intent in required else None
+    if target:
+        context_ok = _intent_has_concrete_evidence(target, answer_text or "", facts)
+        # Ownership/method detail about real work also satisfies a context ask.
+        if (
+            not context_ok
+            and target == "establish_context"
+            and (
+                _intent_has_concrete_evidence(
+                    "establish_ownership", answer_text or "", facts
+                )
+                or _intent_has_concrete_evidence(
+                    "applied_understanding", answer_text or "", facts
+                )
+                or _intent_has_concrete_evidence(
+                    "problem_or_complexity", answer_text or "", facts
+                )
+            )
+        ):
+            context_ok = True
+        if eval_ok or context_ok:
+            covered.append(target)
+    # Credit every outstanding intent the answer actually evidences (cross-intent).
+    lowered = f" {(answer_text or '').lower()} "
+    for intent in required:
+        if intent in covered:
+            continue
+        if not _intent_has_concrete_evidence(intent, answer_text or "", facts):
+            continue
+        # While answering context, weak "I set / I reduced" cues must not seal
+        # ownership — keep the ownership probe for metric-named thin answers.
+        if (
+            target == "establish_context"
+            and intent == "establish_ownership"
+            and not any(cue in lowered for cue in _STRONG_OWNERSHIP_CUES)
+        ):
+            continue
+        covered.append(intent)
+    return covered
 
 
 def quality_from_evaluation(answer_eval: Any) -> str | None:
@@ -243,9 +666,14 @@ def apply_coverage(
     entry = dict(coverage[competency_id])
     required = list(entry.get("required_intents") or [])
     already = list(entry.get("covered_intents") or [])
+    intent_status = dict(entry.get("intent_status") or {})
+    for intent in required:
+        intent_status.setdefault(intent, "absent")
     for intent in covered_intents:
         if intent in required and intent not in already:
             already.append(intent)
+        if intent in required:
+            intent_status[intent] = "covered"
     missing = [intent for intent in required if intent not in already]
     evidence_ids = list(entry.get("evidence_ids") or [])
     if evidence_id and evidence_id not in evidence_ids:
@@ -267,8 +695,46 @@ def apply_coverage(
         "covered_intents": already,
         "missing_intents": missing,
         "evidence_ids": evidence_ids,
+        "intent_status": intent_status,
     }
     return coverage
+
+
+def mark_intent_asked(
+    coverage: dict[str, dict[str, Any]],
+    *,
+    competency_id: str | None,
+    intent: str | None,
+) -> None:
+    """Record that an assessment intent was asked (distinct from covered)."""
+    if not competency_id or not intent or competency_id not in coverage:
+        return
+    entry = coverage[competency_id]
+    required = list(entry.get("required_intents") or [])
+    if intent not in required:
+        return
+    status_map = dict(entry.get("intent_status") or {})
+    if status_map.get(intent) not in {"covered", "assessed_insufficient"}:
+        status_map[intent] = "asked"
+    entry["intent_status"] = status_map
+
+
+def mark_missing_intents_insufficient(
+    coverage: dict[str, dict[str, Any]],
+    *,
+    competency_id: str | None,
+) -> None:
+    """When leaving a competency with gaps, distinguish asked-but-weak from never asked."""
+    if not competency_id or competency_id not in coverage:
+        return
+    entry = coverage[competency_id]
+    status_map = dict(entry.get("intent_status") or {})
+    for intent in list(entry.get("missing_intents") or []):
+        if status_map.get(intent) == "asked":
+            status_map[intent] = "assessed_insufficient"
+        else:
+            status_map.setdefault(intent, "absent")
+    entry["intent_status"] = status_map
 
 
 def first_incomplete_competency(

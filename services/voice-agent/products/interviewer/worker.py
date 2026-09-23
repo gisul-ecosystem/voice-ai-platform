@@ -5,7 +5,7 @@ import logging
 import os
 from typing import Any
 
-from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import AgentSession, JobContext, JobProcess, WorkerOptions, cli
 
 from clients.backend_client import (
     fetch_interview_context,
@@ -20,6 +20,11 @@ from clients.inference import parse_room_metadata
 from clients.llm import get_llm_client
 from clients.stt import get_stt_client
 from clients.tts import get_tts_client
+from clients.tts.voice_policy import (
+    log_tts_recovery,
+    resolve_voice_policy,
+    run_tts_preflight,
+)
 from products.interviewer.agent import AaptorAgent
 from products.interviewer.brain_runtime import (
     BrainSessionBridge,
@@ -38,6 +43,7 @@ from voice_platform.runtime import (
     attach_session_metrics,
     build_agent_session,
     load_inference_clients,
+    prewarm_runtime,
 )
 
 logger = logging.getLogger("voice-agent.aaptor")
@@ -245,6 +251,11 @@ def enrich_outline_with_jd(
     job_description: str,
     competencies: list[str] | None = None,
 ) -> dict:
+    """Inject JD/competency topics into the outline when phases do not already cover them.
+
+    Competencies are assessment targets — they expand the required topic set via
+    extract_jd_requirements; they must not be treated as already-covered exclusions.
+    """
     required = extract_jd_requirements(job_description, competencies)
     if not required:
         return outline
@@ -393,6 +404,8 @@ async def plan_inputs_from_job(ctx: JobContext) -> tuple[str, str]:
 
 
 async def build_outline(ctx: JobContext) -> dict:
+    if published_plan_required(definition_id=None):
+        raise InterviewPlanUnavailableError("generated_plan_not_allowed")
     try:
         context_id = context_id_from_job(ctx)
         context = await fetch_interview_context(context_id) if context_id else {}
@@ -460,9 +473,7 @@ async def entrypoint(ctx: JobContext) -> None:
     if hasattr(ctx, "add_shutdown_callback"):
         ctx.add_shutdown_callback(shutdown_session)
 
-    clients = load_inference_clients(ctx, logger)
-    session = build_agent_session(clients)
-    attach_session_metrics(session, logger)
+    # TTS clients + AgentSession are built after definition load so voice_policy pins apply.
     initial_state: dict = {}
     brain_bridge: BrainSessionBridge | None = None
     context_id = context_id_from_job(ctx)
@@ -673,6 +684,57 @@ async def entrypoint(ctx: JobContext) -> None:
                     "session_id": session_id,
                 },
             )
+    voice_raw = (
+        interview_definition.get("voice_policy")
+        if isinstance(interview_definition, dict)
+        else None
+    )
+    voice_policy = resolve_voice_policy(
+        voice_raw if isinstance(voice_raw, dict) else None
+    )
+    clients = load_inference_clients(ctx, logger, voice_policy=voice_policy)
+    try:
+        await run_tts_preflight(
+            clients.tts,
+            voice_policy,
+            session_id=session_id or None,
+        )
+    except ServiceUnavailableError as exc:
+        action = log_tts_recovery(
+            voice_policy,
+            session_id=session_id or None,
+            error=exc,
+        )
+        logger.error(
+            "tts_preflight_failed",
+            extra={
+                "event": "tts_preflight_failed",
+                "session_id": session_id,
+                "action": action,
+                "voice_id": voice_policy.voice_id,
+                "provider": voice_policy.provider,
+            },
+        )
+        if session_id:
+            try:
+                await report_session_status(
+                    session_id,
+                    "failed",
+                    reason=f"tts_preflight_{action}"[:120],
+                )
+            except ServiceUnavailableError:
+                logger.warning(
+                    "status_report_unavailable",
+                    extra={"event": "status_report_unavailable"},
+                )
+        raise
+    vad = None
+    proc = getattr(ctx, "proc", None)
+    userdata = getattr(proc, "userdata", None) if proc is not None else None
+    if isinstance(userdata, dict):
+        vad = userdata.get("vad")
+    session = build_agent_session(clients, vad=vad)
+    attach_session_metrics(session, logger)
     try:
         outline, outline_source = resolve_live_outline(
             interview_definition=interview_definition,
@@ -754,11 +816,21 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
 
+def prewarm(proc: JobProcess) -> None:
+    """Load Silero VAD once per job process before the first room join."""
+    prewarm_runtime(proc)
+    logger.info(
+        "worker_prewarmed",
+        extra={"event": "worker_prewarmed", "vad": True},
+    )
+
+
 def run() -> None:
     validate_startup_configuration()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
             agent_name=os.getenv("LIVEKIT_AGENT_NAME", "aaptor"),
             port=int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
             # Default 0.7 is based on whole-machine CPU; on a dev box with

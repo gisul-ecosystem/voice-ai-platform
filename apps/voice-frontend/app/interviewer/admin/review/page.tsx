@@ -1,207 +1,464 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useState, useSyncExternalStore } from "react";
 
-const DRAFT_KEY = "ai-interview:role-draft";
-
-type DraftState = { definitionId: string; draft: Record<string, unknown>; title: string; role: string; seniority: string; durationMinutes: string; jobDescription: string; competencies: string; startsAt: string };
-
-function readDraft(): { state?: DraftState; error: string } {
-  if (typeof window === "undefined") return { error: "" };
-  try {
-    const saved = sessionStorage.getItem(DRAFT_KEY);
-    return { state: saved ? (JSON.parse(saved) as DraftState) : undefined, error: "" };
-  } catch {
-    return { error: "The draft could not be loaded." };
-  }
-}
+import {
+  AdminProgress,
+  LandingNav,
+} from "@/components/interviewer/LandingNav";
+import {
+  EMPTY_ROLE_DRAFT,
+  getRoleDraftSnapshot,
+  subscribeRoleDraft,
+  writeRoleDraft,
+  type RoleDraftState,
+} from "@/lib/interviewer/role-draft";
 
 export default function ReviewAlignmentPage() {
   const router = useRouter();
-  const [hydrated, setHydrated] = useState(false);
-  const [state, setState] = useState<DraftState | undefined>(undefined);
+  const ready = useSyncExternalStore(
+    subscribeRoleDraft,
+    () => true,
+    () => false,
+  );
+  const boot = useSyncExternalStore(
+    subscribeRoleDraft,
+    getRoleDraftSnapshot,
+    () => EMPTY_ROLE_DRAFT,
+  );
+  const [edits, setEdits] = useState<RoleDraftState | null>(null);
   const [selected, setSelected] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
-  // sessionStorage is client-only; reading it during render breaks hydration.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
-    const boot = readDraft();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setState(boot.state);
-    setError(boot.error);
-    setHydrated(true);
-  }, []);
+  const state = edits ?? boot.state;
+  const displayError = error || (edits === null ? boot.error : "");
 
-  const competencies = state?.draft && Array.isArray(state.draft.competencies) ? state.draft.competencies as Array<Record<string, unknown>> : [];
-  const weightTotal = Math.round(competencies.reduce((sum, item) => sum + (Number(item.weight) || 0), 0) * 100) / 100;
+  const competencies =
+    state?.draft && Array.isArray(state.draft.competencies)
+      ? (state.draft.competencies as Array<Record<string, unknown>>)
+      : [];
+
+  function rebalanceWeights(
+    items: Array<Record<string, unknown>>,
+  ): Array<Record<string, unknown>> {
+    if (items.length === 0) return items;
+    const base = Math.round((1000 / items.length)) / 10;
+    let assigned = 0;
+    return items.map((item, index) => {
+      if (index === items.length - 1) {
+        return { ...item, weight: Math.round((100 - assigned) * 10) / 10 };
+      }
+      assigned = Math.round((assigned + base) * 10) / 10;
+      return { ...item, weight: base };
+    });
+  }
+
+  function syncDraftCompetencies(
+    nextComps: Array<Record<string, unknown>>,
+  ): RoleDraftState | null {
+    if (!state) return null;
+    const ids = new Set(
+      nextComps.map((item) => String(item.id || "")).filter(Boolean),
+    );
+    const scenarios = Array.isArray(state.draft?.scenario_bank)
+      ? (state.draft.scenario_bank as Array<Record<string, unknown>>).filter(
+          (scenario) => {
+            const cid = String(scenario.competency_id || "");
+            return !cid || ids.has(cid);
+          },
+        )
+      : state.draft?.scenario_bank;
+    const ladders = Array.isArray(state.draft?.question_ladders)
+      ? (state.draft.question_ladders as Array<Record<string, unknown>>).filter(
+          (ladder) => {
+            const cid = String(ladder.competency_id || "");
+            return !cid || ids.has(cid);
+          },
+        )
+      : state.draft?.question_ladders;
+    const names = nextComps
+      .map((item) => String(item.name || "").trim())
+      .filter(Boolean);
+    return {
+      ...state,
+      competencies: names.join(", "),
+      draft: {
+        ...state.draft,
+        competencies: nextComps,
+        scenario_bank: scenarios,
+        question_ladders: ladders,
+      },
+    };
+  }
+
+  function setState(next: RoleDraftState) {
+    setEdits(next);
+    writeRoleDraft(next);
+  }
 
   function update(index: number, patch: Record<string, unknown>) {
     if (!state) return;
-    const next = competencies.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
-    setState({ ...state, draft: { ...state.draft, competencies: next } });
+    const next = competencies.map((item, itemIndex) =>
+      itemIndex === index ? { ...item, ...patch } : item,
+    );
+    const synced = syncDraftCompetencies(next);
+    if (synced) setState(synced);
   }
+
   function remove(index: number) {
     if (!state) return;
-    const dropped = String(competencies[index]?.id || "");
-    const next = competencies.filter((_, itemIndex) => itemIndex !== index);
-    // Scenarios and ladders key off competency_id; leaving orphans behind fails
-    // publication with scenario_unknown_competency.
-    setState({ ...state, draft: { ...state.draft, competencies: next, ...prunedRefs(dropped) } });
+    const next = rebalanceWeights(
+      competencies.filter((_, itemIndex) => itemIndex !== index),
+    );
+    const synced = syncDraftCompetencies(next);
+    if (synced) setState(synced);
     setSelected(Math.max(0, Math.min(index, next.length - 1)));
   }
-  function prunedRefs(droppedId: string): Record<string, unknown> {
-    if (!state || !droppedId) return {};
-    const pruned: Record<string, unknown> = {};
-    for (const key of ["scenario_bank", "question_ladders"]) {
-      const list = state.draft[key];
-      if (Array.isArray(list)) {
-        pruned[key] = list.filter(
-          (item) => !item || typeof item !== "object"
-            || (item as Record<string, unknown>).competency_id !== droppedId,
-        );
-      }
-    }
-    return pruned;
-  }
+
   function move(index: number, direction: -1 | 1) {
     moveTo(index, index + direction);
   }
+
   function moveTo(fromIndex: number, toIndex: number) {
-    if (!state || fromIndex === toIndex || toIndex < 0 || toIndex >= competencies.length) return;
+    if (
+      !state ||
+      fromIndex === toIndex ||
+      toIndex < 0 ||
+      toIndex >= competencies.length
+    ) {
+      return;
+    }
     const next = [...competencies];
     const [moved] = next.splice(fromIndex, 1);
     if (!moved) return;
     next.splice(toIndex, 0, moved);
-    setState({ ...state, draft: { ...state.draft, competencies: next } });
+    const synced = syncDraftCompetencies(next);
+    if (synced) setState(synced);
     setSelected(toIndex);
   }
+
   function isComplete(item: Record<string, unknown>): boolean {
-    const evidence = Array.isArray(item.evidence_expected) ? item.evidence_expected : [];
+    const evidence = Array.isArray(item.evidence_expected)
+      ? item.evidence_expected
+      : [];
     return Boolean(String(item.name || "").trim()) && evidence.length > 0;
   }
+
+  function evidenceText(item: Record<string, unknown>): string {
+    const evidence = Array.isArray(item.evidence_expected)
+      ? item.evidence_expected
+      : [];
+    return evidence.map(String).join(", ");
+  }
+
   function handleDrop(targetIndex: number) {
     if (draggingIndex !== null) moveTo(draggingIndex, targetIndex);
     setDraggingIndex(null);
     setDragOverIndex(null);
   }
+
   async function publish() {
     if (!state || competencies.length === 0) return;
-    if (weightTotal !== 100) {
-      setError(`Weights must total exactly 100%. Currently at ${weightTotal}%.`);
+    const incomplete = competencies.filter((item) => !isComplete(item));
+    if (incomplete.length > 0) {
+      setError(
+        `Finish ${incomplete.length} draft topic${incomplete.length === 1 ? "" : "s"} (name + evidence) before publishing.`,
+      );
       return;
     }
-    const balanced = competencies;
-    const liveIds = new Set(balanced.map((item) => String(item.id || "")));
-    const keepLinked = (key: string) => {
-      const list = state.draft[key];
-      if (!Array.isArray(list)) return undefined;
-      return list.filter(
-        (item) => !item || typeof item !== "object"
-          || liveIds.has(String((item as Record<string, unknown>).competency_id || "")),
-      );
-    };
-    const draft: Record<string, unknown> = { ...state.draft, competencies: balanced };
-    for (const key of ["scenario_bank", "question_ladders"]) {
-      const kept = keepLinked(key);
-      if (kept) draft[key] = kept;
+    const weightSum = competencies.reduce(
+      (sum, item) => sum + (Number(item.weight) || 0),
+      0,
+    );
+    let publishComps = competencies;
+    if (Math.abs(weightSum - 100) > 0.01) {
+      publishComps = rebalanceWeights(competencies);
+      const synced = syncDraftCompetencies(publishComps);
+      if (synced) setState(synced);
     }
-    setBusy(true); setError("");
+    setBusy(true);
+    setError("");
     try {
-      const payload = (definitionId: string) => ({ action: "publish", draft, definitionId, publishedBy: "reference-demo-admin" });
+      const draftPayload = {
+        ...state.draft,
+        competencies: publishComps,
+      };
+      const payload = (definitionId: string) => ({
+        action: "publish",
+        draft: draftPayload,
+        definitionId,
+        publishedBy: "reference-demo-admin",
+      });
       let definitionId = state.definitionId;
-      let response = await fetch("/api/admin/blueprint", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload(definitionId)) });
+      let response = await fetch("/api/admin/blueprint", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload(definitionId)),
+      });
       let data = await response.json().catch(() => ({}));
       if (response.status === 409) {
         definitionId = `${state.definitionId.replace(/-v\d+$/, "")}-v${Date.now()}`;
-        response = await fetch("/api/admin/blueprint", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload(definitionId)) });
+        response = await fetch("/api/admin/blueprint", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload(definitionId)),
+        });
         data = await response.json().catch(() => ({}));
       }
-      if (!response.ok) throw new Error(String(data.error || data.detail || "Publish failed."));
-      const publishedState = { ...state, draft, definitionId, published: data };
+      if (!response.ok) {
+        throw new Error(String(data.error || data.detail || "Publish failed."));
+      }
+      const publishedState = {
+        ...state,
+        definitionId,
+        competencies: publishComps
+          .map((item) => String(item.name || "").trim())
+          .filter(Boolean)
+          .join(", "),
+        draft: { ...state.draft, competencies: publishComps },
+        published: data,
+      };
       setState(publishedState);
-      sessionStorage.setItem(DRAFT_KEY, JSON.stringify(publishedState));
       router.push("/interviewer/admin/invite");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Publish failed."); }
-    finally { setBusy(false); }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Publish failed.");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  if (!hydrated) return <main className="interviewer-home admin-builder-page"><div className="center-state"><h2>Loading draft…</h2></div></main>;
-  if (!state) return <main className="interviewer-home admin-builder-page"><div className="center-state"><h2>Alignment draft unavailable</h2><Link className="button secondary" href="/interviewer/admin/design">Start role design</Link></div></main>;
-  const competency = competencies[selected];
-  const fallbackCount = competencies.filter((item) => item.source === "fallback").length;
-  return <main className="interviewer-home admin-builder-page">
-    <nav className="landing-nav" aria-label="Admin navigation"><Link href="/interviewer/admin/design" className="brand"><span className="brand-mark">AI</span>AI Interviewer</Link><span className="environment-badge">02 Review alignment</span></nav>
-    <section className="demo-intro"><p className="eyebrow">Review before publish</p><h1>Shape the interview</h1><p>Choose a competency to edit its details. The published structure will be locked for every candidate.</p></section>
-    <section className="demo-card alignment-review admin-review-page">
-      {error ? <div className="alert" role="alert">{error}</div> : null}
-      {fallbackCount > 0 ? (
-        <div className="alert alert-warning" role="status">
-          {fallbackCount === 1 ? "1 generic competency was" : `${fallbackCount} generic competencies were`} added because the job description did not yield enough specific skills. Interviews using these will ask general questions. Add more detail to the job description, or rename these to the actual skills you want assessed.
+  if (!ready) {
+    return (
+      <main className="interviewer-home admin-builder-page">
+        <div className="center-state">
+          <h2>Loading alignment…</h2>
         </div>
-      ) : null}
-      <div className="competency-picker" aria-label="Interview competencies">
-        {competencies.map((item, index) => {
-          const complete = isComplete(item);
-          return (
-            <button
-              key={String(item.id || index)}
-              type="button"
-              className={[
-                "competency-picker-item",
-                selected === index ? "is-selected" : "",
-                dragOverIndex === index && draggingIndex !== null && draggingIndex !== index ? "is-drop-target" : "",
-                draggingIndex === index ? "is-dragging" : "",
-              ].filter(Boolean).join(" ")}
-              onClick={() => setSelected(index)}
-              draggable
-              onDragStart={() => setDraggingIndex(index)}
-              onDragOver={(event) => { event.preventDefault(); setDragOverIndex(index); }}
-              onDragLeave={() => setDragOverIndex((current) => (current === index ? null : current))}
-              onDrop={() => handleDrop(index)}
-              onDragEnd={() => { setDraggingIndex(null); setDragOverIndex(null); }}
-            >
-              <span className="drag-handle" aria-hidden="true">⠿</span>
-              <span className="competency-picker-number">{String(index + 1).padStart(2, "0")}</span>
-              <strong>{String(item.name || "Untitled competency")}</strong>
-              {item.source === "fallback" ? (
-                <span className="competency-status-chip is-draft">Generic</span>
-              ) : null}
-              <span className={complete ? "competency-status-chip is-complete" : "competency-status-chip is-draft"}>
-                {complete ? "✓ Ready" : "Draft"}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      {competency ? <fieldset
-        className={draggingIndex === selected ? "alignment-card is-dragging" : "alignment-card"}
-        draggable
-        onDragStart={() => setDraggingIndex(selected)}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={() => handleDrop(selected)}
-        onDragEnd={() => { setDraggingIndex(null); setDragOverIndex(null); }}
-      >
-        <legend><span className="drag-handle" aria-hidden="true">⠿</span> Competency {selected + 1}</legend>
-        <div className="card-order-actions"><button type="button" disabled={selected === 0} onClick={() => move(selected, -1)}>↑</button><button type="button" disabled={selected === competencies.length - 1} onClick={() => move(selected, 1)}>↓</button></div>
-        <label>Main topic<input value={String(competency.name || "")} onChange={(e) => update(selected, { name: e.target.value })} /></label>
-        <div className="admin-field-grid"><label>Maximum depth<input type="number" min="1" max="5" value={String(competency.max_depth ?? 4)} onChange={(e) => update(selected, { max_depth: Number(e.target.value) })} /></label><label>Maximum follow-ups<input type="number" min="0" max="8" value={String(competency.max_probes ?? 3)} onChange={(e) => update(selected, { max_probes: Number(e.target.value) })} /></label><label>Weighting %<input type="number" min="0" max="100" step="1" value={String(competency.weight ?? 0)} onChange={(e) => {
-          const val = Number(e.target.value);
-          const otherWeights = competencies.reduce((s, c, i) => i === selected ? s : s + (Number(c.weight) || 0), 0);
-          const maxAllowed = Math.round((100 - otherWeights) * 100) / 100;
-          update(selected, { weight: val > maxAllowed ? maxAllowed : val });
-        }} /></label></div>
-        <p className="section-help" style={{ color: weightTotal !== 100 ? "#d93025" : "inherit" }}>
-          Weighting decides how much interview time this competency gets and how much it counts in the score. Totals must equal exactly 100% on publish{weightTotal !== 100 ? ` (currently ${weightTotal}%)` : ""}.
+      </main>
+    );
+  }
+
+  if (!state?.draft) {
+    return (
+      <main className="interviewer-home admin-builder-page">
+        <LandingNav ariaLabel="Admin navigation" badge="02 Review alignment" />
+        <div className="center-state">
+          <h2>Alignment draft unavailable</h2>
+          <Link className="button secondary" href="/interviewer/admin/design">
+            Start role design
+          </Link>
+          {displayError ? <p className="error-text">{displayError}</p> : null}
+        </div>
+      </main>
+    );
+  }
+
+  const competency = competencies[selected];
+  return (
+    <main className="interviewer-home admin-builder-page">
+      <LandingNav ariaLabel="Admin navigation" badge="02 Align assessment plan" />
+      <AdminProgress current="review" />
+      <section className="demo-intro">
+        <p className="eyebrow">Align before publish</p>
+        <h1>Confirm what the interview will assess</h1>
+        <p>
+          These {competencies.length} competencies are the interview structure
+          generated from the job description. Edit topics, evidence, depth, and
+          follow-ups — spoken questions are generated live from this plan.
+          Publishing locks the structure for every candidate.
         </p>
-        <button className="button danger-button" type="button" onClick={() => remove(selected)}>Delete competency</button>
-      </fieldset> : null}
-      <div className="admin-page-actions"><span>{competencies.length} competencies · ID {state.definitionId}</span><button className="button primary" disabled={busy || competencies.length === 0 || weightTotal !== 100} onClick={() => void publish()}>{busy ? "Publishing..." : "Approve and publish"}</button></div>
-    </section>
-  </main>;
+      </section>
+      <section className="demo-card alignment-review admin-review-page">
+        {displayError ? (
+          <div className="alert" role="alert">
+            {displayError}
+          </div>
+        ) : null}
+        <div className="competency-picker" aria-label="Interview competencies">
+          {competencies.map((item, index) => {
+            const complete = isComplete(item);
+            return (
+              <button
+                key={String(item.id || index)}
+                type="button"
+                className={[
+                  "competency-picker-item",
+                  selected === index ? "is-selected" : "",
+                  dragOverIndex === index &&
+                  draggingIndex !== null &&
+                  draggingIndex !== index
+                    ? "is-drop-target"
+                    : "",
+                  draggingIndex === index ? "is-dragging" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onClick={() => setSelected(index)}
+                draggable
+                onDragStart={() => setDraggingIndex(index)}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDragOverIndex(index);
+                }}
+                onDragLeave={() =>
+                  setDragOverIndex((current) =>
+                    current === index ? null : current,
+                  )
+                }
+                onDrop={() => handleDrop(index)}
+                onDragEnd={() => {
+                  setDraggingIndex(null);
+                  setDragOverIndex(null);
+                }}
+              >
+                <span className="drag-handle" aria-hidden="true">
+                  ⠿
+                </span>
+                <span className="competency-picker-number">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <strong>{String(item.name || "Untitled competency")}</strong>
+                <span
+                  className={
+                    complete
+                      ? "competency-status-chip is-complete"
+                      : "competency-status-chip is-draft"
+                  }
+                >
+                  {complete ? "✓ Ready" : "Draft"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {competency ? (
+          <fieldset
+            className={
+              draggingIndex === selected
+                ? "alignment-card is-dragging"
+                : "alignment-card"
+            }
+            draggable
+            onDragStart={() => setDraggingIndex(selected)}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={() => handleDrop(selected)}
+            onDragEnd={() => {
+              setDraggingIndex(null);
+              setDragOverIndex(null);
+            }}
+          >
+            <legend>
+              <span className="drag-handle" aria-hidden="true">
+                ⠿
+              </span>{" "}
+              Competency {selected + 1}
+            </legend>
+            <div className="card-order-actions">
+              <button
+                type="button"
+                disabled={selected === 0}
+                onClick={() => move(selected, -1)}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                disabled={selected === competencies.length - 1}
+                onClick={() => move(selected, 1)}
+              >
+                ↓
+              </button>
+            </div>
+            <label>
+              Main topic
+              <input
+                value={String(competency.name || "")}
+                onChange={(e) => update(selected, { name: e.target.value })}
+              />
+            </label>
+            <label>
+              Evidence expected
+              <input
+                value={evidenceText(competency)}
+                placeholder="Comma-separated signals (ownership, metrics, …)"
+                onChange={(e) =>
+                  update(selected, {
+                    evidence_expected: e.target.value
+                      .split(",")
+                      .map((part) => part.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+            </label>
+            <div className="admin-field-grid">
+              <label>
+                Maximum depth
+                <input
+                  type="number"
+                  min="1"
+                  max="5"
+                  value={String(competency.max_depth ?? 4)}
+                  onChange={(e) =>
+                    update(selected, { max_depth: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Maximum follow-ups
+                <input
+                  type="number"
+                  min="0"
+                  max="8"
+                  value={String(competency.max_probes ?? 3)}
+                  onChange={(e) =>
+                    update(selected, { max_probes: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Weight (%)
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={String(competency.weight ?? 1)}
+                  onChange={(e) =>
+                    update(selected, { weight: Number(e.target.value) })
+                  }
+                />
+              </label>
+            </div>
+            <button
+              className="button danger-button"
+              type="button"
+              onClick={() => remove(selected)}
+            >
+              Delete competency
+            </button>
+          </fieldset>
+        ) : null}
+        <div className="admin-page-actions">
+          <span>
+            {competencies.length} competencies · ID {state.definitionId}
+          </span>
+          <button
+            className="button primary"
+            disabled={
+              busy ||
+              competencies.length === 0 ||
+              competencies.some((item) => !isComplete(item))
+            }
+            onClick={() => void publish()}
+          >
+            {busy ? "Publishing..." : "Approve and publish"}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
 }

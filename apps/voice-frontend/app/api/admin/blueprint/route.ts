@@ -2,30 +2,22 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-function publicError(data: Record<string, unknown>, fallback: string) {
-  const detail = data.detail ?? data.error;
-  if (typeof detail === "string" && detail.trim()) return detail.trim();
-  if (Array.isArray(detail)) {
-    const parts = detail.map((item) => {
-      if (!item || typeof item !== "object") return String(item);
-      const row = item as { loc?: unknown; msg?: unknown };
-      return String(row.msg || "").trim();
-    }).filter(Boolean);
+function errorDetail(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const record = data as Record<string, unknown>;
+  if (typeof record.error === "string" && record.error.trim()) return record.error;
+  if (typeof record.detail === "string" && record.detail.trim()) return record.detail;
+  if (Array.isArray(record.detail)) {
+    const parts = record.detail
+      .map((item) =>
+        item && typeof item === "object" && "msg" in item
+          ? String((item as { msg?: string }).msg || "")
+          : "",
+      )
+      .filter(Boolean);
     if (parts.length) return parts.join(" ");
   }
-  return fallback;
-}
-
-function unreachableMessage(reason: unknown) {
-  const name = reason instanceof Error ? reason.name : "";
-  const message = reason instanceof Error ? reason.message : String(reason);
-  if (name === "TimeoutError" || /aborted|timeout/i.test(message)) {
-    return "Blueprint generation timed out. Try again in a moment.";
-  }
-  if (!process.env.BACKEND_API_URL?.trim()) {
-    return "Blueprint service is not configured.";
-  }
-  return "Blueprint service could not be reached. Confirm backend-api is running on port 5554.";
+  return undefined;
 }
 
 async function backendRequest(path: string, body: unknown) {
@@ -39,7 +31,8 @@ async function backendRequest(path: string, body: unknown) {
     headers,
     body: JSON.stringify(body),
     cache: "no-store",
-    signal: AbortSignal.timeout(90_000),
+    // Extract + LLM competency recommend + compile can exceed 30s.
+    signal: AbortSignal.timeout(60_000),
   });
 }
 
@@ -54,13 +47,34 @@ export async function POST(request: Request) {
         job_description: body.jobDescription,
         target_level: body.seniority,
       });
-      const extractedData = await extracted.json().catch(() => ({})) as Record<string, unknown>;
+      const extractedData = (await extracted.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
       if (!extracted.ok) {
         return NextResponse.json(
-          { error: publicError(extractedData, "JD extraction failed.") },
+          { error: errorDetail(extractedData) || "JD extraction failed." },
           { status: extracted.status },
         );
       }
+
+      // Authoritative role/seniority from the design form (not JD-inferred only).
+      const roleTitle =
+        typeof body.role === "string" ? body.role.trim() : "";
+      const existingRole =
+        extractedData.role && typeof extractedData.role === "object"
+          ? (extractedData.role as Record<string, unknown>)
+          : {};
+      if (roleTitle || body.seniority) {
+        extractedData.role = {
+          ...existingRole,
+          ...(roleTitle ? { title: roleTitle } : {}),
+          ...(typeof body.seniority === "string" && body.seniority
+            ? { target_level: body.seniority }
+            : {}),
+        };
+      }
+
       const compiled = await backendRequest("/interview-brain/blueprint/compile", {
         job_intelligence: extractedData,
         title: body.title,
@@ -71,10 +85,10 @@ export async function POST(request: Request) {
         resume_required: true,
         include_scenarios: true,
       });
-      const data = await compiled.json().catch(() => ({})) as Record<string, unknown>;
+      const data = await compiled.json().catch(() => ({}));
       if (!compiled.ok) {
         return NextResponse.json(
-          { error: publicError(data, "Blueprint compilation failed.") },
+          { error: errorDetail(data) || "Alignment generation failed." },
           { status: compiled.status },
         );
       }
@@ -107,10 +121,26 @@ export async function POST(request: Request) {
         version: 1,
       });
       const data = await published.json().catch(() => ({}));
+      if (!published.ok) {
+        return NextResponse.json(
+          { error: errorDetail(data) || "Publish failed." },
+          { status: published.status },
+        );
+      }
       return NextResponse.json(data, { status: published.status });
     }
     return NextResponse.json({ error: "Unknown blueprint action." }, { status: 400 });
   } catch (reason) {
-    return NextResponse.json({ error: unreachableMessage(reason) }, { status: 502 });
+    const timedOut =
+      reason instanceof Error &&
+      (reason.name === "TimeoutError" || /aborted|timeout/i.test(reason.message));
+    return NextResponse.json(
+      {
+        error: timedOut
+          ? "Blueprint generation timed out. Try again with a shorter JD or retry."
+          : "Blueprint service could not be reached.",
+      },
+      { status: 502 },
+    );
   }
 }

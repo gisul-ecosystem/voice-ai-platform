@@ -18,6 +18,8 @@ export type PublicSessionRequest = {
   participantName: string;
   jobDescription?: string;
   resumeText?: string;
+  /** Structured claims from resume ingest; personalizes opening, does not change job bar. */
+  candidateProfile?: Record<string, unknown>;
   invitationToken?: string;
   idempotencyKey?: string;
   candidateEmail?: string;
@@ -53,6 +55,7 @@ export type SessionCredentials = {
   token: string;
   livekitUrl: string;
   productId: ProductId;
+  sessionId?: string;
 };
 
 type BackendSessionResponse = {
@@ -60,6 +63,7 @@ type BackendSessionResponse = {
   token?: unknown;
   livekit_url?: unknown;
   product_id?: unknown;
+  session_id?: unknown;
 };
 
 export function buildBackendSessionPayload(
@@ -90,12 +94,16 @@ export function sanitizeSessionResponse(
     throw new Error("The session service returned an invalid response.");
   }
 
-  return {
+  const credentials: SessionCredentials = {
     room: value.room,
     token: value.token,
     livekitUrl: value.livekit_url,
     productId: value.product_id,
   };
+  if (typeof value.session_id === "string" && value.session_id.trim()) {
+    credentials.sessionId = value.session_id.trim();
+  }
+  return credentials;
 }
 
 export function toUserFacingSessionError(status: number, detail?: string): string {

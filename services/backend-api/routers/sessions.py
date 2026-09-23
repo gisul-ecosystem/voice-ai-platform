@@ -200,14 +200,25 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     try:
         try:
             if existing_session is None:
-                # No `agents=[RoomAgentDispatch(...)]` here: that would dispatch the
-                # worker once on room creation and again below, putting two agents
-                # in the room talking over each other.
+                # Single dispatch path only. Creating the room with
+                # RoomAgentDispatch *and* calling create_dispatch (and/or putting
+                # agents on the participant token) can start two workers in one
+                # room — the candidate hears the opening twice.
                 await lk.room.create_room(
                     api.CreateRoomRequest(
                         name=room_name,
                         metadata=metadata_json,
                         max_participants=max_participants,
+                        # LiveKit defaults empty_timeout=300s. Agents are often
+                        # invisible to occupancy, so a late/paused candidate join
+                        # or mid-interview silence can RoomDelete ~5–6 minutes in
+                        # and surface as "Interview disconnected" / worker_shutdown.
+                        empty_timeout=int(
+                            os.getenv("LIVEKIT_ROOM_EMPTY_TIMEOUT_SECONDS", "3600")
+                        ),
+                        departure_timeout=int(
+                            os.getenv("LIVEKIT_ROOM_DEPARTURE_TIMEOUT_SECONDS", "120")
+                        ),
                     )
                 )
                 dispatch = await lk.agent_dispatch.create_dispatch(
@@ -338,11 +349,6 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
                 can_publish=True,
                 can_subscribe=True,
                 can_publish_data=False,
-            )
-        )
-        .with_room_config(
-            api.RoomConfiguration(
-                agents=[api.RoomAgentDispatch(agent_name=agent_name)]
             )
         )
         .to_jwt()

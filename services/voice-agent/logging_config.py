@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -87,16 +88,52 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(redact_secrets(payload), default=str)
 
 
+class _RateLimitLoopMonitor(logging.Filter):
+    """Stop LiveKit loop-monitor warnings from amplifying the stall.
+
+    Writing large stack dumps under a logging lock while the loop is already
+    blocked creates a feedback loop → "job executor is unresponsive".
+    Allow one sample per window so production still sees the signal.
+    """
+
+    _MARKERS = (
+        "event loop blocked",
+        "job executor is unresponsive",
+    )
+
+    def __init__(self, interval_seconds: float = 30.0) -> None:
+        super().__init__()
+        self._interval = max(1.0, float(interval_seconds))
+        self._last_emit = 0.0
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        if not any(marker in message for marker in self._MARKERS):
+            return True
+        now = time.monotonic()
+        if now - self._last_emit < self._interval:
+            return False
+        self._last_emit = now
+        # Drop the huge stack sample so emit stays cheap under pressure.
+        if hasattr(record, "stack"):
+            record.stack = "(rate-limited; see prior sample)"
+        return True
+
+
 def configure_logging() -> None:
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
+    handler.addFilter(_RateLimitLoopMonitor())
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level)
-    # Keep httpx/httpcore noise down; retries are logged by our clients.
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("livekit").setLevel(logging.INFO)

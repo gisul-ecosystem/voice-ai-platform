@@ -8,6 +8,11 @@ import pytest
 from products.interviewer.agent import CLARIFY_TURN, AaptorAgent
 
 
+@pytest.fixture(autouse=True)
+def _allow_legacy_interview_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALLOW_LEGACY_INTERVIEW_FLOW", "1")
+
+
 class _FakeLlm:
     async def generate_reply(self, messages, **_kwargs) -> str:
         return "DECISION: probe\n\nShould not be used for echo."

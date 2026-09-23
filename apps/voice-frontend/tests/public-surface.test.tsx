@@ -2,11 +2,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("public product surface", () => {
   const redirect = vi.fn();
+  const push = vi.fn();
 
   beforeEach(() => {
     vi.resetModules();
     redirect.mockClear();
-    vi.doMock("next/navigation", () => ({ redirect }));
+    push.mockClear();
+    vi.doMock("next/navigation", () => ({
+      redirect,
+      useRouter: () => ({ push }),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [] }),
+      }),
+    );
   });
 
   it("routes the public root directly to the interviewer", async () => {
@@ -29,5 +41,20 @@ describe("public product surface", () => {
       "href",
       "/interviewer/results",
     );
+    expect(screen.getByRole("link", { name: "Create an interview" })).toHaveAttribute(
+      "href",
+      "/interviewer/admin/design",
+    );
+  });
+
+  it("redirects legacy admin and setup entries to the design wizard", async () => {
+    const { default: AdminPage } = await import("@/app/interviewer/admin/page");
+    AdminPage();
+    expect(redirect).toHaveBeenCalledWith("/interviewer/admin/design");
+
+    redirect.mockClear();
+    const { default: SetupPage } = await import("@/app/interviewer/setup/page");
+    SetupPage();
+    expect(redirect).toHaveBeenCalledWith("/interviewer/admin/design");
   });
 });

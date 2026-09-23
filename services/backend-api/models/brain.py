@@ -452,6 +452,10 @@ class CompetencyCoverage(BaseModel):
     covered_intents: list[str] = Field(default_factory=list, max_length=20)
     missing_intents: list[str] = Field(default_factory=list, max_length=20)
     evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    # Worker coverage ladder detail (absent/partial/covered per intent).
+    # Required for brain PUT from live interviews; was previously rejected under
+    # extra="forbid" and surfaced as brain_checkpoint_unavailable (HTTP 422).
+    intent_status: dict[str, str] = Field(default_factory=dict, max_length=40)
 
 
 class InterviewBrainState(BaseModel):

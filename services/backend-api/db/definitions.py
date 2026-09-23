@@ -53,3 +53,16 @@ async def get_definition_model(
     payload = dict(stored)
     payload.pop("_id", None)
     return InterviewDefinitionVersion.model_validate(payload)
+
+
+async def list_definitions(*, limit: int = 50) -> list[dict[str, Any]]:
+    """Return recent published definitions, newest first."""
+    capped = max(1, min(int(limit), 100))
+    cursor = get_db().interview_definitions.find({})
+    docs = await cursor.sort("published_at", -1).to_list(capped)
+    rows: list[dict[str, Any]] = []
+    for doc in docs:
+        payload = dict(doc)
+        payload.pop("_id", None)
+        rows.append(payload)
+    return rows

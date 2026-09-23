@@ -8,6 +8,11 @@ import aaptor_agent
 import racko_agent
 
 
+@pytest.fixture(autouse=True)
+def _allow_legacy_interview_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALLOW_LEGACY_INTERVIEW_FLOW", "1")
+
+
 class FakeLlm:
     def __init__(self, *replies: str) -> None:
         self.replies = list(replies)
@@ -120,6 +125,60 @@ async def test_restored_agent_on_enter_does_not_respeak() -> None:
     agent.__dict__["session"] = _Session()
     await agent.on_enter()
     assert spoken == []
+
+
+@pytest.mark.asyncio
+async def test_opening_spoken_once_even_if_llm_node_runs(monkeypatch) -> None:
+    """Candidate must hear exactly one greeting — never on_enter + llm_node."""
+    from livekit.agents import llm
+    from livekit.agents.voice.agent import ModelSettings
+
+    class OpeningLlm:
+        async def generate_reply(self, messages: list[dict], **_kwargs) -> str:
+            return (
+                '{"question":"Thanks for joining — please introduce yourself.",'
+                '"intent":"opening","depth":1}'
+            )
+
+        async def generate_reply_stream(self, messages: list[dict], **_kwargs):
+            raw = await self.generate_reply(messages)
+            yield raw
+
+    agent = aaptor_agent.AaptorAgent(
+        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": []}]},
+        OpeningLlm(),
+    )
+    spoken: list[str] = []
+    streamed: list[str] = []
+
+    class _Session:
+        async def say(self, text: str, **_kwargs) -> None:
+            spoken.append(text)
+
+    sess = _Session()
+    monkeypatch.setattr(
+        type(agent),
+        "session",
+        property(lambda self: sess),
+        raising=False,
+    )
+    await agent.on_enter()
+    # Simulate a concurrent/auto llm_node invocation after enter.
+    async for chunk in agent.llm_node(
+        llm.ChatContext(),
+        [],
+        ModelSettings(),
+    ):
+        streamed.append(chunk)
+
+    assert len(spoken) == 1
+    assert spoken[0].strip()
+    # llm_node must not re-speak the greeting (empty ctx may clarify — that is fine).
+    assert all(
+        "joining" not in chunk.lower() and "introduce yourself" not in chunk.lower()
+        for chunk in streamed
+    )
+    assert agent._opened is True
 
 
 @pytest.mark.asyncio

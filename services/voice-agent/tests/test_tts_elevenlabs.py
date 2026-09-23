@@ -10,7 +10,15 @@ import httpx
 from clients.errors import ServiceUnavailableError
 from clients.provider_util import normalize_provider
 from clients.settings import ELEVENLABS_VOICE_ID
-from clients.tts import ElevenLabsTts, get_tts_client
+from clients.settings import (
+    ELEVENLABS_LATENCY_OPTIMIZATION,
+    ELEVENLABS_SIMILARITY_BOOST,
+    ELEVENLABS_STABILITY,
+    ELEVENLABS_STYLE,
+    ELEVENLABS_USE_SPEAKER_BOOST,
+    ELEVENLABS_VOICE_SPEED,
+)
+from clients.tts import ElevenLabsTts, ResilientTts, get_tts_client
 
 
 class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
@@ -42,11 +50,11 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
                     "text": "Hello from ElevenLabs",
                     "model_id": "eleven_flash_v2_5",
                     "voice_settings": {
-                        "stability": 0.45,
-                        "similarity_boost": 0.80,
-                        "style": 0.05,
-                        "speed": 0.82,
-                        "use_speaker_boost": True,
+                        "stability": ELEVENLABS_STABILITY,
+                        "similarity_boost": ELEVENLABS_SIMILARITY_BOOST,
+                        "style": ELEVENLABS_STYLE,
+                        "speed": max(0.7, min(float(ELEVENLABS_VOICE_SPEED or 0.82), 1.2)),
+                        "use_speaker_boost": ELEVENLABS_USE_SPEAKER_BOOST,
                     },
                 },
             )
@@ -54,7 +62,7 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
                 kwargs["params"],
                 {
                     "output_format": "pcm_24000",
-                    "optimize_streaming_latency": 3,
+                    "optimize_streaming_latency": ELEVENLABS_LATENCY_OPTIMIZATION,
                 },
             )
 
@@ -116,10 +124,12 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
             provider_override="elevenlabs",
             api_key_override="override-key-456",
         )
-        self.assertIsInstance(client, ElevenLabsTts)
-        self.assertEqual(client._api_key, "override-key-456")
-        self.assertEqual(client.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
-        self.assertTrue(client.model_id)
+        self.assertIsInstance(client, ResilientTts)
+        inner = client._primary
+        self.assertIsInstance(inner, ElevenLabsTts)
+        self.assertEqual(inner._api_key, "override-key-456")
+        self.assertEqual(inner.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
+        self.assertTrue(inner.model_id)
 
     async def test_voice_override_cannot_change_interviewer_voice(self):
         tts = ElevenLabsTts(

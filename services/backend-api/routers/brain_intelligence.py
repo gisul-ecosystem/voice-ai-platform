@@ -9,6 +9,7 @@ from brain.documents import DocumentIngestError, extract_document_text
 from brain.llm_extract import (
     extract_candidate_profile_async,
     extract_job_intelligence_async,
+    recommend_competencies_async,
 )
 from brain.publish import publish_definition, validate_for_publication
 from db import definitions
@@ -22,7 +23,10 @@ from models.brain import (
     SeniorityLevel,
     utc_now,
 )
-from security.auth import require_bff_service, require_worker_service
+from security.auth import (
+    require_bff_or_worker_service,
+    require_bff_service,
+)
 from security.rate_limit import require_capacity
 
 router = APIRouter(
@@ -219,16 +223,38 @@ async def compile_interview_blueprint(
     req: CompileBlueprintRequest,
 ) -> InterviewDefinitionDraft:
     try:
+        guidance = list(req.creator_competencies or [])
+        recommended = await recommend_competencies_async(
+            req.job_intelligence,
+            title=req.title,
+            duration_minutes=int(req.duration_minutes),
+            creator_guidance=guidance,
+        )
+        # Competencies structure the interview. Never silently pad CORE_FALLBACKS
+        # when the creator asked the LLM to invent the plan from the JD alone.
+        if not recommended and not guidance:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not generate interview competencies from the job "
+                    "description. Check LLM connectivity and try again, or add "
+                    "assessment areas as guidance."
+                ),
+            )
         return compile_blueprint(
             job_intelligence=req.job_intelligence,
             title=req.title,
             language=req.language,
             timezone=req.timezone,
             duration_minutes=req.duration_minutes,
-            creator_competencies=req.creator_competencies,
+            creator_competencies=guidance,
+            recommended_competencies=recommended or None,
+            creator_exclusive=bool(recommended) or len(guidance) >= 3,
             resume_required=req.resume_required,
             include_scenarios=req.include_scenarios,
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -271,10 +297,74 @@ async def publish_interview_blueprint(
     return published
 
 
+class DefinitionSummary(BaseModel):
+    definition_id: str
+    title: str
+    role: str
+    seniority: str
+    duration_minutes: int
+    timezone: str
+    competencies: list[str] = Field(default_factory=list)
+    job_description: str = ""
+    published_at: str | None = None
+    published_by: str | None = None
+
+
+class DefinitionListResponse(BaseModel):
+    items: list[DefinitionSummary] = Field(default_factory=list)
+
+
+def _summary_from_stored(stored: dict) -> DefinitionSummary:
+    role = stored.get("job_intelligence") or {}
+    role_summary = role.get("role") if isinstance(role, dict) else {}
+    if not isinstance(role_summary, dict):
+        role_summary = {}
+    competencies = stored.get("competencies") or []
+    names: list[str] = []
+    if isinstance(competencies, list):
+        for item in competencies:
+            if isinstance(item, dict) and item.get("name"):
+                names.append(str(item["name"]))
+    time_policy = stored.get("time_policy") or {}
+    duration = 30
+    if isinstance(time_policy, dict) and time_policy.get("duration_minutes"):
+        try:
+            duration = int(time_policy["duration_minutes"])
+        except (TypeError, ValueError):
+            duration = 30
+    published_at = stored.get("published_at")
+    return DefinitionSummary(
+        definition_id=str(stored.get("definition_id") or ""),
+        title=str(stored.get("title") or role_summary.get("title") or "Interview"),
+        role=str(role_summary.get("title") or stored.get("title") or "Role"),
+        seniority=str(role_summary.get("target_level") or "mid"),
+        duration_minutes=duration,
+        timezone=str(stored.get("timezone") or "UTC"),
+        competencies=names,
+        job_description=str(
+            role.get("raw_job_description") if isinstance(role, dict) else ""
+        ),
+        published_at=published_at.isoformat()
+        if hasattr(published_at, "isoformat")
+        else (str(published_at) if published_at else None),
+        published_by=str(stored.get("published_by") or "") or None,
+    )
+
+
+@router.get(
+    "/definitions",
+    response_model=DefinitionListResponse,
+    dependencies=[Depends(require_bff_service)],
+)
+async def list_interview_definitions(limit: int = 50) -> DefinitionListResponse:
+    rows = await definitions.list_definitions(limit=limit)
+    return DefinitionListResponse(items=[_summary_from_stored(row) for row in rows])
+
+
 @router.get(
     "/definitions/{definition_id}",
     response_model=InterviewDefinitionVersion,
-    dependencies=[Depends(require_worker_service)],
+    dependencies=[Depends(require_bff_or_worker_service)],
 )
 async def get_interview_definition(definition_id: str) -> InterviewDefinitionVersion:
     stored = await definitions.get_definition_model(definition_id)
