@@ -4,51 +4,31 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useSyncExternalStore } from "react";
 
-const DRAFT_KEY = "ai-interview:role-draft";
-
-type DraftState = {
-  definitionId: string;
-  draft: Record<string, unknown>;
-  title: string;
-  role: string;
-  seniority: string;
-  durationMinutes: string;
-  jobDescription: string;
-  competencies: string;
-  startsAt: string;
-  published?: unknown;
-};
-
-type DraftBundle = { state?: DraftState; error: string };
-
-const EMPTY_DRAFT: DraftBundle = { error: "" };
-
-function readDraft(): DraftBundle {
-  try {
-    const saved = sessionStorage.getItem(DRAFT_KEY);
-    return {
-      state: saved ? (JSON.parse(saved) as DraftState) : undefined,
-      error: "",
-    };
-  } catch {
-    return { error: "The draft could not be loaded." };
-  }
-}
-
-function subscribeDraft() {
-  return () => undefined;
-}
+import {
+  AdminProgress,
+  LandingNav,
+} from "@/components/interviewer/LandingNav";
+import {
+  EMPTY_ROLE_DRAFT,
+  getRoleDraftSnapshot,
+  subscribeRoleDraft,
+  writeRoleDraft,
+  type RoleDraftState,
+} from "@/lib/interviewer/role-draft";
 
 export default function ReviewAlignmentPage() {
   const router = useRouter();
   const ready = useSyncExternalStore(
-    subscribeDraft,
+    subscribeRoleDraft,
     () => true,
     () => false,
   );
-  const boot = useSyncExternalStore(subscribeDraft, readDraft, () => EMPTY_DRAFT);
-  // null = use sessionStorage boot; otherwise local edits after load.
-  const [edits, setEdits] = useState<DraftState | null>(null);
+  const boot = useSyncExternalStore(
+    subscribeRoleDraft,
+    getRoleDraftSnapshot,
+    () => EMPTY_ROLE_DRAFT,
+  );
+  const [edits, setEdits] = useState<RoleDraftState | null>(null);
   const [selected, setSelected] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -63,8 +43,9 @@ export default function ReviewAlignmentPage() {
       ? (state.draft.competencies as Array<Record<string, unknown>>)
       : [];
 
-  function setState(next: DraftState) {
+  function setState(next: RoleDraftState) {
     setEdits(next);
+    writeRoleDraft(next);
   }
 
   function update(index: number, patch: Record<string, unknown>) {
@@ -110,6 +91,13 @@ export default function ReviewAlignmentPage() {
     return Boolean(String(item.name || "").trim()) && evidence.length > 0;
   }
 
+  function evidenceText(item: Record<string, unknown>): string {
+    const evidence = Array.isArray(item.evidence_expected)
+      ? item.evidence_expected
+      : [];
+    return evidence.map(String).join(", ");
+  }
+
   function handleDrop(targetIndex: number) {
     if (draggingIndex !== null) moveTo(draggingIndex, targetIndex);
     setDraggingIndex(null);
@@ -148,7 +136,6 @@ export default function ReviewAlignmentPage() {
       }
       const publishedState = { ...state, definitionId, published: data };
       setState(publishedState);
-      sessionStorage.setItem(DRAFT_KEY, JSON.stringify(publishedState));
       router.push("/interviewer/admin/invite");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Publish failed.");
@@ -167,9 +154,10 @@ export default function ReviewAlignmentPage() {
     );
   }
 
-  if (!state) {
+  if (!state?.draft) {
     return (
       <main className="interviewer-home admin-builder-page">
+        <LandingNav ariaLabel="Admin navigation" badge="02 Review alignment" />
         <div className="center-state">
           <h2>Alignment draft unavailable</h2>
           <Link className="button secondary" href="/interviewer/admin/design">
@@ -184,12 +172,8 @@ export default function ReviewAlignmentPage() {
   const competency = competencies[selected];
   return (
     <main className="interviewer-home admin-builder-page">
-      <nav className="landing-nav" aria-label="Admin navigation">
-        <Link href="/interviewer/admin/design" className="brand">
-          <span className="brand-mark">AI</span>AI Interviewer
-        </Link>
-        <span className="environment-badge">02 Review alignment</span>
-      </nav>
+      <LandingNav ariaLabel="Admin navigation" badge="02 Review alignment" />
+      <AdminProgress current="review" />
       <section className="demo-intro">
         <p className="eyebrow">Review before publish</p>
         <h1>Shape the interview</h1>
@@ -306,6 +290,21 @@ export default function ReviewAlignmentPage() {
                 onChange={(e) => update(selected, { name: e.target.value })}
               />
             </label>
+            <label>
+              Evidence expected
+              <input
+                value={evidenceText(competency)}
+                placeholder="Comma-separated signals (ownership, metrics, …)"
+                onChange={(e) =>
+                  update(selected, {
+                    evidence_expected: e.target.value
+                      .split(",")
+                      .map((part) => part.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+            </label>
             <div className="admin-field-grid">
               <label>
                 Maximum depth
@@ -328,6 +327,18 @@ export default function ReviewAlignmentPage() {
                   value={String(competency.max_probes ?? 3)}
                   onChange={(e) =>
                     update(selected, { max_probes: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Weight
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={String(competency.weight ?? 1)}
+                  onChange={(e) =>
+                    update(selected, { weight: Number(e.target.value) })
                   }
                 />
               </label>

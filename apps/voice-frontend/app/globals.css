@@ -1350,6 +1350,22 @@ select:focus-visible,
   background: #f4f7ff;
 }
 
+.admin-progress-step.is-done {
+  border-color: #b8c9f0;
+  color: var(--foreground);
+}
+
+.invitation-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.invitation-link-row input {
+  flex: 1;
+  min-width: 0;
+}
+
 .admin-section {
   display: grid;
   gap: 16px;
