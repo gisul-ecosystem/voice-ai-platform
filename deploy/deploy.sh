@@ -28,9 +28,11 @@ deploy_tag() {
   local tag="$1"
   IMAGE_REGISTRY="${IMAGE_REGISTRY}" IMAGE_TAG="${tag}" \
     docker compose --file "${COMPOSE_FILE}" pull
+  # Stale containers (e.g. from manual recreate) can block compose by name.
+  docker rm -f voice-ai-platform-voice-agent-1 >/dev/null 2>&1 || true
   IMAGE_REGISTRY="${IMAGE_REGISTRY}" IMAGE_TAG="${tag}" \
     docker compose --file "${COMPOSE_FILE}" up \
-      --detach --remove-orphans --wait --wait-timeout 240
+      --detach --remove-orphans --force-recreate --wait --wait-timeout 240
 }
 
 check_health() {

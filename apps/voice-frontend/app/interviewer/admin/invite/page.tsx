@@ -9,8 +9,10 @@ import {
 } from "@/components/interviewer/LandingNav";
 import {
   EMPTY_ROLE_DRAFT,
+  defaultStartsAtLocal,
   getRoleDraftSnapshot,
   subscribeRoleDraft,
+  writeRoleDraft,
   type RoleDraftState,
 } from "@/lib/interviewer/role-draft";
 
@@ -52,6 +54,7 @@ export default function InviteCandidatesPage() {
   ]);
   const [pipeline, setPipeline] = useState<Pipeline>();
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [startsAtOverride, setStartsAtOverride] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/pipeline")
@@ -66,6 +69,14 @@ export default function InviteCandidatesPage() {
   const definitionId = String(
     published?.definition_id || state?.definitionId || "",
   );
+  const startsAt =
+    startsAtOverride ?? state?.startsAt ?? defaultStartsAtLocal();
+
+  function updateStartsAt(next: string) {
+    const value = next || defaultStartsAtLocal();
+    setStartsAtOverride(value);
+    if (state) writeRoleDraft({ ...state, startsAt: value });
+  }
 
   function update(index: number, patch: Partial<Candidate>) {
     setCandidates((items) =>
@@ -134,7 +145,7 @@ export default function InviteCandidatesPage() {
           definitionId,
           candidateName: candidate.name,
           candidateEmail: candidate.email,
-          startsAt: scheduleStartsAt(state),
+          startsAt: scheduleStartsAt({ ...state, startsAt }),
           joinEarlyMinutes: 15,
           lateGraceMinutes: 120,
           timezone:
@@ -189,10 +200,18 @@ export default function InviteCandidatesPage() {
       <main className="interviewer-home admin-builder-page">
         <LandingNav ariaLabel="Admin navigation" badge="03 Invite candidates" />
         <div className="center-state">
-          <h2>Publish the interview first</h2>
-          <Link className="button primary" href="/interviewer/admin/design">
-            Start design
-          </Link>
+          <h2>Choose a published interview</h2>
+          <p>
+            Publish a new design, or open a saved interview from the home page.
+          </p>
+          <div className="hero-actions" style={{ justifyContent: "center" }}>
+            <Link className="button primary" href="/interviewer">
+              Saved interviews
+            </Link>
+            <Link className="button" href="/interviewer/admin/design">
+              Start design
+            </Link>
+          </div>
         </div>
       </main>
     );
@@ -211,6 +230,19 @@ export default function InviteCandidatesPage() {
         </p>
       </section>
       <section className="demo-card invite-page-card">
+        <label className="invite-schedule-field">
+          Planned start
+          <input
+            type="datetime-local"
+            required
+            value={startsAt || defaultStartsAtLocal()}
+            onChange={(event) => updateStartsAt(event.target.value)}
+          />
+          <span className="field-hint">
+            Stored in UTC; shown to the candidate in{" "}
+            {Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"}.
+          </span>
+        </label>
         <div className="pipeline-panel">
           <div>
             <span className="section-number">PIPELINE</span>
