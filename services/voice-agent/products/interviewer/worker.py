@@ -5,7 +5,7 @@ import logging
 import os
 from typing import Any
 
-from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import AgentSession, JobContext, JobProcess, WorkerOptions, cli
 
 from clients.backend_client import (
     fetch_interview_context,
@@ -43,6 +43,7 @@ from voice_platform.runtime import (
     attach_session_metrics,
     build_agent_session,
     load_inference_clients,
+    prewarm_runtime,
 )
 
 logger = logging.getLogger("voice-agent.aaptor")
@@ -698,7 +699,12 @@ async def entrypoint(ctx: JobContext) -> None:
                     extra={"event": "status_report_unavailable"},
                 )
         raise
-    session = build_agent_session(clients)
+    vad = None
+    proc = getattr(ctx, "proc", None)
+    userdata = getattr(proc, "userdata", None) if proc is not None else None
+    if isinstance(userdata, dict):
+        vad = userdata.get("vad")
+    session = build_agent_session(clients, vad=vad)
     attach_session_metrics(session, logger)
     try:
         outline, outline_source = resolve_live_outline(
@@ -778,11 +784,21 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
 
+def prewarm(proc: JobProcess) -> None:
+    """Load Silero VAD once per job process before the first room join."""
+    prewarm_runtime(proc)
+    logger.info(
+        "worker_prewarmed",
+        extra={"event": "worker_prewarmed", "vad": True},
+    )
+
+
 def run() -> None:
     validate_startup_configuration()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
             agent_name=os.getenv("LIVEKIT_AGENT_NAME", "aaptor"),
             port=int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
             # Default 0.7 is based on whole-machine CPU; on a dev box with

@@ -17,6 +17,13 @@ from clients.inference import (
 from clients.tts.voice_policy import ResolvedVoicePolicy
 from livekit_adapters import LaptopLLM, LaptopSTT, LaptopTTS
 
+# Process-local VAD — Silero ONNX load is sync and expensive. Load once in
+# WorkerOptions.prewarm_fnc (or lazily here) so room join does not block the
+# asyncio loop and trip LiveKit's "job executor is unresponsive" watchdog.
+_VAD: Any | None = None
+_VAD_MIN_SPEECH = 0.4
+_VAD_MIN_SILENCE = 0.4
+
 
 @dataclass(frozen=True)
 class InferenceClients:
@@ -55,11 +62,35 @@ def load_inference_clients(
     return InferenceClients(llm=llm_client, stt=stt_client, tts=tts_client)
 
 
-def build_agent_session(clients: InferenceClients) -> AgentSession:
+def get_or_load_vad() -> Any:
+    """Return the process-cached Silero VAD, loading it once if needed."""
+    global _VAD
+    if _VAD is None:
+        _VAD = silero.VAD.load(
+            min_speech_duration=_VAD_MIN_SPEECH,
+            min_silence_duration=_VAD_MIN_SILENCE,
+        )
+    return _VAD
+
+
+def prewarm_runtime(proc: Any | None = None) -> None:
+    """Warm VAD (and stash on JobProcess.userdata when provided)."""
+    vad = get_or_load_vad()
+    if proc is not None:
+        userdata = getattr(proc, "userdata", None)
+        if isinstance(userdata, dict):
+            userdata["vad"] = vad
+
+
+def build_agent_session(
+    clients: InferenceClients,
+    *,
+    vad: Any | None = None,
+) -> AgentSession:
     """Construct the shared STT → LLM → TTS LiveKit pipeline."""
     return AgentSession(
-        # Short silence so the first reply starts soon after the candidate stops.
-        vad=silero.VAD.load(min_speech_duration=0.4, min_silence_duration=0.4),
+        # Prefer a prewarmed VAD so room join does not pay Silero ONNX load cost.
+        vad=vad or get_or_load_vad(),
         stt=LaptopSTT(client=clients.stt),
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
