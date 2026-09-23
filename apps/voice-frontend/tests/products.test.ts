@@ -4,7 +4,7 @@ import { getProduct, products } from "@/lib/products";
 
 describe("product registry", () => {
   it("registers only the supported public products", () => {
-    expect(Object.keys(products)).toEqual(["interviewer", "customer-support"]);
+    expect(Object.keys(products)).toEqual(["interviewer"]);
   });
 
   it("keeps worker implementation names out of browser configuration", () => {
@@ -12,10 +12,8 @@ describe("product registry", () => {
     expect(JSON.stringify(products)).not.toContain("racko");
   });
 
-  it("uses interview context and camera only where needed", () => {
-    expect(getProduct("interviewer").requiresInterviewContext).toBe(true);
+  it("enables LiveKit camera for interviewer sessions", () => {
+    expect(getProduct("interviewer").cameraAllowed).toBe(true);
     expect(getProduct("interviewer").cameraEnabledByDefault).toBe(true);
-    expect(getProduct("customer-support").requiresInterviewContext).toBe(false);
-    expect(getProduct("customer-support").cameraEnabledByDefault).toBe(false);
   });
 });

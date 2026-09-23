@@ -20,7 +20,10 @@ deployable products:
 - `packages/voice-ui/` owns reusable LiveKit prejoin, room, media, controls,
   session-client, and flow primitives consumed by product frontends.
 - `apps/voice-frontend/` is the neutral internal demo and reference consumer;
-  Aaptor and future product frontends keep their own branding and setup UX.
+  branded Aaptor and Racko frontends live in separate product repositories.
+
+The production interviewer boundaries and launch gates are documented in
+`docs/ai_interviewer_production_architecture.md` and `docs/interviewer_slos.md`.
 
 The root `aaptor_agent.py` and `racko_agent.py` files are compatibility
 entrypoints; existing start commands and LiveKit agent IDs remain unchanged.

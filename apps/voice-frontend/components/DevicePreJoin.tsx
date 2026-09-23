@@ -28,21 +28,26 @@ export function DevicePreJoin({
     <div className="prejoin-shell" data-lk-theme="default">
       <div className="section-heading">
         <p className="step-label">Device check</p>
-        <h2>Confirm microphone and camera access</h2>
+        <h2 tabIndex={-1}>
+          Confirm microphone{product.cameraAllowed ? " and camera" : ""} access
+        </h2>
         <p>
-          Choose your devices, verify the preview, then explicitly confirm that
-          you are ready to join.
+          {product.cameraAllowed
+            ? "Choose your devices, verify the preview, then confirm that you are ready to join."
+            : "Allow microphone access, choose the correct input, and speak briefly before joining."}
         </p>
       </div>
       <VoicePreJoin
         participantName={participantName}
+        cameraAllowed={product.cameraAllowed}
         cameraEnabledByDefault={product.cameraEnabledByDefault}
+        allowNameEditing={false}
         joinLabel={`I am ready — ${product.joinLabel}`}
         onSubmit={onSubmit}
         onError={onError}
       />
       <button className="button secondary" type="button" onClick={onBack}>
-        Back to setup
+        Back to invitation
       </button>
     </div>
   );

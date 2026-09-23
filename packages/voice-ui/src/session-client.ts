@@ -3,6 +3,8 @@ import type {
   VoiceSessionRequest,
 } from "./types";
 
+export type { VoiceSessionCredentials, VoiceSessionRequest };
+
 export async function createVoiceSession(
   request: VoiceSessionRequest,
   endpoint = "/api/sessions",

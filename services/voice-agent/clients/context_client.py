@@ -1,6 +1,7 @@
 """HTTP client for the context-engine retrieve service.
 
-Same retry/timeout pattern as stt_client.py: env timeout, ServiceUnavailableError.
+Uses the shared retry/timeout HTTP helper. Customer-support (Racko) still
+depends on this endpoint; interviewer uses interview-contexts instead.
 """
 from __future__ import annotations
 

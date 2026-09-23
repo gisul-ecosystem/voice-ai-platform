@@ -1,4 +1,4 @@
-"""OpenAI audio/speech API. Request WAV so LiveKit adapters stay unchanged."""
+﻿"""OpenAI audio/speech API. Request WAV so LiveKit adapters stay unchanged."""
 from __future__ import annotations
 
 import logging
@@ -22,13 +22,24 @@ def _voice(requested: str | None) -> str:
 
 
 class OpenAITts:
-    def __init__(self, *, base_url: str, api_key: str, model: str = "tts-1") -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str = "tts-1",
+        voice: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key
         self.model = model
+        # Session-pinned voice — synthesize() ignores per-call overrides.
+        self.voice_id = _voice(voice)
+        self.voice = self.voice_id
 
     async def synthesize(self, text: str, voice: str | None = None) -> bytes:
         started = time.perf_counter()
+        voice_id = self.voice_id
         resp = await request(
             "tts",
             "POST",
@@ -38,7 +49,7 @@ class OpenAITts:
             json={
                 "model": self.model,
                 "input": text,
-                "voice": _voice(voice),
+                "voice": voice_id,
                 "response_format": "wav",
             },
         )
@@ -53,6 +64,7 @@ class OpenAITts:
                 "input_chars": len(text),
                 "audio_bytes": len(audio),
                 "provider": "openai",
+                "voice_id": voice_id,
             },
         )
         return audio

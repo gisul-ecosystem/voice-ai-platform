@@ -11,15 +11,17 @@ import {
   LocalVideoTrack,
   Track,
 } from "livekit-client";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { VoiceDeviceChoices } from "./types";
 
 export type VoicePreJoinProps = {
   participantName: string;
+  cameraAllowed?: boolean;
   cameraEnabledByDefault?: boolean;
   joinLabel?: string;
   persistUserChoices?: boolean;
+  allowNameEditing?: boolean;
   className?: string;
   onSubmit: (choices: VoiceDeviceChoices) => void;
   onError?: (error: Error) => void;
@@ -27,9 +29,11 @@ export type VoicePreJoinProps = {
 
 export function VoicePreJoin({
   participantName,
+  cameraAllowed = true,
   cameraEnabledByDefault = false,
   joinLabel = "Join session",
   persistUserChoices = true,
+  allowNameEditing = true,
   className,
   onSubmit,
   onError,
@@ -45,19 +49,21 @@ export function VoicePreJoin({
     defaults: {
       username: participantName,
       audioEnabled: true,
-      videoEnabled: cameraEnabledByDefault,
+      videoEnabled: cameraAllowed && cameraEnabledByDefault,
     },
     preventSave: !persistUserChoices,
     preventLoad: !persistUserChoices,
   });
   const [username, setUsername] = useState(
-    initialChoices.username || participantName,
+    allowNameEditing
+      ? initialChoices.username || participantName
+      : participantName,
   );
   const [audioEnabled, setAudioEnabled] = useState(
     initialChoices.audioEnabled,
   );
   const [videoEnabled, setVideoEnabled] = useState(
-    initialChoices.videoEnabled,
+    cameraAllowed && cameraEnabledByDefault && initialChoices.videoEnabled,
   );
   const [audioDeviceId, setAudioDeviceId] = useState(
     initialChoices.audioDeviceId,
@@ -68,7 +74,7 @@ export function VoicePreJoin({
   const tracks = usePreviewTracks(
     {
       audio: audioEnabled ? { deviceId: audioDeviceId } : false,
-      video: videoEnabled ? { deviceId: videoDeviceId } : false,
+      video: cameraAllowed && videoEnabled ? { deviceId: videoDeviceId } : false,
     },
     onError,
   );
@@ -90,6 +96,7 @@ export function VoicePreJoin({
 
   useEffect(() => {
     if (videoElement.current && videoTrack) {
+      void videoTrack.unmute();
       videoTrack.attach(videoElement.current);
     }
     return () => {
@@ -98,8 +105,8 @@ export function VoicePreJoin({
   }, [videoTrack]);
 
   useEffect(() => {
-    saveUsername(username);
-  }, [saveUsername, username]);
+    if (allowNameEditing) saveUsername(username);
+  }, [allowNameEditing, saveUsername, username]);
   useEffect(() => {
     saveAudioInputEnabled(audioEnabled);
   }, [audioEnabled, saveAudioInputEnabled]);
@@ -113,34 +120,52 @@ export function VoicePreJoin({
     saveVideoInputDeviceId(videoDeviceId);
   }, [saveVideoInputDeviceId, videoDeviceId]);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function join() {
     const normalizedName = username.trim();
-    if (!normalizedName) return;
+    if (!normalizedName || !audioEnabled || !audioTrack) return;
     onSubmit({
       username: normalizedName,
       audioEnabled,
-      videoEnabled,
+      videoEnabled: cameraAllowed && videoEnabled,
       audioDeviceId,
       videoDeviceId,
     });
   }
 
   return (
-    <form
+    <div
       className={["voice-device-check", className].filter(Boolean).join(" ")}
-      onSubmit={submit}
     >
-      <div className="voice-device-preview">
-        {videoEnabled && videoTrack ? (
-          <video ref={videoElement} autoPlay muted playsInline />
-        ) : (
-          <div className="voice-device-placeholder">
-            <span>Camera preview is off</span>
+      {cameraAllowed ? (
+        <div className="voice-device-preview">
+          {videoEnabled && videoTrack ? (
+            <video ref={videoElement} autoPlay muted playsInline />
+          ) : (
+            <div className="voice-device-placeholder">
+              <span>Camera preview is off</span>
+            </div>
+          )}
+          <span className="voice-preview-label">Preview</span>
+        </div>
+      ) : (
+        <div className="voice-audio-preview" aria-live="polite">
+          <div className="audio-preview-mark" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
           </div>
-        )}
-        <span className="voice-preview-label">Preview</span>
-      </div>
+          <strong>
+            {!audioEnabled
+              ? "Microphone is muted"
+              : audioTrack
+                ? "Microphone is ready"
+                : "Waiting for microphone permission"}
+          </strong>
+          <p>Speak naturally and confirm that your browser shows microphone access.</p>
+        </div>
+      )}
 
       <div className="voice-device-settings">
         <label className="voice-device-name">
@@ -151,6 +176,13 @@ export function VoicePreJoin({
             onChange={(event) => setUsername(event.target.value)}
             autoComplete="name"
             required
+            readOnly={!allowNameEditing}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                join();
+              }
+            }}
           />
         </label>
 
@@ -179,39 +211,42 @@ export function VoicePreJoin({
           </div>
         </div>
 
-        <div className="voice-device-row">
-          <div>
-            <strong>Camera</strong>
-            <span>{videoEnabled ? "Ready" : "Off"}</span>
-          </div>
-          <div className="lk-button-group">
-            <TrackToggle
-              initialState={videoEnabled}
-              source={Track.Source.Camera}
-              onChange={setVideoEnabled}
-            >
-              {videoEnabled ? "On" : "Off"}
-            </TrackToggle>
-            <div className="lk-button-group-menu">
-              <MediaDeviceMenu
-                initialSelection={videoDeviceId}
-                kind="videoinput"
-                disabled={!videoTrack}
-                tracks={{ videoinput: videoTrack }}
-                onActiveDeviceChange={(_, id) => setVideoDeviceId(id)}
-              />
+        {cameraAllowed ? (
+          <div className="voice-device-row">
+            <div>
+              <strong>Camera</strong>
+              <span>{videoEnabled ? "Ready" : "Off"}</span>
+            </div>
+            <div className="lk-button-group">
+              <TrackToggle
+                initialState={videoEnabled}
+                source={Track.Source.Camera}
+                onChange={setVideoEnabled}
+              >
+                {videoEnabled ? "On" : "Off"}
+              </TrackToggle>
+              <div className="lk-button-group-menu">
+                <MediaDeviceMenu
+                  initialSelection={videoDeviceId}
+                  kind="videoinput"
+                  disabled={!videoTrack}
+                  tracks={{ videoinput: videoTrack }}
+                  onActiveDeviceChange={(_, id) => setVideoDeviceId(id)}
+                />
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
 
         <button
           className="lk-button voice-join-button"
-          type="submit"
-          disabled={!username.trim()}
+          type="button"
+          disabled={!username.trim() || !audioEnabled || !audioTrack}
+          onClick={join}
         >
           {joinLabel}
         </button>
       </div>
-    </form>
+    </div>
   );
 }

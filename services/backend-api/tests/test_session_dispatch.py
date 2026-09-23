@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 from models.schemas import CreateSessionRequest
@@ -21,11 +20,22 @@ class FakeRoomService:
         raise AssertionError("unique test rooms must not need metadata updates")
 
 
+class FakeAgentDispatchService:
+    def __init__(self) -> None:
+        self.created = []
+
+    async def create_dispatch(self, request):
+        self.created.append(request)
+        return type("FakeDispatch", (), {"id": "AD_test"})()
+
+
 class FakeLiveKitApi:
     room_service = FakeRoomService()
+    dispatch_service = FakeAgentDispatchService()
 
     def __init__(self, *_args) -> None:
         self.room = self.room_service
+        self.agent_dispatch = self.dispatch_service
 
     async def aclose(self) -> None:
         pass
@@ -37,31 +47,139 @@ async def test_session_dispatches_only_supported_workers(
     monkeypatch, agent_name: str
 ) -> None:
     FakeLiveKitApi.room_service = FakeRoomService()
+    FakeLiveKitApi.dispatch_service = FakeAgentDispatchService()
     monkeypatch.setattr(sessions.api, "LiveKitAPI", FakeLiveKitApi)
     monkeypatch.setattr(sessions, "_ws_url", lambda: "wss://livekit.test")
     monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "x" * 32)
+    monkeypatch.setattr(
+        sessions.interviews,
+        "create_live_session",
+        _fake_create_live_session,
+    )
+    monkeypatch.setattr(
+        sessions.interviews,
+        "get_context",
+        _fake_get_context,
+    )
 
     request = CreateSessionRequest(
-        identity=f"{agent_name}-participant",
         name="Test Participant",
-        agent_name=agent_name,
-        job_description="Python role" if agent_name == "aaptor" else None,
-        resume_text="Python experience" if agent_name == "aaptor" else None,
+        product_id="interviewer" if agent_name == "aaptor" else "customer-support",
+        context_id="ctx_1234567890123456" if agent_name == "aaptor" else None,
     )
     response = await sessions.create_session(request)
 
     created = FakeLiveKitApi.room_service.created[0]
     metadata = json.loads(created.metadata)
-    assert created.agents[0].agent_name == agent_name
-    assert response.room.startswith("session-")
+    dispatch = FakeLiveKitApi.dispatch_service.created[0]
+    assert dispatch.agent_name == agent_name
+    # Room must not also embed RoomAgentDispatch — that double-starts the worker.
+    assert not list(getattr(created, "agents", None) or [])
+    assert response.room.startswith("interview-")
     assert response.token
+    assert response.session_id == "ses_test"
     assert response.product_id == (
         "interviewer" if agent_name == "aaptor" else "customer-support"
     )
-    if agent_name == "racko":
-        assert "job_description" not in metadata
-        assert "resume_text" not in metadata
+    assert "job_description" not in metadata
+    assert "resume_text" not in metadata
+    assert "session_id" in metadata
+    # Exactly one worker start — dual RoomAgentDispatch + create_dispatch caused
+    # two openings (candidate heard the voice twice).
+    assert len(FakeLiveKitApi.dispatch_service.created) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_dispatches_agent_exactly_once(monkeypatch) -> None:
+    """Regression: opening must not be spoken by two workers in one room."""
+    FakeLiveKitApi.room_service = FakeRoomService()
+    FakeLiveKitApi.dispatch_service = FakeAgentDispatchService()
+    monkeypatch.setattr(sessions.api, "LiveKitAPI", FakeLiveKitApi)
+    monkeypatch.setattr(sessions, "_ws_url", lambda: "wss://livekit.test")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "x" * 32)
+    monkeypatch.setattr(
+        sessions.interviews,
+        "create_live_session",
+        _fake_create_live_session,
+    )
+    monkeypatch.setattr(
+        sessions.interviews,
+        "get_context",
+        _fake_get_context,
+    )
+
+    room_configs: list = []
+
+    class TrackingToken:
+        def __init__(self, *_args):
+            pass
+
+        def with_identity(self, *_a, **_k):
+            return self
+
+        def with_name(self, *_a, **_k):
+            return self
+
+        def with_ttl(self, *_a, **_k):
+            return self
+
+        def with_grants(self, *_a, **_k):
+            return self
+
+        def with_room_config(self, config):
+            room_configs.append(config)
+            return self
+
+        def to_jwt(self):
+            return "jwt-test"
+
+    monkeypatch.setattr(sessions.api, "AccessToken", TrackingToken)
+
+    await sessions.create_session(
+        CreateSessionRequest(
+            name="Test Participant",
+            product_id="interviewer",
+            context_id="ctx_1234567890123456",
+        )
+    )
+
+    assert len(FakeLiveKitApi.dispatch_service.created) == 1
+    created = FakeLiveKitApi.room_service.created[0]
+    assert not list(getattr(created, "agents", None) or [])
+    assert room_configs == []
+
+
+@pytest.mark.asyncio
+async def test_session_metadata_includes_published_definition(monkeypatch) -> None:
+    FakeLiveKitApi.room_service = FakeRoomService()
+    FakeLiveKitApi.dispatch_service = FakeAgentDispatchService()
+    monkeypatch.setattr(sessions.api, "LiveKitAPI", FakeLiveKitApi)
+    monkeypatch.setattr(sessions, "_ws_url", lambda: "wss://livekit.test")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "x" * 32)
+    monkeypatch.setattr(sessions.interviews, "create_live_session", _fake_create_live_session)
+    monkeypatch.setattr(
+        sessions.interviews,
+        "get_context",
+        _fake_get_context_with_definition,
+    )
+
+    await sessions.create_session(
+        CreateSessionRequest(
+            name="Test Candidate",
+            product_id="interviewer",
+            context_id="ctx_1234567890123456",
+        )
+    )
+
+    metadata = json.loads(FakeLiveKitApi.room_service.created[0].metadata)
+    assert metadata["definition_id"] == "ai-engineer-junior-v1"
+    assert len(FakeLiveKitApi.dispatch_service.created) == 1
+    assert not list(
+        getattr(FakeLiveKitApi.room_service.created[0], "agents", None) or []
+    )
 
 
 def test_unknown_worker_is_rejected_by_schema() -> None:
@@ -78,38 +196,54 @@ async def test_public_products_map_to_private_workers(
     monkeypatch, product_id: str, agent_name: str
 ) -> None:
     FakeLiveKitApi.room_service = FakeRoomService()
+    FakeLiveKitApi.dispatch_service = FakeAgentDispatchService()
     monkeypatch.setattr(sessions.api, "LiveKitAPI", FakeLiveKitApi)
     monkeypatch.setattr(sessions, "_ws_url", lambda: "wss://livekit.test")
     monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "x" * 32)
+    monkeypatch.setattr(
+        sessions.interviews,
+        "create_live_session",
+        _fake_create_live_session,
+    )
+    monkeypatch.setattr(
+        sessions.interviews,
+        "get_context",
+        _fake_get_context,
+    )
 
     response = await sessions.create_session(
-        CreateSessionRequest(product_id=product_id, identity="web-user", name="Web User")
+        CreateSessionRequest(
+            product_id=product_id,
+            name="Web User",
+            context_id="ctx_1234567890123456"
+            if product_id == "interviewer"
+            else None,
+        )
     )
 
     created = FakeLiveKitApi.room_service.created[0]
     metadata = json.loads(created.metadata)
-    assert created.agents[0].agent_name == agent_name
+    assert FakeLiveKitApi.dispatch_service.created[0].agent_name == agent_name
+    assert not list(getattr(created, "agents", None) or [])
     assert metadata["product_id"] == product_id
     assert "provider_policy_id" in metadata
     assert response.product_id == product_id
 
 
-@pytest.mark.asyncio
-async def test_unknown_or_conflicting_product_is_rejected(monkeypatch) -> None:
-    monkeypatch.setattr(sessions, "_ws_url", lambda: "wss://livekit.test")
-    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "x" * 32)
+def test_livekit_agent_name_env_overrides_interviewer_worker(monkeypatch) -> None:
+    from products.registry import resolve_product
 
-    with pytest.raises(HTTPException) as unknown:
-        await sessions.create_session(CreateSessionRequest(product_id="unknown"))
-    assert unknown.value.status_code == 422
+    monkeypatch.setenv("LIVEKIT_AGENT_NAME", "aaptor-staging")
+    profile = resolve_product("interviewer", None)
+    assert profile.agent_name == "aaptor-staging"
+    # Legacy callers may still pass default worker name with product_id.
+    assert resolve_product("interviewer", "aaptor").agent_name == "aaptor-staging"
 
-    with pytest.raises(HTTPException) as conflict:
-        await sessions.create_session(
-            CreateSessionRequest(product_id="interviewer", agent_name="racko")
-        )
-    assert conflict.value.status_code == 422
+
+def test_unknown_product_is_rejected_by_schema() -> None:
+    with pytest.raises(ValidationError):
+        CreateSessionRequest(product_id="unknown")
 
 
 def test_public_session_schema_rejects_provider_credentials() -> None:
@@ -118,3 +252,15 @@ def test_public_session_schema_rejects_provider_credentials() -> None:
             product_id="interviewer",
             llm_api_key="must-not-enter-public-session-contract",
         )
+
+
+async def _fake_create_live_session(**_kwargs) -> str:
+    return "ses_test"
+
+
+async def _fake_get_context(_context_id: str) -> dict:
+    return {}
+
+
+async def _fake_get_context_with_definition(_context_id: str) -> dict:
+    return {"definition_id": "ai-engineer-junior-v1"}

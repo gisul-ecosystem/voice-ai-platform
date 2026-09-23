@@ -1,9 +1,9 @@
 """Mint a LiveKit participant token and ensure the room has Stage 1 metadata.
 
 aaptor_agent.py reads ctx.room.metadata JSON keys job_description and resume_text
-(falling back to JOB_DESCRIPTION / RESUME_TEXT in .env). Optional inference
-overrides: llm_provider, llm_api_key, stt_provider, stt_api_key, tts_provider,
-tts_api_key. Omitted means the worker uses .env defaults. API keys are never printed.
+(falling back to JOB_DESCRIPTION / RESUME_TEXT in .env). Optional provider
+overrides select credentials already configured in the worker environment.
+Raw API keys must never be placed in LiveKit room metadata.
 """
 from __future__ import annotations
 
@@ -47,21 +47,15 @@ def build_room_metadata(
     job_description: str,
     resume_text: str,
     llm_provider: str | None = None,
-    llm_api_key: str | None = None,
     stt_provider: str | None = None,
-    stt_api_key: str | None = None,
     tts_provider: str | None = None,
-    tts_api_key: str | None = None,
 ) -> dict:
     """Room JSON the agent reads. Omitted inference fields mean server .env defaults."""
     metadata = {"job_description": job_description, "resume_text": resume_text}
     extras = {
         "llm_provider": _optional_meta(llm_provider),
-        "llm_api_key": _optional_meta(llm_api_key),
         "stt_provider": _optional_meta(stt_provider),
-        "stt_api_key": _optional_meta(stt_api_key),
         "tts_provider": _optional_meta(tts_provider),
-        "tts_api_key": _optional_meta(tts_api_key),
     }
     for key, value in extras.items():
         if value is not None:
@@ -70,14 +64,10 @@ def build_room_metadata(
 
 
 def _log_safe_inference(metadata: dict) -> dict:
-    # Client-provided keys must never land in log files or observability tooling.
     return {
         "llm_provider": metadata.get("llm_provider"),
         "stt_provider": metadata.get("stt_provider"),
         "tts_provider": metadata.get("tts_provider"),
-        "llm_api_key_set": bool(metadata.get("llm_api_key")),
-        "stt_api_key_set": bool(metadata.get("stt_api_key")),
-        "tts_api_key_set": bool(metadata.get("tts_api_key")),
     }
 
 
@@ -125,11 +115,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--job-file", type=Path, default=None)
     parser.add_argument("--resume-file", type=Path, default=None)
     parser.add_argument("--llm-provider", default=None)
-    parser.add_argument("--llm-api-key", default=None)
     parser.add_argument("--stt-provider", default=None)
-    parser.add_argument("--stt-api-key", default=None)
     parser.add_argument("--tts-provider", default=None)
-    parser.add_argument("--tts-api-key", default=None)
     parser.add_argument(
         "--skip-create-room",
         action="store_true",
@@ -228,11 +215,8 @@ async def main() -> int:
             job_description=jd,
             resume_text=resume,
             llm_provider=args.llm_provider,
-            llm_api_key=args.llm_api_key,
             stt_provider=args.stt_provider,
-            stt_api_key=args.stt_api_key,
             tts_provider=args.tts_provider,
-            tts_api_key=args.tts_api_key,
         )
     )
     agent_name = (args.agent_name or "aaptor").strip() or "aaptor"
@@ -274,9 +258,6 @@ async def main() -> int:
     print(f"  llm_provider={inferred['llm_provider']}")
     print(f"  stt_provider={inferred['stt_provider']}")
     print(f"  tts_provider={inferred['tts_provider']}")
-    print(f"  llm_api_key_set={inferred['llm_api_key_set']}")
-    print(f"  stt_api_key_set={inferred['stt_api_key_set']}")
-    print(f"  tts_api_key_set={inferred['tts_api_key_set']}")
     print()
     print("This token is for low-level diagnostics only; do not commit or share it.")
     print("For the normal browser flow, run the app in apps/voice-frontend.")

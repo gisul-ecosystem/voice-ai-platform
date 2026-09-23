@@ -1,18 +1,52 @@
 import type { ProductId } from "@/lib/products";
 
+export const INTERVIEW_DURATION_OPTIONS = [15, 30, 45] as const;
+export type InterviewDurationMinutes =
+  (typeof INTERVIEW_DURATION_OPTIONS)[number];
+
+export function normalizeInterviewDuration(
+  value: unknown,
+): InterviewDurationMinutes {
+  if (value === 15 || value === 30 || value === 45) {
+    return value;
+  }
+  return 30;
+}
+
 export type PublicSessionRequest = {
   productId: ProductId;
   participantName: string;
   jobDescription?: string;
   resumeText?: string;
+  /** Structured claims from resume ingest; personalizes opening, does not change job bar. */
+  candidateProfile?: Record<string, unknown>;
+  invitationToken?: string;
+  idempotencyKey?: string;
+  candidateEmail?: string;
+  candidateId?: string;
+  definitionId?: string;
+  startsAt?: string;
+  timezone?: string;
+  interviewSetup?: {
+    title: string;
+    role: string;
+    seniority: string;
+    difficulty: string;
+    durationMinutes: InterviewDurationMinutes;
+    language: string;
+    competencies: string[];
+    maxProbesPerPhase: number;
+    monitoringEnabled: boolean;
+    recordingEnabled: boolean;
+  };
 };
 
 export type BackendSessionPayload = {
   product_id: ProductId;
-  identity: string;
   name: string;
-  job_description?: string;
-  resume_text?: string;
+  context_id?: string;
+  invitation_token?: string;
+  idempotency_key?: string;
 };
 
 export type SessionCredentials = {
@@ -31,20 +65,16 @@ type BackendSessionResponse = {
 
 export function buildBackendSessionPayload(
   input: PublicSessionRequest,
-  identity: string,
+  contextId?: string,
 ): BackendSessionPayload {
   const payload: BackendSessionPayload = {
     product_id: input.productId,
-    identity,
     name: input.participantName.trim(),
   };
 
-  if (input.productId === "interviewer") {
-    const jobDescription = input.jobDescription?.trim();
-    const resumeText = input.resumeText?.trim();
-    if (jobDescription) payload.job_description = jobDescription;
-    if (resumeText) payload.resume_text = resumeText;
-  }
+  if (contextId) payload.context_id = contextId;
+  if (input.invitationToken) payload.invitation_token = input.invitationToken;
+  if (input.idempotencyKey) payload.idempotency_key = input.idempotencyKey;
 
   return payload;
 }
@@ -56,8 +86,7 @@ export function sanitizeSessionResponse(
     typeof value.room !== "string" ||
     typeof value.token !== "string" ||
     typeof value.livekit_url !== "string" ||
-    (value.product_id !== "interviewer" &&
-      value.product_id !== "customer-support")
+    value.product_id !== "interviewer"
   ) {
     throw new Error("The session service returned an invalid response.");
   }

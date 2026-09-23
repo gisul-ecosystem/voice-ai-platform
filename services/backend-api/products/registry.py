@@ -5,11 +5,36 @@ import os
 from dataclasses import dataclass
 
 
+def _env_agent_name(*keys: str, default: str) -> str:
+    for key in keys:
+        value = (os.getenv(key) or "").strip()
+        if value:
+            return value
+    return default
+
+
 @dataclass(frozen=True)
 class ProductProfile:
     product_id: str
-    agent_name: str
+    default_agent_name: str
     provider_env_prefix: str
+
+    @property
+    def agent_name(self) -> str:
+        """Worker name LiveKit dispatches to (overridable per environment)."""
+        if self.product_id == "interviewer":
+            return _env_agent_name(
+                "LIVEKIT_AGENT_NAME",
+                "INTERVIEWER_AGENT_NAME",
+                default=self.default_agent_name,
+            )
+        if self.product_id == "customer-support":
+            return _env_agent_name(
+                "RACKO_AGENT_NAME",
+                "CUSTOMER_SUPPORT_AGENT_NAME",
+                default=self.default_agent_name,
+            )
+        return self.default_agent_name
 
     @property
     def provider_policy_id(self) -> str:
@@ -33,16 +58,15 @@ class ProductProfile:
 _PRODUCTS = {
     "interviewer": ProductProfile(
         product_id="interviewer",
-        agent_name="aaptor",
+        default_agent_name="aaptor",
         provider_env_prefix="INTERVIEWER",
     ),
     "customer-support": ProductProfile(
         product_id="customer-support",
-        agent_name="racko",
+        default_agent_name="racko",
         provider_env_prefix="CUSTOMER_SUPPORT",
     ),
 }
-_BY_AGENT = {profile.agent_name: profile for profile in _PRODUCTS.values()}
 
 
 def resolve_product(
@@ -57,7 +81,13 @@ def resolve_product(
         profile = _PRODUCTS.get(requested_product)
         if profile is None:
             raise ValueError(f"Unknown product_id {requested_product!r}")
-        if requested_agent and requested_agent != profile.agent_name:
+        # Allow legacy agent_name=aaptor even when env overrides worker to
+        # aaptor-staging (product_id remains the source of truth).
+        if (
+            requested_agent
+            and requested_agent != profile.agent_name
+            and requested_agent != profile.default_agent_name
+        ):
             raise ValueError(
                 f"product_id {requested_product!r} does not use agent "
                 f"{requested_agent!r}"
@@ -65,9 +95,12 @@ def resolve_product(
         return profile
 
     if requested_agent:
-        profile = _BY_AGENT.get(requested_agent)
-        if profile is None:
-            raise ValueError(f"Unknown agent_name {requested_agent!r}")
-        return profile
+        for profile in _PRODUCTS.values():
+            if (
+                requested_agent == profile.agent_name
+                or requested_agent == profile.default_agent_name
+            ):
+                return profile
+        raise ValueError(f"Unknown agent_name {requested_agent!r}")
 
     return _PRODUCTS["interviewer"]
