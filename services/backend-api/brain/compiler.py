@@ -183,6 +183,8 @@ def _texts(items: Iterable[ExtractedItem]) -> list[str]:
 def _candidate_competency_seeds(
     job: JobIntelligence,
     creator_competencies: list[str] | None,
+    *,
+    creator_exclusive: bool = False,
 ) -> list[tuple[str, str, list[str], bool]]:
     """Return (id_base, display_name, jd_hint_texts, required)."""
     seeds: list[tuple[str, str, list[str], bool]] = []
@@ -205,29 +207,43 @@ def _candidate_competency_seeds(
     for name in creator_competencies or []:
         add(name, [], required=True)
 
-    def _usable(item: ExtractedItem, *, max_len: int = 60) -> bool:
+    # LLM / explicit creator recommendations should own the interview plan.
+    # Only fall back to JD fragment heuristics when we do not have enough.
+    skip_jd_pad = creator_exclusive and len(seeds) >= _MIN_COMPETENCIES
+
+    def _usable(item: ExtractedItem, *, max_len: int = 96) -> bool:
         text = item.text.strip()
-        if "," in text or len(text) > max_len:
+        # Allow comma-separated skill lists by using the first segment when long.
+        if "," in text:
+            text = text.split(",", 1)[0].strip()
+        if len(text) < 2 or len(text) > max_len:
             return False
         if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
             return False
         return True
 
-    for item in job.skills + job.mandatory_requirements:
-        if _usable(item):
-            add(item.text, [item.text], required=True)
+    if not skip_jd_pad:
+        for item in job.skills + job.mandatory_requirements:
+            if _usable(item):
+                label = item.text.strip()
+                if "," in label:
+                    label = label.split(",", 1)[0].strip()
+                add(label, [item.text], required=True)
 
-    for item in job.responsibilities[:4]:
-        text = item.text.strip()
-        if 8 <= len(text) <= 48 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
-            add(text, [text], required=True)
+        for item in job.responsibilities[:4]:
+            text = item.text.strip()
+            if 8 <= len(text) <= 72 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
+                add(text, [text], required=True)
 
-    preferred_pool = (
-        list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
-    )
-    for item in preferred_pool:
-        if _usable(item, max_len=48):
-            add(item.text, [item.text], required=False)
+        preferred_pool = (
+            list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
+        )
+        for item in preferred_pool:
+            if _usable(item, max_len=72):
+                label = item.text.strip()
+                if "," in label:
+                    label = label.split(",", 1)[0].strip()
+                add(label, [item.text], required=False)
 
     required_seeds = [seed for seed in seeds if seed[3]]
     preferred_seeds = [seed for seed in seeds if not seed[3]]
@@ -253,7 +269,11 @@ def _build_competency(
     weight: float,
     required: bool = True,
     definition: str | None = None,
+    evidence_expected: list[str] | None = None,
 ) -> CompetencyDefinition:
+    evidence = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
+    if not evidence:
+        evidence = _evidence_for(name, hints)
     return CompetencyDefinition(
         id=competency_id,
         name=name,
@@ -266,7 +286,7 @@ def _build_competency(
         )[:1000],
         importance="high" if required else "medium",
         required_level=_LEVEL_TO_REQUIRED.get(level, 3),
-        evidence_expected=_evidence_for(name, hints),
+        evidence_expected=evidence[:12],
         min_assessment_intents=_intents_for_level(level),
         max_depth=min(5, max(3, _LEVEL_TO_REQUIRED.get(level, 3) + 1)),
         max_probes=3 if level in {"intern", "junior"} else 4,
@@ -369,15 +389,43 @@ def compile_blueprint(
     timezone: str = "UTC",
     duration_minutes: DurationMinutes = 30,
     creator_competencies: list[str] | None = None,
+    recommended_competencies: list[dict] | None = None,
+    creator_exclusive: bool = False,
     resume_required: bool = False,
     include_scenarios: bool = True,
 ) -> InterviewDefinitionDraft:
-    """Build a reviewable InterviewDefinitionDraft from JD intelligence."""
+    """Build a reviewable InterviewDefinitionDraft from JD intelligence.
+
+    Competencies are the interview structure. Prefer LLM recommendations when
+    provided; otherwise seed from creator guidance + JD heuristics.
+    """
     if not job_intelligence.raw_job_description.strip():
         raise ValueError("job_intelligence.raw_job_description is required")
 
     level = job_intelligence.role.target_level
-    seeds = _candidate_competency_seeds(job_intelligence, creator_competencies)
+    enrichment: dict[str, dict] = {}
+    seed_names = list(creator_competencies or [])
+    exclusive = creator_exclusive
+
+    if recommended_competencies:
+        seed_names = []
+        for item in recommended_competencies:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if len(name) < 2:
+                continue
+            seed_names.append(name)
+            # Key by normalized label so lookup survives aliasing (js→javascript).
+            enrichment[normalize_skill_label(name).lower()] = item
+            enrichment[name.lower()] = item
+        exclusive = True
+
+    seeds = _candidate_competency_seeds(
+        job_intelligence,
+        seed_names,
+        creator_exclusive=exclusive,
+    )
     weights = _importance_weights([seed[3] for seed in seeds])
     used_ids: set[str] = set()
     competencies: list[CompetencyDefinition] = []
@@ -385,6 +433,20 @@ def compile_blueprint(
     core_defs = {item[0]: item[2] for item in _CORE_FALLBACKS}
     for (id_base, name, hints, required), weight in zip(seeds, weights, strict=True):
         competency_id = _unique_id(id_base, used_ids)
+        enriched = (
+            enrichment.get(name.lower())
+            or enrichment.get(normalize_skill_label(name).lower())
+            or {}
+        )
+        llm_definition = str(enriched.get("definition") or "").strip() or None
+        llm_evidence = enriched.get("evidence_expected")
+        evidence_list = (
+            [str(x).strip() for x in llm_evidence if str(x).strip()]
+            if isinstance(llm_evidence, list)
+            else None
+        )
+        if enriched and "required" in enriched:
+            required = bool(enriched.get("required"))
         competencies.append(
             _build_competency(
                 competency_id=competency_id,
@@ -393,7 +455,8 @@ def compile_blueprint(
                 level=level,
                 weight=weight,
                 required=required,
-                definition=core_defs.get(id_base),
+                definition=llm_definition or core_defs.get(id_base),
+                evidence_expected=evidence_list,
             )
         )
 

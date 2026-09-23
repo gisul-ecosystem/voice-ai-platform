@@ -1736,7 +1736,7 @@ class InterviewFlow:
             "candidate_framing": self._profile_type(),
             "claim_brief": claim_brief(self.candidate_profile, limit=6),
             "claim_guidance": self._claim_guidance(),
-            "jd_excerpt": clip_source_text(self.job_description, 500),
+            "jd_excerpt": clip_source_text(self.job_description, 800),
             "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-3:])
             or "(none yet)",
             "recent_questions": "\n".join(f"- {q}" for q in self.interviewer_turns[-3:])
@@ -1807,23 +1807,17 @@ class InterviewFlow:
                 else:
                     text = str(item).strip()
                 if text:
-                    result.append(text[:80])
+                    result.append(text[:100])
             return "; ".join(result[:limit]) or "(none)"
 
         intelligence = definition.get("job_intelligence")
         role = intelligence.get("role") if isinstance(intelligence, dict) else {}
         competency = competency_by_id(definition, competency_id)
+        # Competency block first so the 2800-char cap never truncates the active ask.
         lines = [
             "ACTIVE CONTEXT (policy remains authoritative):",
             f"Role: {role.get('title', '')} | Level: {role.get('target_level', '')}",
         ]
-        if isinstance(intelligence, dict):
-            tools = values(intelligence.get("tools"), 3)
-            skills = values(intelligence.get("skills"), 3)
-            if tools != "(none)":
-                lines.append(f"Tools: {tools}")
-            if skills != "(none)":
-                lines.append(f"Skills: {skills}")
         if competency:
             lines.append(
                 f"Competency: {competency.get('name') or competency_id}: "
@@ -1843,7 +1837,20 @@ class InterviewFlow:
                         lines.append(f"Current objective: {objective[:180]}")
                     break
         lines.append(f"Claims: {claim_brief(self.candidate_profile, limit=6)}")
-        jd = clip_source_text(self.job_description, 400)
+        if isinstance(intelligence, dict):
+            mandatory = values(intelligence.get("mandatory_requirements"), 4)
+            responsibilities = values(intelligence.get("responsibilities"), 3)
+            tools = values(intelligence.get("tools"), 4)
+            skills = values(intelligence.get("skills"), 5)
+            if mandatory != "(none)":
+                lines.append(f"Mandatory: {mandatory}")
+            if responsibilities != "(none)":
+                lines.append(f"Responsibilities: {responsibilities}")
+            if tools != "(none)":
+                lines.append(f"Tools: {tools}")
+            if skills != "(none)":
+                lines.append(f"Skills: {skills}")
+        jd = clip_source_text(self.job_description, 500)
         if jd:
             lines.append(f"JD: {jd}")
         return "\n".join(lines)[:PUBLISHED_CONTEXT_LIMIT_CHARS]

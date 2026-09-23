@@ -2,6 +2,24 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function errorDetail(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const record = data as Record<string, unknown>;
+  if (typeof record.error === "string" && record.error.trim()) return record.error;
+  if (typeof record.detail === "string" && record.detail.trim()) return record.detail;
+  if (Array.isArray(record.detail)) {
+    const parts = record.detail
+      .map((item) =>
+        item && typeof item === "object" && "msg" in item
+          ? String((item as { msg?: string }).msg || "")
+          : "",
+      )
+      .filter(Boolean);
+    if (parts.length) return parts.join(" ");
+  }
+  return undefined;
+}
+
 async function backendRequest(path: string, body: unknown) {
   const backendUrl = process.env.BACKEND_API_URL?.replace(/\/+$/, "");
   if (!backendUrl) throw new Error("Backend is not configured.");
@@ -13,7 +31,8 @@ async function backendRequest(path: string, body: unknown) {
     headers,
     body: JSON.stringify(body),
     cache: "no-store",
-    signal: AbortSignal.timeout(30_000),
+    // Extract + LLM competency recommend + compile can exceed 30s.
+    signal: AbortSignal.timeout(60_000),
   });
 }
 
@@ -28,8 +47,34 @@ export async function POST(request: Request) {
         job_description: body.jobDescription,
         target_level: body.seniority,
       });
-      const extractedData = await extracted.json().catch(() => ({}));
-      if (!extracted.ok) return NextResponse.json({ error: extractedData.detail || "JD extraction failed." }, { status: extracted.status });
+      const extractedData = (await extracted.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
+      if (!extracted.ok) {
+        return NextResponse.json(
+          { error: errorDetail(extractedData) || "JD extraction failed." },
+          { status: extracted.status },
+        );
+      }
+
+      // Authoritative role/seniority from the design form (not JD-inferred only).
+      const roleTitle =
+        typeof body.role === "string" ? body.role.trim() : "";
+      const existingRole =
+        extractedData.role && typeof extractedData.role === "object"
+          ? (extractedData.role as Record<string, unknown>)
+          : {};
+      if (roleTitle || body.seniority) {
+        extractedData.role = {
+          ...existingRole,
+          ...(roleTitle ? { title: roleTitle } : {}),
+          ...(typeof body.seniority === "string" && body.seniority
+            ? { target_level: body.seniority }
+            : {}),
+        };
+      }
+
       const compiled = await backendRequest("/interview-brain/blueprint/compile", {
         job_intelligence: extractedData,
         title: body.title,
@@ -41,6 +86,12 @@ export async function POST(request: Request) {
         include_scenarios: true,
       });
       const data = await compiled.json().catch(() => ({}));
+      if (!compiled.ok) {
+        return NextResponse.json(
+          { error: errorDetail(data) || "Alignment generation failed." },
+          { status: compiled.status },
+        );
+      }
       return NextResponse.json(data, { status: compiled.status });
     }
     if (body.action === "publish") {
@@ -70,10 +121,26 @@ export async function POST(request: Request) {
         version: 1,
       });
       const data = await published.json().catch(() => ({}));
+      if (!published.ok) {
+        return NextResponse.json(
+          { error: errorDetail(data) || "Publish failed." },
+          { status: published.status },
+        );
+      }
       return NextResponse.json(data, { status: published.status });
     }
     return NextResponse.json({ error: "Unknown blueprint action." }, { status: 400 });
-  } catch {
-    return NextResponse.json({ error: "Blueprint service could not be reached." }, { status: 502 });
+  } catch (reason) {
+    const timedOut =
+      reason instanceof Error &&
+      (reason.name === "TimeoutError" || /aborted|timeout/i.test(reason.message));
+    return NextResponse.json(
+      {
+        error: timedOut
+          ? "Blueprint generation timed out. Try again with a shorter JD or retry."
+          : "Blueprint service could not be reached.",
+      },
+      { status: 502 },
+    );
   }
 }

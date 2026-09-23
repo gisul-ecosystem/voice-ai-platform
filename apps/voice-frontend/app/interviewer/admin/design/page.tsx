@@ -22,7 +22,8 @@ const DEFAULT_VALUE: RoleDraftState = {
   seniority: "junior",
   durationMinutes: "30",
   jobDescription: "",
-  competencies: "Problem solving, Role expertise, Communication",
+  // Empty = optional guidance only. LLM generates the competency structure from JD/role.
+  competencies: "",
   definitionId: "ai-engineer-junior-v1",
   startsAt: defaultStartsAtLocal(),
 };
@@ -37,7 +38,7 @@ function draftToForm(state?: RoleDraftState): RoleDraftState {
     seniority: state.seniority || DEFAULT_VALUE.seniority,
     durationMinutes: state.durationMinutes || DEFAULT_VALUE.durationMinutes,
     jobDescription: state.jobDescription || "",
-    competencies: state.competencies || DEFAULT_VALUE.competencies,
+    competencies: state.competencies ?? "",
     startsAt: state.startsAt || startsAt,
     draft: state.draft,
     published: state.published,
@@ -102,19 +103,21 @@ export default function DesignRolePage() {
     setBusy(true);
     setError("");
     try {
+      const competenciesPayload = form.competencies
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
       const response = await fetch("/api/admin/blueprint", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: "compile",
           title: form.title,
+          role: form.role,
           seniority: form.seniority,
           durationMinutes: Number(form.durationMinutes),
           jobDescription: form.jobDescription,
-          competencies: form.competencies
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
+          competencies: competenciesPayload,
           timezone:
             Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
         }),
@@ -125,7 +128,20 @@ export default function DesignRolePage() {
           String(data.error || data.detail || "Alignment generation failed."),
         );
       }
-      writeRoleDraft({ ...form, draft: data, published: undefined });
+      const generatedNames = Array.isArray(data.competencies)
+        ? (data.competencies as Array<{ name?: string }>)
+            .map((item) => String(item?.name || "").trim())
+            .filter(Boolean)
+        : [];
+      writeRoleDraft({
+        ...form,
+        competencies:
+          generatedNames.length > 0
+            ? generatedNames.join(", ")
+            : form.competencies,
+        draft: data,
+        published: undefined,
+      });
       router.push("/interviewer/admin/review");
     } catch (reason) {
       setError(

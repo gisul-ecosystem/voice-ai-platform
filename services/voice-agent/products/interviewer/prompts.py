@@ -135,8 +135,9 @@ Must cover, in any order that sounds human:
 2) if a resume claim is listed below, weave in exactly ONE claim naturally (do not list several, do not start a deep probe),
 3) invite a short introduction of background / work relevant to this role.
 
-Never say "I noticed" followed by a competency title (for example "Problem solving" or "Service ownership"). Never paste job-requirement labels into the greeting. Use only the allowed resume claims when citing materials.
-If no resume claims are provided, skip the materials cite and give a warm generic opening instead.
+Never say "I noticed" followed by a competency title (for example "Problem solving" or "Service ownership"). Never paste assessment-area / competency labels into the greeting. Use only the allowed resume claims when citing materials.
+If resume claims are provided, cite exactly one of them.
+If no resume claims are provided, still ground the opening in the role title and one concrete JD responsibility or skill from the job description excerpt (not a competency chip name), then invite their introduction. Do not give a hollow generic greeting that ignores the role.
 
 Job target level (assessment bar): {job_target_level}
 Candidate framing: {candidate_framing}
@@ -147,7 +148,7 @@ Role title: {role_title}
 Allowed resume claims you may reference:
 {claim_brief}
 
-Job description excerpt (context only — do not quote competency names from it):
+Job description excerpt (context — cite role/responsibility phrasing only, never competency chip names):
 {jd_excerpt}
 
 Output JSON as specified. competency_id may be empty. intent must be "opening". depth must be 1.

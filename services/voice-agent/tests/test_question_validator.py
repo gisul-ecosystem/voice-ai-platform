@@ -526,6 +526,30 @@ def test_validator_requires_hook_stem_on_live_probes() -> None:
     assert hooked.ok is True
 
 
+def test_star_probes_keep_hooked_question_when_json_intent_mismatches() -> None:
+    result = validate_generated_question(
+        GeneratedQuestion(
+            question="You mentioned Redis. When did you use it on billing retries, and for whom?",
+            competency_id="negotiation",
+            intent="establish_ownership",
+            depth=2,
+        ),
+        definition=_sales_definition(),
+        policy_competency_id="negotiation",
+        policy_intent="establish_context",
+        policy_depth=1,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=_sales_definition()["allowed_probes"],
+        recent_turns=["I used Redis on billing retries."],
+        hook_fact="Redis",
+    )
+    assert result.ok is True
+    assert result.question.intent == "establish_context"
+    assert "intent_mismatch" not in result.reasons
+    assert "probe_intent_not_allowed" not in result.reasons
+
+
 def test_validator_rejects_repeated_six_word_prefix() -> None:
     generated = GeneratedQuestion(
         question="What part of that deal did you change afterward?",

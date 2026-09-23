@@ -114,8 +114,11 @@ async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
         {"phases": [{"name": "legacy", "duration_minutes": 10, "topics": ["x"], "source": "generic"}]},
         llm,
         interview_definition=_definition(),
-        interviewer_turns=["Thanks for joining. Please introduce yourself."],
-        candidate_turns=[],
+        interviewer_turns=[
+            "Thanks for joining. Please introduce yourself.",
+            "Which project from your background is most relevant to this role?",
+        ],
+        candidate_turns=["I am a backend engineer."],
         initial_phase_index=1,
     )
     assert flow.policy_mode is True
@@ -204,7 +207,7 @@ def test_candidate_map_moves_to_technical_baseline_after_one_turn() -> None:
 
     decision = decide_next_action(
         PolicyState(
-            candidate_turn_count=1,
+            candidate_turn_count=2,
             interviewer_turn_count=2,
             phase_name="candidate_map",
             has_uncovered_competencies=True,
@@ -214,6 +217,49 @@ def test_candidate_map_moves_to_technical_baseline_after_one_turn() -> None:
 
     assert decision.action == "ASK_BASELINE"
     assert decision.forced_flow_decision == "advance"
+
+
+@pytest.mark.asyncio
+async def test_opening_map_then_competency_does_not_repeat_generic_fallback() -> None:
+    definition = _definition()
+    definition["allowed_probes"] = [
+        "What was your specific responsibility?",
+        "What action did you personally take?",
+        "How did you decide on that approach?",
+        "What was the outcome?",
+    ]
+    llm = FakeLlm(
+        '{"question":"Thanks for joining. Please introduce yourself.","intent":"opening","depth":1}',
+        '{"question":"Which project from your background is most relevant to this role?",'
+        '"intent":"candidate_map","depth":1}',
+        # Live models often label the JSON intent wrong; the spoken line is what matters.
+        '{"question":"You mentioned 200ms. When did you use Redis on billing retries, and for whom?",'
+        '"competency_id":"problem_solving","intent":"establish_ownership","depth":2,'
+        '"probe_shape":"why"}',
+    )
+    flow = InterviewFlow(
+        {"phases": []},
+        llm,
+        interview_definition=definition,
+        job_description="Own Python services.",
+    )
+    opening = await flow.generate_next_question(None)
+    assert "introduce" in opening.lower()
+
+    mapped = await flow.generate_next_question("I am a backend engineer who interned on billing.")
+    assert flow.phase_index == 1
+    assert "Could you share one specific example" not in mapped
+
+    baseline = await flow.generate_next_question(
+        "I used Redis on billing retries to keep latency around 200ms."
+    )
+    assert flow.phase_index == 2
+    assert flow.last_policy_decision is not None
+    assert flow.last_policy_decision.competency_id == "problem_solving"
+    assert flow.last_policy_decision.intent == "establish_context"
+    assert "Could you share one specific example" not in baseline
+    assert "200ms" in baseline or "Redis" in baseline
+    assert flow.last_validator_ok is True
 
 
 @pytest.mark.asyncio

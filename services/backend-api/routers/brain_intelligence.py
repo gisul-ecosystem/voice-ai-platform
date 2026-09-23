@@ -9,6 +9,7 @@ from brain.documents import DocumentIngestError, extract_document_text
 from brain.llm_extract import (
     extract_candidate_profile_async,
     extract_job_intelligence_async,
+    recommend_competencies_async,
 )
 from brain.publish import publish_definition, validate_for_publication
 from db import definitions
@@ -222,16 +223,38 @@ async def compile_interview_blueprint(
     req: CompileBlueprintRequest,
 ) -> InterviewDefinitionDraft:
     try:
+        guidance = list(req.creator_competencies or [])
+        recommended = await recommend_competencies_async(
+            req.job_intelligence,
+            title=req.title,
+            duration_minutes=int(req.duration_minutes),
+            creator_guidance=guidance,
+        )
+        # Competencies structure the interview. Never silently pad CORE_FALLBACKS
+        # when the creator asked the LLM to invent the plan from the JD alone.
+        if not recommended and not guidance:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not generate interview competencies from the job "
+                    "description. Check LLM connectivity and try again, or add "
+                    "assessment areas as guidance."
+                ),
+            )
         return compile_blueprint(
             job_intelligence=req.job_intelligence,
             title=req.title,
             language=req.language,
             timezone=req.timezone,
             duration_minutes=req.duration_minutes,
-            creator_competencies=req.creator_competencies,
+            creator_competencies=guidance,
+            recommended_competencies=recommended or None,
+            creator_exclusive=bool(recommended) or len(guidance) >= 3,
             resume_required=req.resume_required,
             include_scenarios=req.include_scenarios,
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
