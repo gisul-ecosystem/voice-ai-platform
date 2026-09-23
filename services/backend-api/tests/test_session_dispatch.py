@@ -149,6 +149,8 @@ async def test_session_dispatches_agent_exactly_once(monkeypatch) -> None:
     created = FakeLiveKitApi.room_service.created[0]
     assert not list(getattr(created, "agents", None) or [])
     assert room_configs == []
+    assert int(getattr(created, "empty_timeout", 0) or 0) >= 3600
+    assert int(getattr(created, "departure_timeout", 0) or 0) >= 120
 
 
 @pytest.mark.asyncio

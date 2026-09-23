@@ -38,6 +38,19 @@ def _state(session_id: str, version: int = 1) -> InterviewBrainState:
         active_question_id="q_1",
         asked_question_ids=["q_1"],
         consecutive_unusable_answers=0,
+        coverage={
+            "problem_solving": {
+                "status": "partial",
+                "required_intents": ["establish_context", "applied_understanding"],
+                "covered_intents": ["establish_context"],
+                "missing_intents": ["applied_understanding"],
+                "evidence_ids": [],
+                "intent_status": {
+                    "establish_context": "covered",
+                    "applied_understanding": "absent",
+                },
+            }
+        },
         elapsed_seconds=120,
     )
 

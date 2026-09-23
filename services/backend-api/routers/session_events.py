@@ -34,11 +34,39 @@ async def read_session_state(session_id: str) -> dict:
     stored = await interviews.get_session(session_id)
     if stored is None:
         raise HTTPException(status_code=404, detail="Interview session not found")
+    # Strip Mongo ObjectId `_id` so FastAPI JSON encoding cannot 500.
+    turns = []
+    for turn in stored.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        turns.append({key: value for key, value in turn.items() if key != "_id"})
     return {
         "session_id": session_id,
         "status": stored.get("status"),
         "definition_id": stored.get("definition_id"),
-        "turns": stored.get("turns") or [],
+        "turns": turns,
+    }
+
+
+@router.get(
+    "/{session_id}/status",
+    dependencies=[Depends(require_bff_service)],
+)
+async def read_session_status(session_id: str) -> dict:
+    """Lightweight lifecycle status for client completion detection."""
+    stored = await interviews.get_session(session_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    events = stored.get("events") or []
+    last_reason = None
+    if isinstance(events, list) and events:
+        last = events[-1]
+        if isinstance(last, dict):
+            last_reason = last.get("reason")
+    return {
+        "session_id": session_id,
+        "status": stored.get("status"),
+        "reason": last_reason,
     }
 
 

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { LandingNav } from "@/components/interviewer/LandingNav";
+import { LandingNav, AdminProgress } from "@/components/interviewer/LandingNav";
 
 export default function ScorecardLookupPage() {
   const router = useRouter();
@@ -22,7 +22,8 @@ export default function ScorecardLookupPage() {
 
   return (
     <main className="interviewer-home admin-builder-page">
-      <LandingNav ariaLabel="Reviewer navigation" badge="Review scorecard" />
+      <LandingNav ariaLabel="Reviewer navigation" badge="04 Results" />
+      <AdminProgress current="results" />
       <section className="demo-intro">
         <p className="eyebrow">Human review</p>
         <h1>Open a completed scorecard</h1>

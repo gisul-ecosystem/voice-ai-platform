@@ -230,12 +230,47 @@ function CandidateInterviewJourneyInner({
   const [error, setError] = useState<string>();
   const joinKey = useRef<string | undefined>(undefined);
   const intentionalDisconnect = useRef(false);
+  const becameLive = useRef(false);
   const [consents, setConsents] = useState({
     ai_interview: false,
     transcription: false,
     monitoring: false,
     recording: false,
   });
+
+  async function resolveDisconnectOutcome() {
+    if (intentionalDisconnect.current) {
+      setStage("completed");
+      return;
+    }
+    const sessionId = credentials?.sessionId;
+    if (sessionId) {
+      try {
+        const response = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/status`,
+          { cache: "no-store" },
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          status?: string;
+        };
+        if (
+          response.ok &&
+          (data.status === "completed" || data.status === "completing")
+        ) {
+          setStage("completed");
+          return;
+        }
+      } catch {
+        // Fall through to failed messaging when status is unavailable.
+      }
+    }
+    setError(
+      becameLive.current
+        ? "The interview room closed before a normal ending. Keep this tab open next time and contact the inviting organization if it happens again."
+        : "The room disconnected before the interview was ended. Contact the inviting organization before retrying.",
+    );
+    setStage("failed");
+  }
 
   useEffect(() => {
     try {
@@ -542,17 +577,11 @@ function CandidateInterviewJourneyInner({
         cameraAllowed={product.cameraAllowed}
         onConnected={() => {
           intentionalDisconnect.current = false;
+          becameLive.current = true;
           setStage("live");
         }}
         onDisconnected={() => {
-          if (intentionalDisconnect.current) {
-            setStage("completed");
-            return;
-          }
-          setError(
-            "The room disconnected before the interview was ended. Contact the inviting organization before retrying.",
-          );
-          setStage("failed");
+          void resolveDisconnectOutcome();
         }}
         onError={(reason) => {
           setError(reason.message);
