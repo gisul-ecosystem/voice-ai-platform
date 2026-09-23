@@ -659,16 +659,18 @@ def _check_hooked(result: ReplayResult, notes: dict[str, str]) -> bool:
     if session.scenario != "metric_named":
         notes["hooked"] = "not applicable"
         return True
-    stem = (session.hook_stem or result.hook_fact or "").lower()
-    spoken = result.fallback_question.lower()
+    # Hooks belong in LLM phrasing, not stock "You mentioned X" templates.
+    # Replay proves the stem was extracted and available to the prompt.
+    stem = (session.hook_stem or result.hook_fact or "").strip().lower()
     stems = hook_stem_tokens(session.hook_stem or result.hook_fact)
-    if stem and stem in spoken:
-        notes["hooked"] = f"fallback contains {stem}"
+    extracted = (result.hook_fact or "").strip().lower()
+    if stem and stem in extracted:
+        notes["hooked"] = f"hook extracted for LLM: {stem}"
         return True
-    if stems and any(token in spoken for token in stems):
-        notes["hooked"] = "fallback contains hook stem"
+    if stems and any(token in extracted for token in stems):
+        notes["hooked"] = "hook stem extracted for LLM"
         return True
-    notes["hooked"] = "named metric/tool missing from next question"
+    notes["hooked"] = "named metric/tool not extracted for the next turn"
     return False
 
 

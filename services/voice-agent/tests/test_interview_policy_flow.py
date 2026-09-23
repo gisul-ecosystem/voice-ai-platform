@@ -172,9 +172,9 @@ async def test_policy_mode_falls_back_to_ladder_when_json_is_invalid() -> None:
 
     question = await flow.generate_next_question("I solved a graph problem.")
 
-    assert question == (
-        "You mentioned graph. Which algorithm did you use for that problem?"
-    )
+    assert "Which algorithm did you use" in question
+    assert "You mentioned" not in question
+    assert not question.lower().startswith("regarding ")
 
 
 @pytest.mark.asyncio
@@ -460,12 +460,13 @@ async def test_empty_stream_keeps_hooked_fallback_when_nothing_spoken() -> None:
     ]
     spoken = "".join(chunks)
     assert llm.stream_calls == 2
-    assert spoken.startswith("You mentioned graph.")
     assert "Which algorithm did you use" in spoken
+    assert "You mentioned" not in spoken
+    assert not spoken.lower().startswith("regarding ")
     assert "and why" not in spoken.lower()
 
 
-def test_fallback_spoken_question_splices_hook_fact() -> None:
+def test_fallback_spoken_question_uses_ladder_without_candidate_hook() -> None:
     from products.interviewer.policy import PolicyDecision
 
     flow = InterviewFlow(
@@ -491,7 +492,8 @@ def test_fallback_spoken_question_splices_hook_fact() -> None:
         policy,
         last_turn="I migrated Redis after the outage.",
     )
-    assert spoken.startswith("You mentioned Redis.")
+    assert "You mentioned" not in spoken
+    assert not spoken.lower().startswith("regarding ")
     assert "personally" in spoken.lower()
 
 
