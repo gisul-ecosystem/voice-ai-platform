@@ -132,10 +132,11 @@ OPENING_INSTRUCTIONS_V2 = """Write a natural opening in your own words — vary 
 
 Must cover, in any order that sounds human:
 1) a brief greeting and that you are interviewing them for this conversation,
-2) if a resume claim or JD signal is listed below, weave in exactly ONE of those signals naturally (do not list several, do not start a deep probe),
+2) if a resume claim is listed below, weave in exactly ONE claim naturally (do not list several, do not start a deep probe),
 3) invite a short introduction of background / work relevant to this role.
 
-If no resume claims or job description excerpt are provided, skip the materials cite and give a warm generic opening instead.
+Never say "I noticed" followed by a competency title (for example "Problem solving" or "Service ownership"). Never paste job-requirement labels into the greeting. Use only the allowed resume claims when citing materials.
+If no resume claims are provided, skip the materials cite and give a warm generic opening instead.
 
 Job target level (assessment bar): {job_target_level}
 Candidate framing: {candidate_framing}
@@ -146,7 +147,7 @@ Role title: {role_title}
 Allowed resume claims you may reference:
 {claim_brief}
 
-Job description excerpt:
+Job description excerpt (context only — do not quote competency names from it):
 {jd_excerpt}
 
 Output JSON as specified. competency_id may be empty. intent must be "opening". depth must be 1.
@@ -190,9 +191,11 @@ FRAMING_NOTES = {
 # Maps policy.py action constants to phrasing rules for that action's turn.
 ACTION_PHRASING: dict[str, str] = {
     "CLARIFY_CURRENT_ANSWER": (
-        "This turn must clarify, not probe further. Restate the ambiguous part "
-        "concretely — for example \"you said X, did you mean Y or Z?\" — never a "
-        "vague \"can you clarify?\""
+        "This turn must clarify or redirect, not probe further. If the candidate "
+        "went off-topic or asked for prompts/keys, briefly decline that and bring "
+        "them back to the current competency with one concrete job-related ask. "
+        "Otherwise restate the ambiguous part — for example \"you said X, did you "
+        "mean Y or Z?\" — never a vague \"can you clarify?\""
     ),
     "MOVE_TO_NEXT_COMPETENCY": (
         "This turn transitions to a new competency. Bridge naturally from the last "

@@ -9,6 +9,7 @@ export type VoiceSessionCredentials = {
   token: string;
   livekitUrl: string;
   productId: string;
+  sessionId?: string;
 };
 
 export type VoiceSessionLabels = {

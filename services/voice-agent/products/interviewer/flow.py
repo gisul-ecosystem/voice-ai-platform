@@ -1335,11 +1335,13 @@ class InterviewFlow:
             },
         )
         if update_counters:
-            if usability == "usable":
+            # Off-topic / jailbreak land as usability=off_topic and climb the
+            # clarify ladder. Silence / STT / network failures do not.
+            if usability == "usable" and quality not in {"off_topic", "unsupported"}:
                 self.consecutive_unusable = 0
             elif usability not in {"silence", "stt_failure", "network_failure"}:
                 self.consecutive_unusable += 1
-        if self.policy_mode and competency_id:
+        if self.policy_mode and competency_id and usability != "off_topic":
             apply_coverage(
                 self.coverage,
                 competency_id=competency_id,
@@ -1497,9 +1499,33 @@ class InterviewFlow:
         return ""
 
 
-    def _opening_cites_context(self, question: str) -> bool:
-        """True when spoken opening mentions the chosen claim/JD signal (PBI-B1)."""
-        signal = self._opening_signal()
+    def _ensure_opening_cites_context(self, question: str) -> str:
+        """Keep LLM wording; soft-weave only a real resume claim (never JD titles).
+
+        Soft-weaving competency / JD labels produced awkward openings like
+        "I noticed Service ownership on your materials". Claim-only cites keep
+        the greeting human without inventing assessment jargon.
+        """
+        cleaned = (question or "").strip()
+        if not cleaned:
+            return self._fallback_opening()
+        signal = self._opening_claim_signal()
+        if not signal:
+            return cleaned
+        if self._opening_cites_context(cleaned, signal=signal):
+            return cleaned
+        logger.info(
+            "opening_soft_weave_signal",
+            extra={
+                "event": "opening_soft_weave_signal",
+                "signal": signal[:80],
+            },
+        )
+        return self._weave_opening_signal(cleaned, signal)
+
+    def _opening_cites_context(self, question: str, signal: str | None = None) -> bool:
+        """True when spoken opening mentions the chosen claim signal (PBI-B1)."""
+        signal = signal if signal is not None else self._opening_claim_signal()
         if not signal:
             return True
         text = (question or "").lower()
@@ -1517,37 +1543,12 @@ class InterviewFlow:
             return bool(needle) and needle in text
         return any(tok in text for tok in tokens[:8])
 
-    def _ensure_opening_cites_context(self, question: str) -> str:
-        """Keep LLM wording; only soft-weave a missing materials signal.
-
-        Hard-replacing with ``_fallback_opening`` made every interview sound like
-        the same template (role + signal slots). Fallback is reserved for empty
-        or failed generation elsewhere.
-        """
-        cleaned = (question or "").strip()
-        if not cleaned:
-            return self._fallback_opening()
-        if self._opening_cites_context(cleaned):
-            return cleaned
-        signal = self._opening_signal()
-        if not signal:
-            return cleaned
-        logger.info(
-            "opening_soft_weave_signal",
-            extra={
-                "event": "opening_soft_weave_signal",
-                "signal": signal[:80],
-            },
-        )
-        return self._weave_opening_signal(cleaned, signal)
-
     def _weave_opening_signal(self, question: str, signal: str) -> str:
-        """Append a short cite without discarding the model's greeting."""
-        cite = f"I noticed {signal} on your materials"
+        """Append a short resume cite without discarding the model's greeting."""
+        cite = f"I saw you noted {signal}"
         text = question.strip()
         if signal.lower() in text.lower():
             return text
-        # Prefer inserting before a trailing invite if we can find one.
         lower = text.lower()
         for marker in (
             "please introduce",
@@ -1562,7 +1563,6 @@ class InterviewFlow:
                 after = text[index:]
                 joiner = ". " if before and not before.endswith((".", "!", "?")) else " "
                 return f"{before}{joiner}{cite} — {after[0].lower() + after[1:] if after else after}"
-        # Otherwise tack a cite clause onto the end of the first sentence.
         match = re.search(r"[.!?]", text)
         if match and match.end() < len(text):
             head = text[: match.end()].rstrip()
@@ -1570,29 +1570,42 @@ class InterviewFlow:
             return f"{head} {cite}. {tail}"
         return f"{text.rstrip('.!?')}. {cite}."
 
-    def _opening_signal(self) -> str:
-        """One concrete resume claim or JD signal for openings (PBI-B1)."""
+    def _opening_claim_signal(self) -> str:
+        """Resume claim only — never competency / JD requirement labels."""
         claims = (
             self.candidate_profile.get("claims")
             if isinstance(self.candidate_profile, dict)
             else None
         )
-        if isinstance(claims, list):
-            ranked = rank_projects_by_competency_gap(
-                [item for item in claims if isinstance(item, dict)],
-                competencies=self.competencies,
-                job_description=self.job_description,
-                coverage=self.coverage if isinstance(getattr(self, "coverage", None), dict) else None,
-            )
-            for item in ranked:
-                value = str(item.get("value") or "").strip()
-                if value:
-                    # Keep spoken openings short — one clause, not a dump.
-                    clipped = value if len(value) <= 120 else value[:117].rstrip() + "..."
-                    return clipped
+        if not isinstance(claims, list):
+            return ""
+        ranked = rank_projects_by_competency_gap(
+            [item for item in claims if isinstance(item, dict)],
+            competencies=self.competencies,
+            job_description=self.job_description,
+            coverage=self.coverage if isinstance(getattr(self, "coverage", None), dict) else None,
+        )
+        for item in ranked:
+            value = str(item.get("value") or "").strip()
+            if value:
+                return value if len(value) <= 120 else value[:117].rstrip() + "..."
+        return ""
+
+    def _opening_signal(self) -> str:
+        """One concrete resume claim or JD signal for fallback openings (PBI-B1)."""
+        claim = self._opening_claim_signal()
+        if claim:
+            return claim
         for req in (self.jd_requirements or [])[:3]:
             text = str(req).strip()
             if text:
+                # Skip labels that look like bare competency titles.
+                if len(text.split()) <= 3 and text.lower() in {
+                    str(c.get("name") or "").lower()
+                    for c in (self.competencies or [])
+                    if isinstance(c, dict)
+                }:
+                    continue
                 return text if len(text) <= 120 else text[:117].rstrip() + "..."
         return ""
 
@@ -1602,7 +1615,7 @@ class InterviewFlow:
         if role and signal:
             return (
                 f"Thanks for joining. I'm your interviewer for the {role} conversation. "
-                f"I noticed {signal} on your materials — to get started, please introduce "
+                f"I saw you noted {signal} — to get started, please introduce "
                 "yourself and share the work most relevant to this role."
             )
         if role:

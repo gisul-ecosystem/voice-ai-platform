@@ -44,7 +44,7 @@ export default function InterviewerPage() {
               <span>02</span>
               <div>
                 <strong>Align</strong>
-                <p>Review structure, then publish</p>
+                <p>Confirm topics and evidence, then publish</p>
               </div>
             </li>
             <li>
@@ -57,8 +57,8 @@ export default function InterviewerPage() {
             <li>
               <span>04</span>
               <div>
-                <strong>Review</strong>
-                <p>Evidence, excerpts, human override</p>
+                <strong>Results</strong>
+                <p>Scorecard, evidence, human override</p>
               </div>
             </li>
           </ol>
