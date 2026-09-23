@@ -318,6 +318,24 @@ STANDARD_ASSESSMENT_INTENTS = frozenset(INTENT_PROBE_ALIASES) - frozenset(
     }
 )
 
+_ACTION_TO_INTENT = {
+    "PROBE_FOR_CONTEXT": "establish_context",
+    "PROBE_FOR_OWNERSHIP": "establish_ownership",
+    "PROBE_FOR_METHOD": "applied_understanding",
+    "PROBE_FOR_REASONING": "problem_or_complexity",
+    "PROBE_FOR_RESULT": "problem_or_complexity",
+    "PROBE_FOR_REFLECTION": "tradeoff_or_transfer",
+    "ASK_BASELINE": "establish_context",
+}
+
+
+def canonical_intent(intent: str | None) -> str:
+    """Normalize policy/action labels to ladder assessment intents."""
+    value = (intent or "").strip()
+    if value == "baseline":
+        return "establish_context"
+    return _ACTION_TO_INTENT.get(value, value)
+
 
 TechnicalSubstance = Literal[
     "surface", "partial", "deep", "incorrect", "not_applicable"
@@ -718,6 +736,7 @@ def _grounding_corpus(
 
 
 def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
+    intent = canonical_intent(intent)
     if intent in {
         "opening",
         "candidate_map",
@@ -879,6 +898,8 @@ def validate_generated_question(
     last_probe_shape: str | None = None,
 ) -> ValidationResult:
     reasons: list[str] = []
+    # Policy owns intent; action/label aliases must not reject a good spoken question.
+    policy_intent = canonical_intent(policy_intent)
     question = (generated.question or "").strip()
     if not question:
         reasons.append("empty_question")
@@ -916,10 +937,8 @@ def validate_generated_question(
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:
         reasons.append("competency_mismatch")
-    if policy_intent and generated.intent not in {policy_intent, "live_question"}:
-        # Opening/map can be phrased with nearby intents; still record mismatch for probes.
-        if policy_intent not in {"opening", "candidate_map", "await_introduction"}:
-            reasons.append("intent_mismatch")
+    # JSON intent is metadata only. Normalized output overwrites it to policy_intent.
+    # Failing the turn for a label mismatch discarded hooked follow-ups.
     if generated.depth > max(1, int(max_depth)):
         reasons.append("depth_exceeded")
     if generated.depth > max(1, int(policy_depth) + 1):
