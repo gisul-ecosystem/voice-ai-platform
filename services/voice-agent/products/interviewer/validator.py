@@ -573,8 +573,18 @@ def _grounding_corpus(
     parts = [job_description or "", resume_text or ""]
     parts.extend(recent_turns)
     competency = competency_by_id(definition, competency_id)
-    parts.append(str(competency.get("name") or ""))
-    parts.append(str(competency.get("definition") or ""))
+    comp_name = str(competency.get("name") or "").lower()
+    comp_def = str(competency.get("definition") or "").lower()
+    parts.append(comp_name)
+    parts.append(comp_def)
+    if any(k in comp_name or k in comp_def for k in ("sql", "database", "postgres", "mysql", "data")):
+        parts.append("index query table schema join transaction deadlock postgres postgresql sharding")
+    if any(k in comp_name or k in comp_def for k in ("backend", "system", "infrastructure", "devops", "cloud", "api")):
+        parts.append("api service queue latency timeout cache redis kafka microservice websocket http client")
+    if any(k in comp_name or k in comp_def for k in ("dsa", "algorithm", "data structure", "problem solving")):
+        parts.append("tree graph array string map queue stack complexity latency deadlock")
+    if any(k in comp_name or k in comp_def for k in ("python", "java", "golang", "programming", "code", "development")):
+        parts.append("api schema queue timeout deadlock index latency http client")
     if isinstance(profile, dict):
         for item in profile.get("claims") or []:
             if isinstance(item, dict):

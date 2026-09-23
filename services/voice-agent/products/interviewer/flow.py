@@ -618,6 +618,17 @@ class SpokenJsonQuestionStream:
         return extra
 
     def finish(self) -> str:
+        if not self._in_question and not self._done:
+            cleaned = self.buffer.strip()
+            if cleaned and not cleaned.startswith("{") and not cleaned.startswith("```"):
+                cleaned = re.sub(r'^(?:Question|Interviewer):\s*', '', cleaned, flags=re.IGNORECASE).strip()
+                if cleaned.startswith('"') and cleaned.endswith('"'):
+                    cleaned = cleaned[1:-1].strip()
+                self.question = cleaned
+                self._done = True
+                extra = self.question[self._emitted :]
+                self._emitted = len(self.question)
+                return extra
         if self._done or self._emitted >= len(self.question):
             return ""
         extra = self.question[self._emitted :]
@@ -1967,14 +1978,14 @@ class InterviewFlow:
         name = (
             str((nxt or {}).get("name") or "").strip()
             or str((policy.competency_id if policy else "") or "").strip()
-            or "the next topic"
+            or "this area"
         )
         self._used_soft_advance = True
         options = [
-            f"Let's move on — I'd like to explore {name} next.",
-            f"Let's move on — I want to dive into {name} now.",
-            f"Let's move on and look at {name}.",
-            f"Let's move on to explore {name}.",
+            f"Let's move on. Could you walk me through your technical approach to {name}?",
+            f"Let's move on. How do you typically approach problem-solving when working with {name}?",
+            f"Let's move on. Could you describe a challenging technical problem you solved involving {name}?",
+            f"Let's move on. What key considerations do you keep in mind when working with {name}?",
         ]
         asked = {q.strip().lower() for q in self.interviewer_turns}
         for opt in options:
@@ -2065,10 +2076,9 @@ class InterviewFlow:
                     "prompt_version": self._prompt_version(),
                 },
             )
-        # Strict here on purpose: blocking buys a repair retry. The relaxed rule
-        # lives in _coerce_generated, which decides what to say once the model
-        # has had that second attempt.
-        return result.ok
+        if "leading_question" in result.reasons:
+            return False
+        return is_speakable(result.reasons) and bool(candidate.question.strip())
 
     def _coerce_generated(
         self,
@@ -2081,13 +2091,37 @@ class InterviewFlow:
         if parsed is None:
             _, spoken = parse_stage2(raw)
             plain_text = (spoken or raw or "").strip()
+            cleaned_text = re.sub(
+                r"^(?:Question|Interviewer):\s*", "", plain_text, flags=re.IGNORECASE
+            ).strip()
+            if cleaned_text.startswith('"') and cleaned_text.endswith('"'):
+                cleaned_text = cleaned_text[1:-1].strip()
             if (
                 policy
-                and plain_text
-                and (policy.intent == "opening" or "?" in plain_text)
+                and cleaned_text
+                and (
+                    policy.intent == "opening"
+                    or "?" in cleaned_text
+                    or any(
+                        cleaned_text.lower().startswith(w)
+                        for w in (
+                            "what",
+                            "how",
+                            "why",
+                            "describe",
+                            "explain",
+                            "walk",
+                            "tell",
+                            "could",
+                            "can",
+                            "would",
+                            "share",
+                        )
+                    )
+                )
             ):
                 candidate = GeneratedQuestion(
-                    question=plain_text,
+                    question=cleaned_text,
                     competency_id=policy.competency_id,
                     intent=policy.intent,
                     depth=policy.current_depth,
@@ -2110,8 +2144,10 @@ class InterviewFlow:
                     resume_projects=self.resume_projects,
                     require_resume_grounding=self._phase_intent() == "resume_project",
                 )
-                if result.ok:
-                    self._capture_replay(raw, validator_ok=True, reasons=[])
+                if is_speakable(result.reasons) and result.question.question.strip():
+                    self._capture_replay(
+                        raw, validator_ok=True, reasons=result.reasons
+                    )
                     return result.question
             logger.warning(
                 "llm_question_output_rejected",
@@ -2373,7 +2409,10 @@ class InterviewFlow:
                     retried = self._coerce_generated(
                         raw, policy=policy, last_candidate_turn=last_candidate_turn
                     )
-                    if self.last_validator_ok:
+                    if self.last_validator_ok or (
+                        retried.question
+                        and is_speakable(self.last_validator_reasons)
+                    ):
                         generated = retried
                 except Exception:
                     logger.exception(
@@ -2650,7 +2689,8 @@ class InterviewFlow:
             if not spoken_any:
                 yield question
             return
-        # Stream ended mid-question (truncated JSON): gate whatever arrived.
+        # Stream ended mid-question or as plain text: gate whatever arrived.
+        parser.finish()
         if not gated and parser.question.strip():
             gated = True
             if self._precheck_spoken_question(parser.question, policy):
