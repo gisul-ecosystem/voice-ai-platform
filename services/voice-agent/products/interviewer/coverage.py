@@ -93,7 +93,8 @@ _QUOTED = re.compile(r"\"([^\"]+)\"|'([^']+)'")
 _FIRST_PERSON = re.compile(
     r"\b(?:i|we)\s+(handled|led|built|owned|implemented|designed|wrote|ran|"
     r"managed|reduced|set|rewrote|chose|moved|used|added|configured|"
-    r"introduced|measured|rate[- ]?limited)\s+([^.,;]+)",
+    r"introduced|measured|rate[- ]?limited|migrated|shipped|launched|scaled|"
+    r"rewrote|refactored)\s+([^.,;]+)",
     re.IGNORECASE,
 )
 _OWNERSHIP_CUES = (
@@ -180,12 +181,16 @@ _WORKPLACE_CUES = (
     " team ",
     " manager ",
     " service ",
+    " services ",
     " api ",
+    " apis ",
     " redis ",
     " postgres ",
     " rollout ",
     " production ",
     " billing ",
+    " payments ",
+    " payment ",
     " project ",
     " plan ",
     " owned ",
@@ -198,6 +203,41 @@ _WORKPLACE_CUES = (
     " incident ",
     " customer ",
     " client ",
+    " monolith ",
+    " microservice ",
+    " migrated ",
+    " migration ",
+    " fastapi ",
+    " deploy ",
+    " deployed ",
+)
+# Stem hits catch plurals / tense variants (services, migrated, payments).
+_TECH_STEMS = (
+    "servic",
+    "migrat",
+    "payment",
+    "billing",
+    "monolith",
+    "microservice",
+    "fastapi",
+    "django",
+    "flask",
+    "postgres",
+    "redis",
+    "kafka",
+    "kubernetes",
+    "deploy",
+    "produc",
+    "incident",
+    "latency",
+    "timeout",
+    "backend",
+    "frontend",
+    "database",
+    "pipeline",
+    "webhook",
+    "retries",
+    "retry",
 )
 _WEAK_OBJECTS = frozenset({"it", "that", "this", "them", "things", "stuff"})
 _STOP_TOKENS = frozenset(
@@ -404,6 +444,9 @@ def _has_work_signal(text: str) -> bool:
         *_WORKPLACE_CUES,
     ):
         if cue in lowered:
+            return True
+    for tok in _tokens(cleaned):
+        if any(tok.startswith(stem) for stem in _TECH_STEMS):
             return True
     return False
 
