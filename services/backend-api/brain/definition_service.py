@@ -6,7 +6,6 @@ import logging
 from brain.compiler import compile_blueprint
 from brain.llm_extract import (
     extract_job_intelligence_async,
-    recommend_competencies_async,
 )
 from brain.publish import publish_definition
 from db import definitions, interviews
@@ -86,18 +85,14 @@ async def publish_and_store(
             ),
         }
     )
-    recommended = await recommend_competencies_async(
-        job,
-        title=interview_setup.title,
-        duration_minutes=int(duration),
-        creator_guidance=list(interview_setup.competencies),
-    )
+    # Setup competencies already structure the interview (design/review or
+    # explicit chips). Do not re-run LLM recommend and replace that structure.
     logger.info(
         "job_intelligence_approved_for_publish",
         extra={
             "event": "job_intelligence_approved_for_publish",
-            "source": "llm_recommended" if recommended else "creator_competencies",
-            "competency_count": len(recommended or interview_setup.competencies),
+            "source": "creator_competencies",
+            "competency_count": len(interview_setup.competencies),
         },
     )
     draft = compile_blueprint(
@@ -107,8 +102,7 @@ async def publish_and_store(
         timezone=timezone,
         duration_minutes=duration,
         creator_competencies=list(interview_setup.competencies),
-        recommended_competencies=recommended or None,
-        creator_exclusive=bool(recommended),
+        creator_exclusive=True,
         include_scenarios=False,
     )
     published = publish_definition(draft, published_by=published_by)

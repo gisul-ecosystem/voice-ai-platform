@@ -247,21 +247,32 @@ async def recommend_competencies_async(
         key = name.lower()
         if key in seen:
             continue
-        # Soft grounding: prefer names whose tokens appear in JD context,
-        # but always keep creator-requested guidance topics.
-        tokens = [t for t in key.replace("/", " ").split() if len(t) >= 4]
-        grounded = (
-            key in {g.lower() for g in guidance}
-            or not tokens
-            or sum(1 for t in tokens if t in source_blob) >= max(1, len(tokens) // 3)
-        )
-        if not grounded:
-            continue
-        evidence = [
+        # Ground on definition/evidence vs JD, not display-name tokens alone.
+        # Interviewable labels like "API Design" are often inferred, not literal.
+        evidence_raw = [
             str(item).strip()[:120]
             for item in (raw.get("evidence_expected") or [])
             if str(item).strip()
         ][:6]
+        grounding_text = f"{definition} {' '.join(evidence_raw)}".lower()
+        name_tokens = [t for t in key.replace("/", " ").split() if len(t) >= 4]
+        def_tokens = [t for t in grounding_text.replace("/", " ").split() if len(t) >= 4]
+        name_hit = (
+            not name_tokens
+            or sum(1 for t in name_tokens if t in source_blob) >= max(1, len(name_tokens) // 3)
+        )
+        def_hit = (
+            not def_tokens
+            or sum(1 for t in def_tokens[:12] if t in source_blob) >= 2
+        )
+        grounded = (
+            key in {g.lower() for g in guidance}
+            or name_hit
+            or def_hit
+        )
+        if not grounded:
+            continue
+        evidence = evidence_raw
         if len(evidence) < 2:
             evidence = [
                 "context of the work",

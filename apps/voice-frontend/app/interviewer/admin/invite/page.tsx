@@ -69,6 +69,26 @@ export default function InviteCandidatesPage() {
   const definitionId = String(
     published?.definition_id || state?.definitionId || "",
   );
+
+  function setupCompetencies(): string[] {
+    const fromPublished = Array.isArray(published?.competencies)
+      ? (published.competencies as Array<{ name?: string }>)
+          .map((item) => String(item?.name || "").trim())
+          .filter(Boolean)
+      : [];
+    if (fromPublished.length > 0) return fromPublished;
+    const fromDraft =
+      draft && Array.isArray(draft.competencies)
+        ? (draft.competencies as Array<{ name?: string }>)
+            .map((item) => String(item?.name || "").trim())
+            .filter(Boolean)
+        : [];
+    if (fromDraft.length > 0) return fromDraft;
+    return String(state?.competencies || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
   const startsAt =
     startsAtOverride ?? state?.startsAt ?? defaultStartsAtLocal();
 
@@ -159,10 +179,7 @@ export default function InviteCandidatesPage() {
             difficulty: "applied",
             durationMinutes: Number(state.durationMinutes || 30),
             language: "English",
-            competencies: String(state.competencies || "")
-              .split(",")
-              .map((item) => item.trim())
-              .filter(Boolean),
+            competencies: setupCompetencies(),
             maxProbesPerPhase: 2,
             monitoringEnabled: true,
             recordingEnabled: false,

@@ -43,6 +43,59 @@ export default function ReviewAlignmentPage() {
       ? (state.draft.competencies as Array<Record<string, unknown>>)
       : [];
 
+  function rebalanceWeights(
+    items: Array<Record<string, unknown>>,
+  ): Array<Record<string, unknown>> {
+    if (items.length === 0) return items;
+    const base = Math.round((1000 / items.length)) / 10;
+    let assigned = 0;
+    return items.map((item, index) => {
+      if (index === items.length - 1) {
+        return { ...item, weight: Math.round((100 - assigned) * 10) / 10 };
+      }
+      assigned = Math.round((assigned + base) * 10) / 10;
+      return { ...item, weight: base };
+    });
+  }
+
+  function syncDraftCompetencies(
+    nextComps: Array<Record<string, unknown>>,
+  ): RoleDraftState | null {
+    if (!state) return null;
+    const ids = new Set(
+      nextComps.map((item) => String(item.id || "")).filter(Boolean),
+    );
+    const scenarios = Array.isArray(state.draft?.scenario_bank)
+      ? (state.draft.scenario_bank as Array<Record<string, unknown>>).filter(
+          (scenario) => {
+            const cid = String(scenario.competency_id || "");
+            return !cid || ids.has(cid);
+          },
+        )
+      : state.draft?.scenario_bank;
+    const ladders = Array.isArray(state.draft?.question_ladders)
+      ? (state.draft.question_ladders as Array<Record<string, unknown>>).filter(
+          (ladder) => {
+            const cid = String(ladder.competency_id || "");
+            return !cid || ids.has(cid);
+          },
+        )
+      : state.draft?.question_ladders;
+    const names = nextComps
+      .map((item) => String(item.name || "").trim())
+      .filter(Boolean);
+    return {
+      ...state,
+      competencies: names.join(", "),
+      draft: {
+        ...state.draft,
+        competencies: nextComps,
+        scenario_bank: scenarios,
+        question_ladders: ladders,
+      },
+    };
+  }
+
   function setState(next: RoleDraftState) {
     setEdits(next);
     writeRoleDraft(next);
@@ -53,13 +106,17 @@ export default function ReviewAlignmentPage() {
     const next = competencies.map((item, itemIndex) =>
       itemIndex === index ? { ...item, ...patch } : item,
     );
-    setState({ ...state, draft: { ...state.draft, competencies: next } });
+    const synced = syncDraftCompetencies(next);
+    if (synced) setState(synced);
   }
 
   function remove(index: number) {
     if (!state) return;
-    const next = competencies.filter((_, itemIndex) => itemIndex !== index);
-    setState({ ...state, draft: { ...state.draft, competencies: next } });
+    const next = rebalanceWeights(
+      competencies.filter((_, itemIndex) => itemIndex !== index),
+    );
+    const synced = syncDraftCompetencies(next);
+    if (synced) setState(synced);
     setSelected(Math.max(0, Math.min(index, next.length - 1)));
   }
 
@@ -80,7 +137,8 @@ export default function ReviewAlignmentPage() {
     const [moved] = next.splice(fromIndex, 1);
     if (!moved) return;
     next.splice(toIndex, 0, moved);
-    setState({ ...state, draft: { ...state.draft, competencies: next } });
+    const synced = syncDraftCompetencies(next);
+    if (synced) setState(synced);
     setSelected(toIndex);
   }
 
@@ -113,12 +171,26 @@ export default function ReviewAlignmentPage() {
       );
       return;
     }
+    const weightSum = competencies.reduce(
+      (sum, item) => sum + (Number(item.weight) || 0),
+      0,
+    );
+    let publishComps = competencies;
+    if (Math.abs(weightSum - 100) > 0.01) {
+      publishComps = rebalanceWeights(competencies);
+      const synced = syncDraftCompetencies(publishComps);
+      if (synced) setState(synced);
+    }
     setBusy(true);
     setError("");
     try {
+      const draftPayload = {
+        ...state.draft,
+        competencies: publishComps,
+      };
       const payload = (definitionId: string) => ({
         action: "publish",
-        draft: state.draft,
+        draft: draftPayload,
         definitionId,
         publishedBy: "reference-demo-admin",
       });
@@ -141,7 +213,16 @@ export default function ReviewAlignmentPage() {
       if (!response.ok) {
         throw new Error(String(data.error || data.detail || "Publish failed."));
       }
-      const publishedState = { ...state, definitionId, published: data };
+      const publishedState = {
+        ...state,
+        definitionId,
+        competencies: publishComps
+          .map((item) => String(item.name || "").trim())
+          .filter(Boolean)
+          .join(", "),
+        draft: { ...state.draft, competencies: publishComps },
+        published: data,
+      };
       setState(publishedState);
       router.push("/interviewer/admin/invite");
     } catch (reason) {
@@ -185,8 +266,9 @@ export default function ReviewAlignmentPage() {
         <p className="eyebrow">Align before publish</p>
         <h1>Confirm what the interview will assess</h1>
         <p>
-          Edit topics, evidence signals, depth, and follow-ups. This is the
-          assessment plan — spoken questions are generated live from this plan.
+          These {competencies.length} competencies are the interview structure
+          generated from the job description. Edit topics, evidence, depth, and
+          follow-ups — spoken questions are generated live from this plan.
           Publishing locks the structure for every candidate.
         </p>
       </section>
@@ -339,11 +421,11 @@ export default function ReviewAlignmentPage() {
                 />
               </label>
               <label>
-                Weight
+                Weight (%)
                 <input
                   type="number"
                   min="1"
-                  max="10"
+                  max="100"
                   value={String(competency.weight ?? 1)}
                   onChange={(e) =>
                     update(selected, { weight: Number(e.target.value) })

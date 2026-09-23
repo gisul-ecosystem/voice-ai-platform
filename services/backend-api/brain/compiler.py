@@ -416,6 +416,8 @@ def compile_blueprint(
             if len(name) < 2:
                 continue
             seed_names.append(name)
+            # Key by normalized label so lookup survives aliasing (js→javascript).
+            enrichment[normalize_skill_label(name).lower()] = item
             enrichment[name.lower()] = item
         exclusive = True
 
@@ -431,7 +433,11 @@ def compile_blueprint(
     core_defs = {item[0]: item[2] for item in _CORE_FALLBACKS}
     for (id_base, name, hints, required), weight in zip(seeds, weights, strict=True):
         competency_id = _unique_id(id_base, used_ids)
-        enriched = enrichment.get(name.lower()) or {}
+        enriched = (
+            enrichment.get(name.lower())
+            or enrichment.get(normalize_skill_label(name).lower())
+            or {}
+        )
         llm_definition = str(enriched.get("definition") or "").strip() or None
         llm_evidence = enriched.get("evidence_expected")
         evidence_list = (
