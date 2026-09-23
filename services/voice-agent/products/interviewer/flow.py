@@ -1863,13 +1863,8 @@ class InterviewFlow:
             competency_id=competency_id,
             intent=intent,
         )
-        hook = self._hook_fact(
-            last_turn,
-            competency_id,
-            intent,
-        )
-        if hook and hook.lower() not in spoken.lower():
-            return f"You mentioned {hook}. {spoken}"
+        # Do not glue candidate words into stock lines ("You mentioned X").
+        # Spoken fallbacks must stay job/ladder-based; the LLM owns natural phrasing.
         return spoken
 
     def _configured_ladder_question(self, policy: PolicyDecision | None) -> str:
@@ -1955,8 +1950,8 @@ class InterviewFlow:
             depth=policy.current_depth if policy else 1,
             answer_evaluation=parsed.answer_evaluation,
         )
-        # Gate: never ship an unvalidated fallback. Re-check; if still invalid,
-        # build a minimal hook+ladder question that satisfies the validator.
+        # Gate: never ship an unvalidated fallback. Re-check without requiring a
+        # candidate-word hook — stock/ladder lines must not echo STT fragments.
         fallback_result = validate_generated_question(
             fallback_parsed,
             definition=self.interview_definition,
@@ -1971,9 +1966,9 @@ class InterviewFlow:
             resume_text=self.resume_text,
             recent_turns=self.candidate_turns[-4:]
             + ([last_candidate_turn] if last_candidate_turn else []),
-            hook_fact=hook_fact,
-            required_probe_shape=required_shape or None,
-            last_probe_shape=self.last_probe_shape.get(competency_id or "") or None,
+            hook_fact="",
+            required_probe_shape=None,
+            last_probe_shape=None,
         )
         if fallback_result.ok:
             self._capture_replay(
@@ -2006,9 +2001,9 @@ class InterviewFlow:
             resume_text=self.resume_text,
             recent_turns=self.candidate_turns[-4:]
             + ([last_candidate_turn] if last_candidate_turn else []),
-            hook_fact=hook_fact,
-            required_probe_shape=required_shape or None,
-            last_probe_shape=self.last_probe_shape.get(competency_id or "") or None,
+            hook_fact="",
+            required_probe_shape=None,
+            last_probe_shape=None,
         )
         if safe_result.ok:
             self._capture_replay(
@@ -2061,12 +2056,12 @@ class InterviewFlow:
         return clean_parsed
 
     def _ultimate_clean_question(self, hook_fact: str) -> str:
-        """Guaranteed single-ask bland prompt — preferred over shipping known-bad."""
-        from products.interviewer.validator import is_clean_hook_fact
+        """Guaranteed single-ask bland prompt — preferred over shipping known-bad.
 
-        hook = (hook_fact or "").strip()
-        if hook and is_clean_hook_fact(hook):
-            return f"Regarding {hook}, can you tell me more about that?"
+        Never echo candidate STT fragments ("Regarding thank you…"). The LLM
+        should phrase hooks; this path only keeps the conversation alive.
+        """
+        _ = hook_fact  # retained for call-site compatibility
         return "Can you tell me more about that?"
 
     def _capture_spoken_validation(
@@ -2124,9 +2119,8 @@ class InterviewFlow:
             competency_id=competency_id,
             intent=intent,
         )
-        hook = (hook_fact or "").strip()
-        if hook and hook.lower() not in base.lower():
-            return f"Regarding {hook}, {base[0].lower() + base[1:] if base else base}"
+        # Ladder / intent defaults only — never "Regarding {candidate words}".
+        _ = hook_fact
         return base or "Can you share one concrete example from that work?"
 
     def _uses_legacy_decision_flow(self) -> bool:
