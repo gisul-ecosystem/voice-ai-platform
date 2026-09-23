@@ -11,10 +11,12 @@ _WS = re.compile(r"\s+")
 INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "establish_context": (
         "situation",
-        "when",
-        "team",
-        "project",
-        "role",
+        "when i",
+        "when we",
+        "time when",
+        "my team",
+        "the project",
+        "my role",
         "context",
         "working on",
         "assigned",
@@ -91,7 +93,8 @@ _QUOTED = re.compile(r"\"([^\"]+)\"|'([^']+)'")
 _FIRST_PERSON = re.compile(
     r"\b(?:i|we)\s+(handled|led|built|owned|implemented|designed|wrote|ran|"
     r"managed|reduced|set|rewrote|chose|moved|used|added|configured|"
-    r"introduced|measured|rate[- ]?limited)\s+([^.,;]+)",
+    r"introduced|measured|rate[- ]?limited|migrated|shipped|launched|scaled|"
+    r"rewrote|refactored)\s+([^.,;]+)",
     re.IGNORECASE,
 )
 _OWNERSHIP_CUES = (
@@ -124,7 +127,20 @@ _STRONG_OWNERSHIP_CUES = (
     "my responsibility",
     "personally",
 )
-_CONTEXT_CUES = (" when ", " at ", " for the ", " for a ", " with the ", " on the ")
+# Avoid bare " when " / " at " — those match hobby answers ("when it rains").
+_CONTEXT_CUES = (
+    " when i ",
+    " when we ",
+    " at the ",
+    " at my ",
+    " for the ",
+    " for a ",
+    " with the ",
+    " on the ",
+    " my team ",
+    " the project ",
+    " the service ",
+)
 # Match "I used X", "we used X", "using X", not only " using " with padding quirks.
 _METHOD_CUES = (
     " by ",
@@ -159,11 +175,116 @@ _PROBLEM_CUES = (
     "webhook",
 )
 _TRADEOFF_CUES = ("instead", "rather than", "trade-off", "tradeoff", "would change")
+# Workplace / role vocabulary that keeps an answer on-topic even without
+# evidence_expected token overlap (ownership dodges still count as work talk).
+_WORKPLACE_CUES = (
+    " team ",
+    " manager ",
+    " service ",
+    " services ",
+    " api ",
+    " apis ",
+    " redis ",
+    " postgres ",
+    " rollout ",
+    " production ",
+    " billing ",
+    " payments ",
+    " payment ",
+    " project ",
+    " plan ",
+    " owned ",
+    " decided ",
+    " executed ",
+    " practices ",
+    " responsibility ",
+    " delivered ",
+    " implemented ",
+    " incident ",
+    " customer ",
+    " client ",
+    " monolith ",
+    " microservice ",
+    " migrated ",
+    " migration ",
+    " fastapi ",
+    " deploy ",
+    " deployed ",
+)
+# Stem hits catch plurals / tense variants (services, migrated, payments).
+_TECH_STEMS = (
+    "servic",
+    "migrat",
+    "payment",
+    "billing",
+    "monolith",
+    "microservice",
+    "fastapi",
+    "django",
+    "flask",
+    "postgres",
+    "redis",
+    "kafka",
+    "kubernetes",
+    "deploy",
+    "produc",
+    "incident",
+    "latency",
+    "timeout",
+    "backend",
+    "frontend",
+    "database",
+    "pipeline",
+    "webhook",
+    "retries",
+    "retry",
+)
 _WEAK_OBJECTS = frozenset({"it", "that", "this", "them", "things", "stuff"})
+_STOP_TOKENS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "about",
+        "than",
+        "then",
+        "when",
+        "where",
+        "what",
+        "which",
+        "while",
+        "your",
+        "their",
+        "ours",
+        "have",
+        "been",
+        "were",
+        "was",
+        "are",
+        "is",
+        "was",
+        "a",
+        "an",
+        "of",
+        "or",
+        "to",
+        "in",
+        "on",
+        "at",
+    }
+)
 
 
 def _tokens(text: str) -> set[str]:
-    return {part for part in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(part) > 2}
+    return {
+        part
+        for part in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(part) > 2 and part not in _STOP_TOKENS
+    }
 
 
 def competency_by_id(definition: dict[str, Any] | None, competency_id: str | None) -> dict[str, Any]:
@@ -238,12 +359,20 @@ def init_coverage(definition: dict[str, Any] | None) -> dict[str, dict[str, Any]
 
 
 def _intent_matched(text: str, intent: str) -> bool:
-    lowered = (text or "").lower()
+    lowered = f" {(text or '').lower()} "
     for marker in INTENT_KEYWORDS.get(intent, ()):
-        if marker in lowered:
+        needle = marker.lower().strip()
+        if not needle:
+            continue
+        # Phrase markers need boundaries so "when i" does not match "when it".
+        if " " in needle:
+            if f" {needle} " in lowered:
+                return True
+            continue
+        if re.search(rf"\b{re.escape(needle)}\b", lowered):
             return True
     slug = intent.replace("_", " ")
-    return slug in lowered
+    return f" {slug} " in lowered
 
 
 def classify_live_answer(
@@ -269,6 +398,9 @@ def classify_live_answer(
     if usability != "usable":
         return usability, "unusable", []
 
+    if _looks_like_jailbreak(cleaned):
+        return "off_topic", "off_topic", []
+
     hinted = [intent for intent in required_intents if _intent_matched(cleaned, intent)]
     expected = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
     expected_hits = 0
@@ -278,10 +410,11 @@ def classify_live_answer(
         if item.lower() in cleaned.lower() or (needles and needles & blob_tokens):
             expected_hits += 1
 
-    if not hinted and expected and expected_hits == 0 and len(cleaned.split()) >= 8:
-        # Keep usability=usable so policy continues the ladder instead of
-        # burning the turn on clarify. Scoring can still treat quality as weak.
-        return "usable", "off_topic", []
+    if expected and expected_hits == 0 and len(cleaned.split()) >= 8:
+        # Keyword hints alone (e.g. bare "when") must not keep hobby answers usable.
+        # Require evidence overlap or a concrete work signal before staying on-topic.
+        if not _has_work_signal(cleaned):
+            return "off_topic", "off_topic", []
     if len(hinted) >= max(1, (len(required_intents) + 1) // 2) and expected_hits >= 1:
         quality = "sufficient"
     elif hinted or expected_hits:
@@ -290,6 +423,51 @@ def classify_live_answer(
         quality = "unclear"
     # Keyword hits are a debug hint only — they never complete coverage.
     return "usable", quality, hinted
+
+
+def _has_work_signal(text: str) -> bool:
+    """True when the answer shows job-related substance, not just common words."""
+    cleaned = _WS.sub(" ", (text or "").strip())
+    if not cleaned:
+        return False
+    facts = extract_evidence_facts(cleaned)
+    if facts:
+        return True
+    lowered = f" {cleaned.lower()} "
+    for cue in (
+        *_OWNERSHIP_CUES,
+        *_STRONG_OWNERSHIP_CUES,
+        *_METHOD_CUES,
+        *_PROBLEM_CUES,
+        *_CONTEXT_CUES,
+        *_TRADEOFF_CUES,
+        *_WORKPLACE_CUES,
+    ):
+        if cue in lowered:
+            return True
+    for tok in _tokens(cleaned):
+        if any(tok.startswith(stem) for stem in _TECH_STEMS):
+            return True
+    return False
+
+
+_JAILBREAK_MARKERS = (
+    "system prompt",
+    "ignore previous",
+    "ignore all instructions",
+    "api key",
+    "api keys",
+    "reveal your",
+    "your instructions",
+    "developer mode",
+    "jailbreak",
+    "bypass safety",
+)
+
+
+def _looks_like_jailbreak(text: str) -> bool:
+    lowered = f" {(text or '').lower()} "
+    return any(marker in lowered for marker in _JAILBREAK_MARKERS)
 
 
 def extract_evidence_facts(text: str) -> list[str]:

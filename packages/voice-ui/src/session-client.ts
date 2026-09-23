@@ -34,5 +34,14 @@ export async function createVoiceSession(
     throw new Error("The session service returned incomplete credentials.");
   }
 
-  return data as VoiceSessionCredentials;
+  const credentials: VoiceSessionCredentials = {
+    room: data.room,
+    token: data.token,
+    livekitUrl: data.livekitUrl,
+    productId: data.productId,
+  };
+  if (typeof data.sessionId === "string" && data.sessionId.trim()) {
+    credentials.sessionId = data.sessionId.trim();
+  }
+  return credentials;
 }

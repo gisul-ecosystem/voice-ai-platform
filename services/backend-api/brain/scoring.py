@@ -316,6 +316,17 @@ def _next_human_questions(
     return questions[:4]
 
 
+def _json_safe_docs(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Drop Mongo ObjectId `_id` and keep JSON-serializable fields only."""
+    safe: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        item = {key: value for key, value in row.items() if key != "_id"}
+        safe.append(item)
+    return safe
+
+
 def build_transcript_document(
     *,
     session_id: str,
@@ -353,8 +364,8 @@ def build_transcript_document(
         "agent_turn_count": sum(1 for item in spoken if item.get("speaker") == "agent"),
         "character_count": char_count,
         "turns": spoken,
-        "questions": questions or [],
-        "answers": answers or [],
+        "questions": _json_safe_docs(questions),
+        "answers": _json_safe_docs(answers),
     }
 
 

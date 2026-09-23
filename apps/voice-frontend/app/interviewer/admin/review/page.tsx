@@ -106,6 +106,13 @@ export default function ReviewAlignmentPage() {
 
   async function publish() {
     if (!state || competencies.length === 0) return;
+    const incomplete = competencies.filter((item) => !isComplete(item));
+    if (incomplete.length > 0) {
+      setError(
+        `Finish ${incomplete.length} draft topic${incomplete.length === 1 ? "" : "s"} (name + evidence) before publishing.`,
+      );
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -172,14 +179,15 @@ export default function ReviewAlignmentPage() {
   const competency = competencies[selected];
   return (
     <main className="interviewer-home admin-builder-page">
-      <LandingNav ariaLabel="Admin navigation" badge="02 Review alignment" />
+      <LandingNav ariaLabel="Admin navigation" badge="02 Align assessment plan" />
       <AdminProgress current="review" />
       <section className="demo-intro">
-        <p className="eyebrow">Review before publish</p>
-        <h1>Shape the interview</h1>
+        <p className="eyebrow">Align before publish</p>
+        <h1>Confirm what the interview will assess</h1>
         <p>
-          Choose a competency to edit its details. The published structure will
-          be locked for every candidate.
+          Edit topics, evidence signals, depth, and follow-ups. This is the
+          assessment plan — spoken questions are generated live from this plan.
+          Publishing locks the structure for every candidate.
         </p>
       </section>
       <section className="demo-card alignment-review admin-review-page">
@@ -358,7 +366,11 @@ export default function ReviewAlignmentPage() {
           </span>
           <button
             className="button primary"
-            disabled={busy || competencies.length === 0}
+            disabled={
+              busy ||
+              competencies.length === 0 ||
+              competencies.some((item) => !isComplete(item))
+            }
             onClick={() => void publish()}
           >
             {busy ? "Publishing..." : "Approve and publish"}

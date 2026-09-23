@@ -35,10 +35,11 @@ const ADMIN_STEPS = [
   { href: "/interviewer/admin/design", label: "Design", step: "01", id: "design" },
   { href: "/interviewer/admin/review", label: "Align", step: "02", id: "review" },
   { href: "/interviewer/admin/invite", label: "Invite", step: "03", id: "invite" },
+  { href: "/interviewer/results", label: "Results", step: "04", id: "results" },
 ] as const;
 
 type AdminProgressProps = {
-  current: "design" | "review" | "invite";
+  current: "design" | "review" | "invite" | "results";
 };
 
 export function AdminProgress({ current }: AdminProgressProps) {

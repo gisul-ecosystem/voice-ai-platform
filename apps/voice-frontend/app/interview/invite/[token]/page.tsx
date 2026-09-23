@@ -10,7 +10,7 @@ export default async function CandidateInvitePage({
   const invitationToken = decodeURIComponent(token || "").trim();
 
   return (
-    <CandidateShell>
+    <CandidateShell lockNavigation>
       {invitationToken ? (
         <CandidateInterviewJourney invitationToken={invitationToken} />
       ) : (
