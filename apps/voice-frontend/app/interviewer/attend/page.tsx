@@ -1,7 +1,11 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 
-import { CandidateInterviewJourney } from "@/components/CandidateInterviewJourney";
+import { CandidateShell } from "@/components/interviewer/CandidateShell";
 
+/**
+ * Legacy join URL. Prefer `/interview/invite/{token}`.
+ * Redirect when a token is present; otherwise show a short empty state.
+ */
 export default async function AttendInterviewPage({
   searchParams,
 }: {
@@ -17,29 +21,16 @@ export default async function AttendInterviewPage({
       ? invitation.trim()
       : undefined;
 
+  if (invitationToken) {
+    redirect(`/interview/invite/${encodeURIComponent(invitationToken)}`);
+  }
+
   return (
-    <main className="demo-page demo-stage-candidate">
-      <nav className="topbar" aria-label="Candidate interview navigation">
-        <Link href="/interviewer" className="brand">
-          AI Interviewer
-        </Link>
-        <span>Candidate interview</span>
-      </nav>
-      <section className="demo-intro">
-        <p className="eyebrow">Secure interview</p>
-        <h1>Your AI interview</h1>
-        <p>Review the details and consent before granting microphone access.</p>
-      </section>
-      <section className="demo-card">
-        {invitationToken ? (
-          <CandidateInterviewJourney invitationToken={invitationToken} />
-        ) : (
-          <div className="center-state">
-            <h2>Invitation required</h2>
-            <p>Open the complete link provided by the inviting organization.</p>
-          </div>
-        )}
-      </section>
-    </main>
+    <CandidateShell title="Invitation required" lead="Open the complete link provided by the inviting organization.">
+      <div className="center-state">
+        <h2>Invitation required</h2>
+        <p>Use the secure invite link from your recruiter.</p>
+      </div>
+    </CandidateShell>
   );
 }

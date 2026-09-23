@@ -94,13 +94,15 @@ def test_speech_end_to_first_audio_budget_math() -> None:
     )
     assert composed <= SPEECH_END_TO_FIRST_AUDIO_P50_MS
 
-    samples = [900, 1000, 1100, 1150, 1180, 1300, 1500, 1800]
+    # Samples must clear launch gate p95 ≤ 1.5s (docs/interviewer_slos.md).
+    samples = [900, 1000, 1050, 1100, 1150, 1180, 1250, 1400]
     summary = summarize_first_audio(samples)
     assert summary["n"] == 8
     assert summary["p50_ms"] <= SPEECH_END_TO_FIRST_AUDIO_P50_MS
     assert summary["p95_ms"] <= SPEECH_END_TO_FIRST_AUDIO_P95_MS
     assert summary["meets_p50"] is True
     assert summary["meets_p95"] is True
+    assert summary["target_p95_ms"] == 1500.0
 
 
 def test_percentile_is_interpolated() -> None:

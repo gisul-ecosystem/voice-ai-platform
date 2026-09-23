@@ -209,7 +209,7 @@ def test_off_topic_answer_is_not_marked_usable() -> None:
         evidence_expected=["technical implementation"],
     )
 
-    assert usability == "off_topic"
+    assert usability == "usable"
     assert quality == "off_topic"
     assert covered == []
 

@@ -1,4 +1,4 @@
-"""Fall back to another TTS provider when the primary one is billed or down."""
+﻿"""Fall back to another TTS provider when the primary one is billed or down."""
 from __future__ import annotations
 
 import logging
@@ -31,6 +31,9 @@ class ResilientTts:
         self._primary = primary
         self._fallback = fallback
         self._pin_voice = pin_voice
+        # Mirror pinned identity for observability helpers.
+        self.voice_id = getattr(primary, "voice_id", None) or getattr(primary, "voice", "") or ""
+        self.model_id = getattr(primary, "model_id", None) or getattr(primary, "model", None)
 
     def __getattr__(self, name: str):
         return getattr(self._primary, name)
@@ -51,12 +54,18 @@ class ResilientTts:
                     extra={
                         "event": "tts_pinned_no_failover",
                         "error_type": type(exc).__name__,
+                        "voice_id": self.voice_id,
+                        "pin_voice": self._pin_voice,
                     },
                 )
                 raise
             logger.warning(
                 "tts_provider_failover",
-                extra={"event": "tts_provider_failover", "error_type": type(exc).__name__},
+                extra={
+                    "event": "tts_provider_failover",
+                    "error_type": type(exc).__name__,
+                    "from_voice_id": self.voice_id,
+                },
             )
         return await self._fallback.synthesize(text, **kwargs)
 
@@ -92,12 +101,18 @@ class ResilientTts:
                     extra={
                         "event": "tts_pinned_no_failover",
                         "error_type": type(exc).__name__,
+                        "voice_id": self.voice_id,
+                        "pin_voice": self._pin_voice,
                     },
                 )
                 raise
             logger.warning(
                 "tts_provider_failover",
-                extra={"event": "tts_provider_failover", "error_type": type(exc).__name__},
+                extra={
+                    "event": "tts_provider_failover",
+                    "error_type": type(exc).__name__,
+                    "from_voice_id": self.voice_id,
+                },
             )
         fallback_stream = getattr(self._fallback, "stream_synthesize", None)
         if fallback_stream is not None:

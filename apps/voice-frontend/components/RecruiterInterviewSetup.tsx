@@ -35,6 +35,7 @@ export function RecruiterInterviewSetup() {
           timezone: value.timezone,
           jobDescription: value.jobDescription,
           resumeText: value.resumeText,
+          candidateProfile: value.candidateProfile,
           interviewSetup: value.interviewSetup,
         }),
       });

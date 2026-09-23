@@ -1,8 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+
+import { LandingNav } from "@/components/interviewer/LandingNav";
 
 export default function ScorecardLookupPage() {
   const router = useRouter();
@@ -21,13 +22,7 @@ export default function ScorecardLookupPage() {
 
   return (
     <main className="interviewer-home admin-builder-page">
-      <nav className="landing-nav" aria-label="Reviewer navigation">
-        <Link href="/interviewer" className="brand">
-          <span className="brand-mark" aria-hidden="true">AI</span>
-          AI Interviewer
-        </Link>
-        <span className="environment-badge">Review scorecard</span>
-      </nav>
+      <LandingNav ariaLabel="Reviewer navigation" badge="Review scorecard" />
       <section className="demo-intro">
         <p className="eyebrow">Human review</p>
         <h1>Open a completed scorecard</h1>

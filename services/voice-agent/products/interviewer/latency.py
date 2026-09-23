@@ -1,16 +1,20 @@
 """Latency budgets for the live interviewer turn path.
 
-Staging target from the readiness sprint: speech-end to first audio
-p50 <= 1.2s and p95 <= 2.0s. CI checks prompt size and the composed
-budget math; live p50/p95 need a staging run with real STT/LLM/TTS.
+Aligned with docs/interviewer_slos.md:
+- speech-end → first interviewer audio p95 ≤ 1.5s (launch gate)
+- optimization target 1.2s (tracked as p50 budget here)
+
+CI checks prompt size and composed budget math. Live p50/p95 need staging
+samples from real STT/LLM/TTS (see test_harness/slo_baseline.py).
 """
 from __future__ import annotations
 
 from typing import Any
 
-SPEECH_END_TO_FIRST_AUDIO_P50_MS = 1200.0
-SPEECH_END_TO_FIRST_AUDIO_P95_MS = 2000.0
-LLM_TTFB_BUDGET_P50_MS = 400.0
+# Launch / optimize targets from docs/interviewer_slos.md
+SPEECH_END_TO_FIRST_AUDIO_P50_MS = 1200.0  # optimization target
+SPEECH_END_TO_FIRST_AUDIO_P95_MS = 1500.0  # launch gate
+LLM_TTFB_BUDGET_P50_MS = 400.0  # end-of-speech → first LLM token budget share
 TURN_PROMPT_BUDGET_CHARS = 8500
 PUBLISHED_CONTEXT_LIMIT_CHARS = 1800
 
