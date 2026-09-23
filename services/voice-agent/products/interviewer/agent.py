@@ -172,6 +172,9 @@ class AaptorAgent(Agent):
         if self._opened:
             # Rejoin/restore: do not re-speak the opening or double-write brain.
             return
+        # Claim the opening before any await so a concurrent llm_node cannot
+        # also stream/speak the greeting (candidate hears TTS twice).
+        self._opened = True
         parts: list[str] = []
         try:
             async for chunk in self.flow.generate_next_question_stream(None):
@@ -189,11 +192,8 @@ class AaptorAgent(Agent):
                 "opening_say_failed",
                 extra={"event": "opening_say_failed", "opening_len": len(opening)},
             )
-            # Still mark opened so we do not loop a broken TTS path forever.
-            self._opened = True
             self._last_agent_text = opening
             raise
-        self._opened = True
         self._last_agent_text = opening
         turn_id = await self._record("agent", opening)
         await self._persist_brain_after_exchange(

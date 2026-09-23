@@ -74,7 +74,8 @@ async def test_session_dispatches_only_supported_workers(
     metadata = json.loads(created.metadata)
     dispatch = FakeLiveKitApi.dispatch_service.created[0]
     assert dispatch.agent_name == agent_name
-    assert list(created.agents)[0].agent_name == agent_name
+    # Room must not also embed RoomAgentDispatch — that double-starts the worker.
+    assert not list(getattr(created, "agents", None) or [])
     assert response.room.startswith("interview-")
     assert response.token
     assert response.session_id == "ses_test"
@@ -156,7 +157,7 @@ async def test_public_products_map_to_private_workers(
     created = FakeLiveKitApi.room_service.created[0]
     metadata = json.loads(created.metadata)
     assert FakeLiveKitApi.dispatch_service.created[0].agent_name == agent_name
-    assert list(created.agents)[0].agent_name == agent_name
+    assert not list(getattr(created, "agents", None) or [])
     assert metadata["product_id"] == product_id
     assert "provider_policy_id" in metadata
     assert response.product_id == product_id
