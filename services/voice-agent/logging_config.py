@@ -133,7 +133,7 @@ def configure_logging() -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level)
-    # Keep httpx/httpcore noise down; retries are logged by our clients.
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("livekit").setLevel(logging.INFO)
