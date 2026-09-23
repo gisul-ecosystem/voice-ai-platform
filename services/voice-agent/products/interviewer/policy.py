@@ -185,6 +185,7 @@ def outline_from_definition(
                 "duration_minutes": project_budget,
                 "topics": [project],
                 "source": "resume",
+                "intent": "resume_project",
                 "project_name": project,
                 "max_depth": 3,
                 "max_probes": 2,

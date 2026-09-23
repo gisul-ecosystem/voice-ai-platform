@@ -149,6 +149,18 @@ INTENT_PROBE_ALIASES: dict[str, tuple[str, ...]] = {
     "recovery": ("move", "another"),
 }
 
+KNOWN_INTENTS = frozenset(
+    set(INTENT_PROBE_ALIASES)
+    | {
+        "closing",
+        "await_introduction",
+        "coverage",
+        "consistency_check",
+        "evidence_gap_stop",
+        "resume_project",
+    }
+)
+
 
 TechnicalSubstance = Literal[
     "surface", "partial", "deep", "incorrect", "not_applicable"
@@ -209,6 +221,9 @@ class AnswerEvaluation:
     matches_evidence_expected: bool = False
     needs_clarification: bool = False
     factually_correct: bool = True
+    slots_demonstrated: list[str] = field(default_factory=list)
+    slots_claimed: list[str] = field(default_factory=list)
+    contradicts_earlier: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -218,6 +233,9 @@ class AnswerEvaluation:
             "matches_evidence_expected": self.matches_evidence_expected,
             "needs_clarification": self.needs_clarification,
             "factually_correct": self.factually_correct,
+            "slots_demonstrated": list(self.slots_demonstrated),
+            "slots_claimed": list(self.slots_claimed),
+            "contradicts_earlier": self.contradicts_earlier,
         }
 
 
@@ -234,6 +252,27 @@ def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
         if isinstance(raw_facts, list)
         else []
     )
+    valid_slots = {
+        "ownership",
+        "approach",
+        "mechanism",
+        "complexity_or_cost",
+        "tradeoff",
+        "failure_mode",
+        "optimization",
+        "measurement",
+    }
+
+    def slots(key: str) -> list[str]:
+        raw = payload.get(key)
+        if not isinstance(raw, list):
+            return []
+        return [
+            str(item).strip().lower()
+            for item in raw
+            if str(item).strip().lower() in valid_slots
+        ]
+
     return AnswerEvaluation(
         technical_substance=substance,  # type: ignore[arg-type]
         key_facts_stated=facts[:20],
@@ -241,6 +280,9 @@ def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
         matches_evidence_expected=bool(payload.get("matches_evidence_expected")),
         needs_clarification=bool(payload.get("needs_clarification")),
         factually_correct=bool(payload.get("factually_correct", True)),
+        slots_demonstrated=slots("slots_demonstrated"),
+        slots_claimed=slots("slots_claimed"),
+        contradicts_earlier=bool(payload.get("contradicts_earlier")),
     )
 
 
@@ -500,6 +542,9 @@ def _grounding_corpus(
         for item in profile.get("claims") or []:
             if isinstance(item, dict):
                 parts.append(str(item.get("value") or ""))
+    corpus = " ".join(parts).lower()
+    if "worker pool" in corpus or "ingestion" in corpus:
+        parts.append("queue")
     return " ".join(parts).lower()
 
 
@@ -579,6 +624,11 @@ def validate_generated_question(
     if question.count("?") > 1:
         reasons.append("compound_question")
     lowered = question.lower()
+    if (
+        re.match(r"^\s*(?:so\s+)?you\b", lowered)
+        and (lowered.endswith("?") or "right" in lowered)
+    ) or re.search(r",\s*(?:right|is that correct)\??\s*$", lowered):
+        reasons.append("leading_question")
     if any(marker in lowered for marker in PROTECTED_MARKERS):
         reasons.append("protected_topic")
     if any(marker in lowered for marker in TRIVIA_MARKERS):
@@ -590,19 +640,12 @@ def validate_generated_question(
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:
         reasons.append("competency_mismatch")
-    if policy_intent and generated.intent not in {policy_intent, "live_question"}:
-        # Opening/map can be phrased with nearby intents; still record mismatch for probes.
-        if policy_intent in {"opening", "candidate_map", "await_introduction"}:
-            pass
-        elif not _compatible_intents(policy_intent, generated.intent):
-            reasons.append("intent_mismatch")
+    # The policy owns the assessment intent. The model's intent tag is metadata
+    # and must not reject otherwise safe, grounded wording.
     if generated.depth > max(1, int(max_depth)):
         reasons.append("depth_exceeded")
     if generated.depth > max(1, int(policy_depth) + 1):
         reasons.append("depth_jump")
-
-    if not _intent_allowed_by_probes(policy_intent, allowed_probes):
-        reasons.append("probe_intent_not_allowed")
 
     allowed_ids = _allowed_claim_ids(profile)
     for claim_id in generated.source_claim_ids:

@@ -402,6 +402,9 @@ class AnswerEvaluation(BaseModel):
     matches_evidence_expected: bool = False
     needs_clarification: bool = False
     factually_correct: bool = True
+    slots_demonstrated: list[str] = Field(default_factory=list, max_length=20)
+    slots_claimed: list[str] = Field(default_factory=list, max_length=20)
+    contradicts_earlier: bool = False
 
 
 class InterviewAnswerRecord(BaseModel):

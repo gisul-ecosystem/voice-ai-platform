@@ -650,7 +650,10 @@ class InterviewFlow:
         initial_coverage: dict[str, Any] | None = None,
         allow_legacy_flow: bool | None = None,
     ) -> None:
-        policy_outline = outline_from_definition(interview_definition)
+        policy_outline = outline_from_definition(
+            interview_definition,
+            resume_projects=extract_resume_projects(resume_text),
+        )
         self.interview_definition = (
             interview_definition if isinstance(interview_definition, dict) else None
         )
@@ -683,20 +686,6 @@ class InterviewFlow:
         self.jd_requirements = extract_jd_requirements(
             job_description, self.competencies
         )
-        if self.policy_mode and self.resume_projects:
-            resume_phase = {
-                "name": "resume projects",
-                "duration_minutes": max(3, min(8, len(self.resume_projects) * 2)),
-                "topics": self.resume_projects,
-                "source": "resume",
-                "intent": "resume_project",
-                "max_depth": 2,
-                "max_probes": 2,
-            }
-            insert_at = 2
-            self.phases.insert(insert_at, resume_phase)
-            if self.phase_index >= insert_at:
-                self.phase_index += 1
         self.focus_item = ""
         self._touched_topics: set[str] = set()
         self.candidate_profile = build_candidate_profile(
@@ -2415,7 +2404,7 @@ class InterviewFlow:
         policy = self.last_policy_decision
         attempt: dict[str, Any] = {}
 
-        async def _pump_stream():
+        async def _pump_stream() -> None:
             parser = SpokenJsonQuestionStream()
             raw_parts: list[str] = []
             spoken_any = False
@@ -2431,7 +2420,6 @@ class InterviewFlow:
                     spoken = parser.push(delta or "")
                     if spoken:
                         spoken_any = True
-                        yield spoken
             except Exception:
                 logger.exception(
                     "stage2_question_failed",
@@ -2441,28 +2429,36 @@ class InterviewFlow:
             leftover = parser.finish()
             if leftover:
                 spoken_any = True
-                yield leftover
             attempt["parser"] = parser
             attempt["raw_parts"] = raw_parts
             attempt["spoken_any"] = spoken_any
             attempt["failed"] = failed
 
-        spoken_any = False
-        async for chunk in _pump_stream():
-            spoken_any = True
-            yield chunk
+        await _pump_stream()
+        spoken_any = bool(attempt.get("spoken_any"))
         if not spoken_any and not attempt.get("failed"):
             logger.warning(
                 "stage2_empty_stream_retry",
                 extra={"event": "stage2_empty_stream_retry"},
             )
-            async for chunk in _pump_stream():
-                spoken_any = True
-                yield chunk
+            await _pump_stream()
+            spoken_any = bool(attempt.get("spoken_any"))
 
         parser = attempt.get("parser") or SpokenJsonQuestionStream()
         raw_parts = list(attempt.get("raw_parts") or [])
         failed = bool(attempt.get("failed"))
+
+        if not failed and self._coerce_generated(
+            "".join(raw_parts),
+            policy=policy,
+            last_candidate_turn=last_candidate_turn,
+        ) and self.last_validator_ok is False:
+            attempt.clear()
+            await _pump_stream()
+            parser = attempt.get("parser") or SpokenJsonQuestionStream()
+            raw_parts = list(attempt.get("raw_parts") or [])
+            failed = bool(attempt.get("failed"))
+            spoken_any = bool(attempt.get("spoken_any"))
 
         if failed:
             fallback = (
@@ -2513,5 +2509,5 @@ class InterviewFlow:
             # Soft-replaced opening after stream — speak corrected claim-aware line once.
             yield question
             return
-        if not spoken_any and question:
+        if question:
             yield question

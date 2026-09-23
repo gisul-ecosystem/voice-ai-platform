@@ -73,6 +73,7 @@ export function VoiceRoom({
 
 function useInterviewerLiveState(voiceAssistantState: string) {
   const room = useRoomContext();
+  const connectionState = useConnectionState();
   const { agent } = useVoiceAssistant();
   const [remoteCount, setRemoteCount] = useState(
     () => room.remoteParticipants.size,
@@ -97,7 +98,9 @@ function useInterviewerLiveState(voiceAssistantState: string) {
   }, [room]);
 
   const present = Boolean(agent) || remoteCount > 0;
-  if (!present) return "joining";
+  if (!present) {
+    return connectionState === "connected" ? "starting" : "joining";
+  }
   if (voiceAssistantState === "speaking" || remoteSpeaking) return "speaking";
   if (voiceAssistantState === "thinking") return "thinking";
   if (voiceAssistantState === "listening") return "listening";
