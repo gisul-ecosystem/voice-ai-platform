@@ -54,7 +54,7 @@ export default function InviteCandidatesPage() {
   ]);
   const [pipeline, setPipeline] = useState<Pipeline>();
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [startsAt, setStartsAt] = useState("");
+  const [startsAtOverride, setStartsAtOverride] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/pipeline")
@@ -69,15 +69,12 @@ export default function InviteCandidatesPage() {
   const definitionId = String(
     published?.definition_id || state?.definitionId || "",
   );
-
-  useEffect(() => {
-    if (!state) return;
-    setStartsAt(state.startsAt || defaultStartsAtLocal());
-  }, [state]);
+  const startsAt =
+    startsAtOverride ?? state?.startsAt ?? defaultStartsAtLocal();
 
   function updateStartsAt(next: string) {
     const value = next || defaultStartsAtLocal();
-    setStartsAt(value);
+    setStartsAtOverride(value);
     if (state) writeRoleDraft({ ...state, startsAt: value });
   }
 
