@@ -73,4 +73,7 @@ async def test_opening_without_claim_cite_is_replaced() -> None:
     )
     question = await flow.generate_next_question(None)
     assert "FastAPI billing retries" in question
-    assert "Backend Engineer" in question
+    # Soft-weave keeps the model's greeting and cites the claim; it does not
+    # hard-replace with the role+claim template.
+    assert "introduce yourself" in question.lower()
+    assert question != "Thanks for joining. Please introduce yourself."

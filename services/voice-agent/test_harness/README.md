@@ -46,11 +46,11 @@ root README.
 cd services/voice-agent
 set PYTHONPATH=.
 
-# Structured Q/follow-up against sample JD + resume (scripted LLM)
-python test_harness/debug_flow_jd_resume.py
-
 # First-pass speech-end→audio budget + prompt-size baseline (no paid APIs)
 python test_harness/slo_baseline.py
+
+# Scripted multi-case dry runs (sales / engineering fixtures)
+python test_harness/dry_run_cases.py --help
 ```
 
 Record live staging latency samples in `docs/slo_baseline_record.md`.

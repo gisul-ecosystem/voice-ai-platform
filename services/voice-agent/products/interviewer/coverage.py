@@ -108,6 +108,22 @@ _OWNERSHIP_CUES = (
     "i set",
     "i rewrote",
 )
+# Thin first-person actions ("I set TTL…") can proxy for a context ask, but must
+# not also seal ownership — that still needs a dedicated ownership probe.
+_STRONG_OWNERSHIP_CUES = (
+    "i handled",
+    "i led",
+    "i built",
+    "i owned",
+    "i implemented",
+    "i designed",
+    "i wrote",
+    "i ran",
+    "i managed",
+    "i was responsible",
+    "my responsibility",
+    "personally",
+)
 _CONTEXT_CUES = (" when ", " at ", " for the ", " for a ", " with the ", " on the ")
 # Match "I used X", "we used X", "using X", not only " using " with padding quirks.
 _METHOD_CUES = (
@@ -419,11 +435,21 @@ def evidenced_intents(
         if eval_ok or context_ok:
             covered.append(target)
     # Credit every outstanding intent the answer actually evidences (cross-intent).
+    lowered = f" {(answer_text or '').lower()} "
     for intent in required:
         if intent in covered:
             continue
-        if _intent_has_concrete_evidence(intent, answer_text or "", facts):
-            covered.append(intent)
+        if not _intent_has_concrete_evidence(intent, answer_text or "", facts):
+            continue
+        # While answering context, weak "I set / I reduced" cues must not seal
+        # ownership — keep the ownership probe for metric-named thin answers.
+        if (
+            target == "establish_context"
+            and intent == "establish_ownership"
+            and not any(cue in lowered for cue in _STRONG_OWNERSHIP_CUES)
+        ):
+            continue
+        covered.append(intent)
     return covered
 
 
