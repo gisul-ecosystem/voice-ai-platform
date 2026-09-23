@@ -2,6 +2,32 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function publicError(data: Record<string, unknown>, fallback: string) {
+  const detail = data.detail ?? data.error;
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (!item || typeof item !== "object") return String(item);
+      const row = item as { loc?: unknown; msg?: unknown };
+      return String(row.msg || "").trim();
+    }).filter(Boolean);
+    if (parts.length) return parts.join(" ");
+  }
+  return fallback;
+}
+
+function unreachableMessage(reason: unknown) {
+  const name = reason instanceof Error ? reason.name : "";
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (name === "TimeoutError" || /aborted|timeout/i.test(message)) {
+    return "Blueprint generation timed out. Try again in a moment.";
+  }
+  if (!process.env.BACKEND_API_URL?.trim()) {
+    return "Blueprint service is not configured.";
+  }
+  return "Blueprint service could not be reached. Confirm backend-api is running on port 5554.";
+}
+
 async function backendRequest(path: string, body: unknown) {
   const backendUrl = process.env.BACKEND_API_URL?.replace(/\/+$/, "");
   if (!backendUrl) throw new Error("Backend is not configured.");
@@ -13,7 +39,7 @@ async function backendRequest(path: string, body: unknown) {
     headers,
     body: JSON.stringify(body),
     cache: "no-store",
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(90_000),
   });
 }
 
@@ -28,19 +54,30 @@ export async function POST(request: Request) {
         job_description: body.jobDescription,
         target_level: body.seniority,
       });
-      const extractedData = await extracted.json().catch(() => ({}));
-      if (!extracted.ok) return NextResponse.json({ error: extractedData.detail || "JD extraction failed." }, { status: extracted.status });
+      const extractedData = await extracted.json().catch(() => ({})) as Record<string, unknown>;
+      if (!extracted.ok) {
+        return NextResponse.json(
+          { error: publicError(extractedData, "JD extraction failed.") },
+          { status: extracted.status },
+        );
+      }
       const compiled = await backendRequest("/interview-brain/blueprint/compile", {
         job_intelligence: extractedData,
         title: body.title,
-        language: "English",
+        language: typeof body.language === "string" && body.language.trim() ? body.language : "English",
         timezone: body.timezone || "UTC",
         duration_minutes: body.durationMinutes,
         creator_competencies: body.competencies,
         resume_required: true,
         include_scenarios: true,
       });
-      const data = await compiled.json().catch(() => ({}));
+      const data = await compiled.json().catch(() => ({})) as Record<string, unknown>;
+      if (!compiled.ok) {
+        return NextResponse.json(
+          { error: publicError(data, "Blueprint compilation failed.") },
+          { status: compiled.status },
+        );
+      }
       return NextResponse.json(data, { status: compiled.status });
     }
     if (body.action === "publish") {
@@ -73,7 +110,7 @@ export async function POST(request: Request) {
       return NextResponse.json(data, { status: published.status });
     }
     return NextResponse.json({ error: "Unknown blueprint action." }, { status: 400 });
-  } catch {
-    return NextResponse.json({ error: "Blueprint service could not be reached." }, { status: 502 });
+  } catch (reason) {
+    return NextResponse.json({ error: unreachableMessage(reason) }, { status: 502 });
   }
 }

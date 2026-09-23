@@ -36,6 +36,7 @@ class AaptorAgent(Agent):
         interview_definition: dict | None = None,
         candidate_profile: dict | None = None,
         difficulty: str | None = None,
+        language: str | None = None,
     ) -> None:
         super().__init__(
             instructions=(
@@ -63,6 +64,8 @@ class AaptorAgent(Agent):
             flow_kwargs["candidate_profile"] = candidate_profile
         if difficulty:
             flow_kwargs["difficulty"] = difficulty
+        if language:
+            flow_kwargs["language"] = language
         restored_state = dict(initial_state or {})
         self._sequence_number = int(restored_state.pop("initial_sequence_number", 0))
         # Brain metadata is not InterviewFlow constructor input.

@@ -173,6 +173,8 @@ Respond with a single JSON object in exactly this shape:
 
 {framing_notes}
 
+{language_note}
+
 Human delivery:
 - Refer to one concrete detail from the last answer when relevant.
 - If the answer is incomplete, ask for the missing detail gently rather than repeating the same question.
@@ -192,6 +194,8 @@ Allowed resume claims you may reference:
 
 Job description excerpt:
 {jd_excerpt}
+
+{language_note}
 
 Output JSON as specified. competency_id may be empty. intent must be "opening". depth must be 1.
 """
