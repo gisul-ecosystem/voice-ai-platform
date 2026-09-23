@@ -28,6 +28,11 @@ CHECK_REMAINING_GAP = "CHECK_REMAINING_GAP"
 OFFER_FINAL_ADDITION = "OFFER_FINAL_ADDITION"
 CLOSE_INTERVIEW = "CLOSE_INTERVIEW"
 
+# Intro + optional project must yield to admin competencies quickly.
+WARMUP_MAX_SECONDS = 180
+WARMUP_MAX_INTERVIEWER_TURNS = 4
+WARMUP_SECTIONS = frozenset({"opening", "candidate_map", "resume_project", "baseline"})
+
 # Probe rungs (design spec section 5). The policy picks the rung; the model
 # only supplies the wording.
 PROBE_RUNGS: dict[str, str] = {
@@ -161,48 +166,42 @@ def outline_from_definition(
     phases: list[dict[str, Any]] = [
         {
             "name": "opening",
-            "duration_minutes": 2,
+            "duration_minutes": 1,
             "topics": ["introduction", "role confirmation"],
-            "source": "generic",
-        },
-        {
-            "name": "candidate_map",
-            "duration_minutes": 3,
-            "topics": ["background", "relevant experience", "ownership"],
             "source": "generic",
         },
     ]
     valid = [item for item in competencies if isinstance(item, dict)]
-    # Competencies are the assessment; the resume walkthrough only supplies
-    # concrete material to probe. Reserve competency time FIRST, then spend what
-    # is left on projects, so a long CV can never squeeze out a required skill.
-    generic_minutes = 7
+    # Keep intro+projects short so admin competencies start within ~3 minutes.
+    # Opening 1 + closing 1; at most one brief project question before JD skills.
+    generic_minutes = 2
     min_per_competency = 3
     competency_floor = min_per_competency * max(len(valid), 1)
-    project_pool = max(0, duration - generic_minutes - competency_floor)
+    project_pool = min(2, max(0, duration - generic_minutes - competency_floor))
     projects = [
         str(name).strip()
         for name in (resume_projects or [])
         if str(name).strip()
-    ][: max(0, min(2, project_pool // 2))]
-    project_budget = 2 if projects else 0
+    ][: 1 if project_pool >= 1 else 0]
     for project in projects:
         phases.append(
             {
                 "name": f"Resume project: {project}",
-                "duration_minutes": project_budget,
+                "duration_minutes": max(1, project_pool),
                 "topics": [project],
                 "source": "resume",
                 "intent": "resume_project",
                 "project_name": project,
-                "max_depth": 3,
-                # One opener plus one follow-up: enough to surface the work,
-                # not enough to eat the competency budget.
+                "max_depth": 1,
                 "max_probes": 1,
             }
         )
 
-    reserved = generic_minutes + project_budget * len(projects)
+    reserved = generic_minutes + sum(
+        int(phase.get("duration_minutes") or 0)
+        for phase in phases
+        if phase.get("intent") == "resume_project"
+    )
     remaining = max(competency_floor, duration - reserved)
     # Recruiter weighting decides how the competency time is split, not an even share.
     weights = [max(0.0, float(item.get("weight") or 0)) for item in valid]
@@ -234,7 +233,7 @@ def outline_from_definition(
     phases.append(
         {
             "name": "closing",
-            "duration_minutes": 2,
+            "duration_minutes": 1,
             "topics": ["final addition", "next steps"],
             "source": "generic",
         }
@@ -448,17 +447,33 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="opening",
         )
 
-    if section == "opening" and state.candidate_turn_count <= 1:
+    if section in WARMUP_SECTIONS and (
+        state.elapsed_seconds >= WARMUP_MAX_SECONDS
+        or state.interviewer_turn_count >= WARMUP_MAX_INTERVIEWER_TURNS
+    ):
         return PolicyDecision(
-            action=MAP_CANDIDATE_BACKGROUND,
-            forced_flow_decision="probe",
+            action=MOVE_TO_NEXT_COMPETENCY,
+            forced_flow_decision="advance",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=2,
-            competency_id=None,
-            intent="candidate_map",
-            reason="breadth-first mapping before deep probes",
-            section="candidate_map",
+            competency_id=state.competency_id,
+            intent="coverage",
+            reason="warmup budget done — start admin competencies",
+            section=section,
+        )
+
+    if section == "opening" and state.candidate_turn_count >= 1:
+        return PolicyDecision(
+            action=ASK_BASELINE,
+            forced_flow_decision="advance",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=2,
+            competency_id=state.competency_id,
+            intent="baseline",
+            reason="introduction complete — start the resume walkthrough or competencies",
+            section="opening",
         )
 
     if section == "candidate_map" and state.candidate_turn_count >= 1:
@@ -686,18 +701,12 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
 
 def policy_prompt_block(decision: PolicyDecision) -> str:
     return (
-        "POLICY ENGINE (authoritative — do not override):\n"
-        f"- Required next action: {decision.action}\n"
-        f"- Intent: {decision.intent}\n"
+        "AGENDA (section and timing only — invent the spoken question yourself):\n"
         f"- Section: {decision.section}\n"
-        f"- Allowed depth now: {decision.current_depth} of {decision.max_depth}\n"
-        f"- Flow decision must be: {decision.forced_flow_decision}\n"
+        f"- Current competency id: {decision.competency_id or '(none)'}\n"
+        f"- Stay or move: {decision.forced_flow_decision}\n"
         f"- Reason: {decision.reason}\n"
-        "- Do not jump multiple depth levels.\n"
         "- Do not ask protected-class or prohibited questions.\n"
-        "- Prefer applied work examples over trivia.\n"
-        "- Do not ask acronym full-forms, puzzles, riddles, or brain-teasers unless job-critical.\n"
-        "- Keep the same domain-neutral interviewer voice for any role.\n"
     )
 
 

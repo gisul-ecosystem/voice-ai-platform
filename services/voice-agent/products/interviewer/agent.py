@@ -1,14 +1,16 @@
 """LiveKit adapter for the provider-neutral interview flow."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import uuid
 from collections.abc import Awaitable, Callable
 
 from livekit.agents import Agent, ModelSettings, llm
 
 from products.interviewer.brain_runtime import BrainSessionBridge
-from products.interviewer.flow import CLOSING_MESSAGE, FALLBACK_FOLLOWUP, InterviewFlow
+from products.interviewer.flow import CLOSING_MESSAGE, FALLBACK_OPENING, InterviewFlow
 from voice_platform.chat import is_usable_candidate_turn, last_text
 
 logger = logging.getLogger("voice-agent.interviewer")
@@ -16,6 +18,9 @@ logger = logging.getLogger("voice-agent.interviewer")
 CLARIFY_TURN = (
     "Sorry, I did not catch that. Please say a bit more, in a full sentence."
 )
+# Keep the room from sitting silent while the LLM or TTS stalls on the first line.
+OPENING_LLM_TIMEOUT_SECONDS = float(os.getenv("OPENING_LLM_TIMEOUT_SECONDS", "6"))
+OPENING_TTS_TIMEOUT_SECONDS = float(os.getenv("OPENING_TTS_TIMEOUT_SECONDS", "20"))
 
 
 class AaptorAgent(Agent):
@@ -175,22 +180,102 @@ class AaptorAgent(Agent):
     async def generate_next_question(self, last_candidate_turn: str | None) -> str:
         return await self.flow.generate_next_question(last_candidate_turn)
 
+    def _commit_local_opening(self, opening: str) -> None:
+        """Record a local opening when the LLM stream never finished."""
+        if self.flow.interviewer_turns:
+            return
+        self.flow.last_question_competency_id = None
+        self.flow.last_question_intent = "opening"
+        self.flow.last_question_depth = 1
+        self.flow.last_question_claim_ids = []
+        self.flow._remember_question(opening)
+
+    async def _resolve_opening_speech(self) -> str:
+        """Return opening text as soon as the LLM yields it, or fall back fast.
+
+        Waiting for the entire stream generator (including repair / ledger work)
+        before TTS left the room silent when the LLM stalled.
+        """
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def _produce() -> None:
+            try:
+                async for chunk in self.flow.generate_next_question_stream(None):
+                    text = (chunk or "").strip()
+                    if text:
+                        await queue.put(text)
+            except Exception:
+                logger.exception(
+                    "opening_stream_failed",
+                    extra={"event": "opening_stream_failed"},
+                )
+            finally:
+                await queue.put(None)
+
+        producer = asyncio.create_task(_produce())
+        try:
+            first = await asyncio.wait_for(
+                queue.get(), timeout=max(2.0, OPENING_LLM_TIMEOUT_SECONDS)
+            )
+            if first:
+                return first
+        except asyncio.TimeoutError:
+            logger.warning(
+                "opening_llm_timeout",
+                extra={
+                    "event": "opening_llm_timeout",
+                    "timeout_seconds": OPENING_LLM_TIMEOUT_SECONDS,
+                },
+            )
+            producer.cancel()
+            try:
+                await producer
+            except asyncio.CancelledError:
+                pass
+        except Exception:
+            logger.exception(
+                "opening_resolve_failed",
+                extra={"event": "opening_resolve_failed"},
+            )
+            producer.cancel()
+            try:
+                await producer
+            except asyncio.CancelledError:
+                pass
+
+        opening = self.flow._fallback_opening() or FALLBACK_OPENING
+        self._commit_local_opening(opening)
+        return opening
+
+    async def _speak_opening(self, opening: str) -> None:
+        logger.info(
+            "interviewer_speaking_opening",
+            extra={"event": "interviewer_speaking_opening", "opening": opening},
+        )
+        await asyncio.wait_for(
+            self.session.say(opening, allow_interruptions=False),
+            timeout=max(5.0, OPENING_TTS_TIMEOUT_SECONDS),
+        )
+        logger.info(
+            "interviewer_speaking_opening_done",
+            extra={"event": "interviewer_speaking_opening_done"},
+        )
+
     async def on_enter(self) -> None:
         if self._opened:
             # Rejoin/restore: do not re-speak the opening or double-write brain.
             return
-        # Claim the opening before awaiting synthesis so a concurrent LLM callback
-        # cannot schedule a second opening/question for the same room.
-        self._opened = True
-        logger.info("interviewer_on_enter_start", extra={"event": "interviewer_on_enter_start"})
+        # Claim the opening slot before awaiting synthesis so a concurrent LLM
+        # callback cannot schedule a second opening for the same room.
+        self._opening_in_progress = True
+        logger.info(
+            "interviewer_on_enter_start",
+            extra={"event": "interviewer_on_enter_start"},
+        )
         try:
-            parts: list[str] = []
-            async for chunk in self.flow.generate_next_question_stream(None):
-                parts.append(chunk)
-            opening = "".join(parts).strip() or FALLBACK_OPENING
-            logger.info("interviewer_speaking_opening", extra={"event": "interviewer_speaking_opening", "opening": opening})
-            await self.session.say(opening, allow_interruptions=False)
-            logger.info("interviewer_speaking_opening_done", extra={"event": "interviewer_speaking_opening_done"})
+            opening = await self._resolve_opening_speech()
+            await self._speak_opening(opening)
+            self._opened = True
             self._last_agent_text = opening
             turn_id = await self._record("agent", opening)
             await self._persist_brain_after_exchange(
@@ -198,6 +283,30 @@ class AaptorAgent(Agent):
                 text=opening,
                 turn_id=turn_id,
             )
+        except Exception:
+            logger.exception(
+                "interviewer_opening_failed",
+                extra={"event": "interviewer_opening_failed"},
+            )
+            try:
+                fallback = self.flow._fallback_opening() or FALLBACK_OPENING
+                self._commit_local_opening(fallback)
+                await self._speak_opening(fallback)
+                self._opened = True
+                self._last_agent_text = fallback
+                turn_id = await self._record("agent", fallback)
+                await self._persist_brain_after_exchange(
+                    speaker="agent",
+                    text=fallback,
+                    turn_id=turn_id,
+                )
+            except Exception:
+                # Leave _opened False so llm_node can still try to open.
+                logger.exception(
+                    "interviewer_opening_fallback_failed",
+                    extra={"event": "interviewer_opening_fallback_failed"},
+                )
+                self._opened = False
         finally:
             self._opening_in_progress = False
 
@@ -254,13 +363,9 @@ class AaptorAgent(Agent):
                 )
             question = CLOSING_MESSAGE
         if not question:
-            question = (
-                self.flow._fallback_spoken_question(
-                    self.flow.last_policy_decision,
-                    last_turn=candidate_turn,
-                )
-                if not self.flow._uses_legacy_decision_flow()
-                else FALLBACK_FOLLOWUP
+            question = self.flow._fallback_spoken_question(
+                self.flow.last_policy_decision,
+                last_turn=candidate_turn,
             )
             yield question
         if candidate_turn and candidate_brain_turn_id:

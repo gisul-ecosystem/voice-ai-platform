@@ -208,12 +208,10 @@ def test_validator_preserves_evaluation_and_tags_on_success() -> None:
 
 def test_probe_action_phrasing_is_unique() -> None:
     keys = [
-        "PROBE_FOR_CONTEXT",
-        "PROBE_FOR_OWNERSHIP",
-        "PROBE_FOR_METHOD",
-        "PROBE_FOR_REASONING",
-        "PROBE_FOR_RESULT",
-        "PROBE_FOR_REFLECTION",
+        "CLARIFY_CURRENT_ANSWER",
+        "MOVE_TO_NEXT_COMPETENCY",
+        "WALK_RESUME_PROJECT",
+        "CLOSE_INTERVIEW",
     ]
     notes = [ACTION_PHRASING[key] for key in keys]
     assert len(set(notes)) == len(notes)
@@ -302,5 +300,72 @@ def test_validator_allows_repeated_probe_shape_when_question_is_valid() -> None:
         hook_fact="Redis",
         required_probe_shape="failure_mode",
         last_probe_shape="why",
+    )
+    assert result.ok is True
+
+
+def test_competency_question_that_names_a_resume_project_is_rejected() -> None:
+    generated = GeneratedQuestion(
+        question="How did Payments Gateway handle retries?",
+        competency_id="python",
+        intent="applied_understanding",
+        depth=2,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="python",
+        policy_intent="applied_understanding",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=[],
+        resume_projects=["Payments Gateway"],
+        require_resume_grounding=False,
+    )
+    assert result.ok is False
+    assert "project_in_competency_question" in result.reasons
+    assert "competency_mismatch" in result.reasons
+
+
+def test_regarding_tell_me_more_is_rejected() -> None:
+    generated = GeneratedQuestion(
+        question="Regarding will push here, can you tell me more about this?",
+        competency_id="python",
+        intent="clarify",
+        depth=1,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="python",
+        policy_intent="clarify",
+        policy_depth=1,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=[],
+    )
+    assert result.ok is False
+    assert "generic_parrot_question" in result.reasons
+
+
+def test_standalone_competency_question_does_not_need_a_project() -> None:
+    generated = GeneratedQuestion(
+        question="How does a Python generator differ from a regular iterator?",
+        competency_id="python",
+        intent="applied_understanding",
+        depth=2,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="python",
+        policy_intent="applied_understanding",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=[],
+        resume_projects=["Payments Gateway"],
+        require_resume_grounding=False,
     )
     assert result.ok is True

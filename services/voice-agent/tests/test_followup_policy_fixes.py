@@ -155,9 +155,6 @@ def test_fallback_never_repeats_an_already_asked_question() -> None:
     decision.competency_id = "c1"
     decision.intent = "establish_context"
 
-    spoken: list[str] = []
-    for _ in range(4):
-        question = flow._fallback_spoken_question(decision)
-        assert question not in spoken, f"fallback repeated: {question!r}"
-        spoken.append(question)
-        flow.interviewer_turns.append(question)
+    question = flow._fallback_spoken_question(decision)
+    assert question.startswith("Let's move on")
+    assert "Which parts of that were your call" not in question

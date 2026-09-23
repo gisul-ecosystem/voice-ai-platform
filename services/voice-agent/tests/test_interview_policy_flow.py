@@ -89,7 +89,13 @@ def test_policy_prompt_contains_full_technical_reference_context() -> None:
         job_description="Use algorithms, data structures, and model evaluation.",
         resume_text="Built a machine learning classifier in Python.",
         candidate_profile={"claims": [{"claim_id": "c1", "value": "Built a machine learning classifier"}]},
-        initial_phase_index=2,
+        interviewer_turns=["Thanks for joining."],
+        candidate_turns=["I am a backend engineer."],
+    )
+    flow.phase_index = next(
+        index
+        for index, phase in enumerate(flow.phases)
+        if phase.get("competency_id") == "communication"
     )
 
     prompt, _ = flow._structured_system_prompt(
@@ -148,6 +154,7 @@ def test_policy_prompt_contract_catches_missing_briefing_fields() -> None:
         "answer_adaptation": "ask for missing detail",
         "framing_notes": "keep it grounded",
         "role_title": "Engineer",
+        "transition_context": "",
     }
 
     with pytest.raises(RuntimeError, match="missing briefing fields"):
@@ -166,7 +173,7 @@ async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
         interview_definition=_definition(),
         interviewer_turns=["Thanks for joining. Please introduce yourself."],
         candidate_turns=[],
-        initial_phase_index=1,
+        initial_phase_index=0,
     )
     assert flow.policy_mode is True
     assert flow.phases[0]["name"] == "opening"
@@ -175,14 +182,10 @@ async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
         "I am a backend engineer who worked on payments."
     )
     prompt = llm.messages[0][0]["content"]
-    assert "POLICY ENGINE" in prompt
-    # candidate_map's forced advance is resolved before the prompt is built, so the
-    # LLM sees the real next competency it is entering, not the phase it just left.
+    assert "AGENDA" in prompt
+    assert "SECTION RULE" in prompt
     assert "Problem solving" in prompt
-    assert "problem_solving" in prompt
-    # Forced probe — cannot honor LLM advance into deep dive.
-    assert flow.phase_index == 2
-    # The policy constrains the action; the LLM owns the spoken wording.
+    assert flow.phase_index == 1
     assert question == "Jumping straight into system design tradeoffs?"
 
 
@@ -214,13 +217,14 @@ async def test_policy_mode_uses_fallback_without_retrying_invalid_output() -> No
         interview_definition=_definition(),
         interviewer_turns=["Tell me about your background."],
         candidate_turns=["I worked on payment systems."],
-        initial_phase_index=2,
+        initial_phase_index=1,
     )
 
     question = await flow.generate_next_question("I improved payment retries.")
 
-    assert "payment retries" in question
+    assert "Let's move on" in question
     assert "This is not" not in question
+    assert "Which parts of that were your call" not in question
 
 
 @pytest.mark.asyncio
@@ -375,17 +379,18 @@ async def test_policy_mode_anchors_competency_question_to_active_jd_focus_and_se
         llm,
         interview_definition=definition,
         job_description="Use algorithms for large input data.",
-        initial_phase_index=2,
+        initial_phase_index=1,
+        interviewer_turns=["Thanks for joining. Please introduce yourself."],
         candidate_turns=["I am a junior engineer with Python experience."],
     )
     await flow.generate_next_question("I have used Python for data processing.")
 
     prompt = llm.messages[0][0]["content"]
-    assert "Active JD/resume focus: Problem solving" in prompt
-    assert "Published interview-brain competency selected for this turn: Problem solving" in prompt
+    assert "Current competency: Problem solving" in prompt
+    assert "Standalone competency for this turn: Problem solving" in prompt
     assert "Job target level (assessment bar — do not lower): junior" in prompt
-    assert "accessible scope" in prompt
-    assert "must never create a separate standalone question track" in prompt
+    assert "SECTION RULE" in prompt
+    assert "do not mention resume projects" in prompt.lower()
     assert llm.request_options[0]["extra_body"] == {"max_completion_tokens": 1024}
 
 
@@ -406,11 +411,72 @@ async def test_policy_mode_assesses_resume_projects_before_jd_skills() -> None:
     )
 
     flow.apply_decision("advance")
-    flow.apply_decision("advance")
     assert flow.current_phase()["intent"] == "resume_project"
     await flow.generate_next_question("I built the Payments Gateway retry flow.")
 
     prompt = llm.messages[0][0]["content"]
-    assert "Active JD/resume focus: Payments Gateway" in prompt
+    assert "Payments Gateway" in prompt
     assert "Resume project excerpt for Payments Gateway" in prompt
+
+
+def test_junior_dsa_guidance_is_arrays_and_strings() -> None:
+    definition = _definition()
+    definition["competencies"] = [
+        {"id": "dsa", "name": "DSA", "max_depth": 3, "max_probes": 2}
+    ]
+    definition["job_intelligence"] = {"role": {"target_level": "junior"}}
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=definition,
+        resume_text="Projects\n- Payments Gateway: checkout",
+        interviewer_turns=["Thanks for joining."],
+        candidate_turns=["I am a backend engineer."],
+    )
+    flow.phase_index = next(
+        index for index, phase in enumerate(flow.phases) if phase.get("competency_id") == "dsa"
+    )
+    prompt, _ = flow._structured_system_prompt(
+        "I used Redis on Payments Gateway.",
+        flow._current_policy_decision(pending_candidate_turn=True),
+    )
+    assert "arrays" in prompt.lower()
+    assert "strings" in prompt.lower()
+    assert "Resume project excerpt" not in prompt
+    assert "Resume facts:" not in prompt
+
+
+def test_python_ml_sql_guidance_stays_in_domain() -> None:
+    cases = (
+        ("python", "Python", "functions"),
+        ("ml", "Machine learning", "overfitting"),
+        ("sql", "SQL", "join"),
+    )
+    for competency_id, name, expected in cases:
+        definition = _definition()
+        definition["competencies"] = [
+            {"id": competency_id, "name": name, "max_depth": 3, "max_probes": 2}
+        ]
+        definition["job_intelligence"] = {"role": {"target_level": "junior"}}
+        flow = InterviewFlow(
+            {"phases": []},
+            FakeLlm(),
+            interview_definition=definition,
+            resume_text="Projects\n- Payments Gateway: checkout",
+            interviewer_turns=["Thanks for joining."],
+            candidate_turns=["I am a backend engineer."],
+        )
+        flow.phase_index = next(
+            index
+            for index, phase in enumerate(flow.phases)
+            if phase.get("competency_id") == competency_id
+        )
+        prompt, _ = flow._structured_system_prompt(
+            "I built Payments Gateway.",
+            flow._current_policy_decision(pending_candidate_turn=True),
+        )
+        assert expected in prompt.lower(), prompt
+        assert "do not default to a dsa puzzle" in prompt.lower() or name.lower() in prompt.lower()
+        assert "Resume project excerpt" not in prompt
+        assert "Resume facts:" not in prompt
 

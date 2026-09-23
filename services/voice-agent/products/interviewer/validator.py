@@ -68,6 +68,8 @@ HARD_BLOCK_REASONS: frozenset[str] = frozenset(
         "empty_question",
         "protected_topic",
         "duplicate_question",
+        "project_in_competency_question",
+        "generic_parrot_question",
     )
 )
 
@@ -138,6 +140,8 @@ HARD_BLOCK_REASONS: frozenset[str] = frozenset(
         "empty_question",
         "protected_topic",
         "duplicate_question",
+        "project_in_competency_question",
+        "generic_parrot_question",
     )
 )
 
@@ -630,6 +634,18 @@ def _looks_like_non_job_trivia(question: str, *, corpus: str) -> bool:
     return False
 
 
+def _is_generic_parrot_question(lowered: str) -> bool:
+    if re.search(r"\bregarding\b", lowered) and re.search(
+        r"\btell me more\b|\bcan you tell me\b", lowered
+    ):
+        return True
+    if "concrete example from that work" in lowered:
+        return True
+    if re.search(r"\btell me more about (this|that|it)\b", lowered):
+        return True
+    return False
+
+
 def validate_generated_question(
     generated: GeneratedQuestion,
     *,
@@ -645,6 +661,7 @@ def validate_generated_question(
     resume_text: str = "",
     recent_turns: list[str] | None = None,
     resume_focus: str = "",
+    resume_projects: list[str] | None = None,
     require_resume_grounding: bool = False,
     hook_fact: str | None = None,
     required_probe_shape: str | None = None,
@@ -666,6 +683,8 @@ def validate_generated_question(
         reasons.append("protected_topic")
     if any(marker in lowered for marker in TRIVIA_MARKERS):
         reasons.append("trivia_question")
+    if _is_generic_parrot_question(lowered):
+        reasons.append("generic_parrot_question")
     live_probe = (policy_intent or "") not in SKIP_HOOK_INTENTS
     # Hook details and probe-shape rotation guide wording, but do not reject a
     # question that is otherwise safe, grounded, policy-compatible, and unique.
@@ -673,6 +692,21 @@ def validate_generated_question(
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:
         reasons.append("competency_mismatch")
+    project_intents = {
+        "resume_project",
+        "opening",
+        "candidate_map",
+        "await_introduction",
+        "baseline",
+    }
+    if (policy_intent or "") not in project_intents:
+        names = [str(resume_focus).strip()] if resume_focus else []
+        names.extend(str(item).strip() for item in (resume_projects or []) if str(item).strip())
+        for name in names:
+            if len(name) > 3 and name.lower() in lowered:
+                reasons.append("project_in_competency_question")
+                reasons.append("competency_mismatch")
+                break
     # The policy owns the assessment intent. The model's intent tag is metadata
     # and must not reject otherwise safe, grounded wording.
     if generated.depth > max(1, int(max_depth)):

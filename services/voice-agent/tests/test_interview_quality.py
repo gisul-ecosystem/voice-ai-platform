@@ -131,7 +131,7 @@ def test_fallback_does_not_repeat_the_previous_dsa_question() -> None:
     )
 
     assert fallback != flow.interviewer_turns[-1]
-    assert "arrays and strings" in fallback
+    assert fallback.startswith("Let's move on")
 
 
 def test_last_resort_fallback_is_not_repeated() -> None:
@@ -152,6 +152,7 @@ def test_last_resort_fallback_is_not_repeated() -> None:
     )
 
     assert fallback != repeated
+    assert fallback.startswith("Let's move on")
 
 
 def _junior_backend_definition() -> dict:
@@ -224,7 +225,7 @@ async def test_sales_definition_prompt_is_not_technical_script() -> None:
     assert "senior technical interviewer" not in prompt.lower()
     assert "every listed resume project" not in prompt.lower()
     assert "api, schema, queue" not in prompt.lower()
-    assert "POLICY ENGINE" in prompt
+    assert "AGENDA" in prompt
     assert "negotiation" in prompt.lower()
     assert "api" not in question.lower()
     assert "queue" not in question.lower()
@@ -243,7 +244,6 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
         interview_definition=_junior_backend_definition(),
         interviewer_turns=["q1", "q2", "q3"],
         candidate_turns=["I am a student.", "I did a college project."],
-        initial_phase_index=2,
         initial_probe_count=0,
         candidate_profile={
             "experience_summary": {"profile_type": "final_year_student"},
@@ -256,6 +256,11 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
             ],
         },
         resume_text="Final year BCA student. Library management project in Java.",
+    )
+    flow.phase_index = next(
+        index
+        for index, phase in enumerate(flow.phases)
+        if phase.get("competency_id") == "problem_solving"
     )
     assert flow._job_target_level() == "junior"
     assert flow._profile_type() == "final_year_student"

@@ -71,9 +71,13 @@ async def test_rejected_question_keeps_the_answer_verdict() -> None:
         # Pre-seed the question so the model's output is a duplicate.
         interviewer_turns=["q1", repeated],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
     )
 
+    flow.phase_index = next(
+        index
+        for index, phase in enumerate(flow.phases)
+        if phase.get("competency_id") == "flink"
+    )
     await flow.generate_next_question("I owned that operator and tuned its state backend.")
 
     # The question was rejected, but the verdict about the ANSWER must survive:

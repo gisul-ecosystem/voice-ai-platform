@@ -5,7 +5,6 @@ from products.interviewer.policy import (
     ASK_BASELINE,
     CLARIFY_CURRENT_ANSWER,
     CLOSE_INTERVIEW,
-    MAP_CANDIDATE_BACKGROUND,
     MOVE_TO_NEXT_COMPETENCY,
     OPEN_INTERVIEW,
     PolicyState,
@@ -48,7 +47,7 @@ def test_outline_is_breadth_first() -> None:
     assert outline is not None
     names = [phase["name"] for phase in outline["phases"]]
     assert names[0] == "opening"
-    assert names[1] == "candidate_map"
+    assert names[1] == "Problem solving"
     assert "Problem solving" in names
     assert names[-1] == "closing"
 
@@ -67,7 +66,8 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
             phase_name="opening",
         )
     )
-    assert mapping.action == MAP_CANDIDATE_BACKGROUND
+    assert mapping.action == ASK_BASELINE
+    assert mapping.forced_flow_decision == "advance"
     assert mapping.allow_llm_decision is False
 
     after_map = decide_next_action(

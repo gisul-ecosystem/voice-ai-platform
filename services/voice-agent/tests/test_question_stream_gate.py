@@ -53,15 +53,20 @@ def _definition() -> dict:
 
 
 def _flow(llm, *, asked: list[str] | None = None) -> InterviewFlow:
-    return InterviewFlow(
+    flow = InterviewFlow(
         {"phases": []},
         llm,
         interview_definition=_definition(),
         job_description="Backend engineer working on algorithms and data structures.",
         interviewer_turns=asked if asked is not None else ["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
     )
+    flow.phase_index = next(
+        index
+        for index, phase in enumerate(flow.phases)
+        if phase.get("competency_id") == "dsa"
+    )
+    return flow
 
 
 async def _collect(flow: InterviewFlow, turn: str) -> str:

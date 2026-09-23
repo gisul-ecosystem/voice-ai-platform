@@ -1,10 +1,10 @@
 """LiveKit worker lifecycle for the Aaptor interviewer product."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
-from typing import Any
 from typing import Any
 
 from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
@@ -861,7 +861,12 @@ async def entrypoint(ctx: JobContext) -> None:
     )
     if hasattr(ctx, "wait_for_participant"):
         try:
-            await ctx.wait_for_participant()
+            await asyncio.wait_for(ctx.wait_for_participant(), timeout=45.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "wait_for_participant_timeout",
+                extra={"event": "wait_for_participant_timeout"},
+            )
         except Exception:
             logger.warning(
                 "wait_for_participant_failed",

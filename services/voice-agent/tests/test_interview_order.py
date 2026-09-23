@@ -4,7 +4,7 @@ import pytest
 
 from products.interviewer.flow import InterviewFlow
 from products.interviewer.policy import (
-    MAP_CANDIDATE_BACKGROUND,
+    ASK_BASELINE,
     OPEN_INTERVIEW,
     WALK_RESUME_PROJECT,
     PolicyState,
@@ -41,7 +41,6 @@ def test_outline_order_is_open_then_projects_then_competencies() -> None:
     names = [phase["name"] for phase in outline["phases"]]
 
     assert names[0] == "opening"
-    assert names[1] == "candidate_map"
     project_positions = [i for i, n in enumerate(names) if n.startswith("Resume project:")]
     competency_positions = [
         i for i, phase in enumerate(outline["phases"]) if phase.get("competency_id")
@@ -49,14 +48,64 @@ def test_outline_order_is_open_then_projects_then_competencies() -> None:
     assert project_positions, names
     # Every resume project is walked before any JD competency is assessed.
     assert max(project_positions) < min(competency_positions)
+    assert sum(
+        int(phase["duration_minutes"])
+        for phase in outline["phases"]
+        if phase.get("intent") == "resume_project"
+    ) <= 2
+    assert (
+        sum(1 for phase in outline["phases"] if phase.get("intent") == "resume_project")
+        <= 1
+    )
     assert names[-1] == "closing"
+
+
+def test_warmup_budget_forces_competencies_after_few_turns() -> None:
+    from products.interviewer.policy import (
+        MOVE_TO_NEXT_COMPETENCY,
+        WARMUP_MAX_INTERVIEWER_TURNS,
+    )
+
+    decision = decide_next_action(
+        PolicyState(
+            phase_name="Resume project: Orion billing reconciler",
+            project_name="Orion billing reconciler",
+            interviewer_turn_count=WARMUP_MAX_INTERVIEWER_TURNS,
+            candidate_turn_count=2,
+            probe_count=0,
+            max_probes=1,
+            elapsed_seconds=30,
+        )
+    )
+    assert decision.action == MOVE_TO_NEXT_COMPETENCY
+    assert decision.forced_flow_decision == "advance"
+    assert "warmup" in decision.reason
+
+
+def test_warmup_budget_forces_competencies_after_three_minutes() -> None:
+    from products.interviewer.policy import MOVE_TO_NEXT_COMPETENCY
+
+    decision = decide_next_action(
+        PolicyState(
+            phase_name="Resume project: Orion billing reconciler",
+            project_name="Orion billing reconciler",
+            interviewer_turn_count=2,
+            candidate_turn_count=2,
+            probe_count=0,
+            max_probes=1,
+            elapsed_seconds=181,
+        )
+    )
+    assert decision.action == MOVE_TO_NEXT_COMPETENCY
+    assert decision.forced_flow_decision == "advance"
 
 
 def test_no_resume_means_no_project_phases() -> None:
     outline = outline_from_definition(_definition(), resume_projects=[])
     names = [phase["name"] for phase in outline["phases"]]
     assert not any(n.startswith("Resume project:") for n in names)
-    assert names[:2] == ["opening", "candidate_map"]
+    assert names[0] == "opening"
+    assert names[1] == "Backend engineering"
 
 
 def test_flow_builds_project_phases_from_the_resume() -> None:
@@ -90,7 +139,8 @@ def test_interview_opens_before_it_maps_or_probes() -> None:
             candidate_turn_count=1,
         )
     )
-    assert after_intro.action == MAP_CANDIDATE_BACKGROUND
+    assert after_intro.action == ASK_BASELINE
+    assert after_intro.forced_flow_decision == "advance"
 
 
 def test_project_phase_probes_then_moves_on() -> None:

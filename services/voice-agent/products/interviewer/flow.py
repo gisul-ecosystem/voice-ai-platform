@@ -42,12 +42,14 @@ from products.interviewer.prompts import (
     framing_notes,
     prompt_pack,
 )
-from products.interviewer.latency import PUBLISHED_CONTEXT_LIMIT_CHARS
+from products.interviewer.latency import (
+    PUBLISHED_CONTEXT_LIMIT_CHARS,
+    TURN_PROMPT_BUDGET_CHARS,
+)
 from products.interviewer.validator import (
     GeneratedQuestion,
     fingerprint,
     is_speakable,
-    ladder_fallback_question,
     parse_generated_question,
     validate_generated_question,
 )
@@ -64,27 +66,13 @@ CLOSING_MESSAGE = (
     "This concludes the interview."
 )
 FALLBACK_FOLLOWUP = (
-    "What was the hardest decision on that work, and what would have gone wrong "
-    "if you chose the other option?"
-)
-FALLBACK_FOLLOWUP_NEUTRAL = (
-    "Thank you. Could you share one specific example of work you personally "
-    "handled, and what happened as a result?"
-)
-
-# Walked in order when the ladder example for the current intent was already asked.
-FALLBACK_PROBE_ROTATION = (
-    "What exactly did you change, and what did that number go from and to?",
-    "Which parts of that were your call?",
-    "Why that approach rather than the obvious alternative?",
-    "Where would that approach break, and what changes at ten times the load?",
-    "If you had half the time, what would you have cut?",
+    "Let's move on — I'd like to explore the next topic."
 )
 
 INTERVIEWER_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Behave like a thoughtful human in the room, not a script or a form. Invent every spoken line yourself from the materials below.
 
 How you interview:
-- Listen to the candidate's last answer as a whole story (what they did, why, how, what happened). Do not pick a keyword and bounce it back.
+- Listen to the candidate's last answer as a whole story (what they did, why, how, what happened). Do not pick a keyword and bounce it back. Never say Regarding or tell me more about this.
 - Project questions must come from BOTH that last answer and the resume facts for the current project. If they skipped a resume detail, ask how it fits what they just said. If they already covered it, go one layer deeper in their answer.
 - Keep this order, without announcing it: intro, then resume projects one by one, then job skills as their own questions (not hung on a project), then DSA as standalone algorithm/coding questions if the job needs it, then role-fit only if time remains.
 - One or two questions per project or skill, then ADVANCE to the next uncovered item. Do not keep circling the same project. Skills and DSA are independent of projects. If CURRENT SECTION is jd_requirement and the topic is DSA, invent a coding or algorithm question. Do not mention their projects. Do not connect it to a project.
@@ -715,6 +703,7 @@ class InterviewFlow:
         self.phase_started_at = self.started_at
         self.consecutive_unusable = 0
         self.last_policy_decision: PolicyDecision | None = None
+        self._used_soft_advance = False
         self.last_answer_usability = "usable"
         self.last_answer_quality = "partial"
         self.last_answer_evaluation: dict[str, Any] | None = None
@@ -944,6 +933,48 @@ class InterviewFlow:
             close_after=self.close_after_unusable,
         )
 
+    def _first_competency_phase_index(self) -> int | None:
+        for index, phase in enumerate(self.phases):
+            if phase.get("competency_id"):
+                return index
+        return None
+
+    def _warmup_budget_exhausted(self) -> bool:
+        if len(self.candidate_turns) < 1:
+            return False
+        elapsed = max(0, int(time.monotonic() - self.started_at))
+        return (
+            elapsed >= 180
+            or len(self.interviewer_turns) >= 4
+        )
+
+    def _skip_warmup_to_competencies(self) -> bool:
+        """Jump past opening/projects once the short warmup budget is spent."""
+        target = self._first_competency_phase_index()
+        if target is None or self.phase_index >= target:
+            return False
+        if not self._warmup_budget_exhausted():
+            return False
+        previous = self.current_phase().get("name")
+        self.phase_index = target
+        self.probe_count = 0
+        self.probes_without_gain = 0
+        self.phase_started_at = time.monotonic()
+        self.focus_item = ""
+        self._ensure_focus(None)
+        logger.info(
+            "phase_advanced",
+            extra={
+                "event": "phase_advanced",
+                "from_phase": previous,
+                "to_phase": self.current_phase().get("name"),
+                "forced": True,
+                "intent": self._phase_intent(),
+                "reason": "warmup_budget_exhausted",
+            },
+        )
+        return True
+
     def _current_policy_decision(
         self,
         *,
@@ -952,6 +983,8 @@ class InterviewFlow:
     ) -> PolicyDecision | None:
         if not self.policy_mode:
             return None
+        if advance_if_ready:
+            self._skip_warmup_to_competencies()
         decision = decide_next_action(
             self._policy_state(pending_candidate_turn=pending_candidate_turn)
         )
@@ -962,6 +995,8 @@ class InterviewFlow:
             # single hop — cascading through multiple phases in one turn would let
             # a trivially "complete" competency get skipped without ever being asked.
             self.apply_decision("advance")
+            if self._warmup_budget_exhausted():
+                self._skip_warmup_to_competencies()
             decision = decide_next_action(
                 self._policy_state(pending_candidate_turn=pending_candidate_turn)
             )
@@ -1291,19 +1326,25 @@ class InterviewFlow:
                 (self.coverage.get(competency_id) or {}).get("covered_intents") or []
             )
             facts_before = len(self.known_facts.get(competency_id, []))
-            moved_slots = promote(
-                self.evidence_ledger,
-                competency_id=competency_id,
-                demonstrated=getattr(answer_eval, "slots_demonstrated", ()) or (),
-                claimed=getattr(answer_eval, "slots_claimed", ()) or (),
+            factually_wrong = (
+                answer_eval is not None
+                and getattr(answer_eval, "factually_correct", True) is False
             )
-            apply_coverage(
-                self.coverage,
-                competency_id=competency_id,
-                covered_intents=covered,
-                evidence_id=f"ev_{self.last_question_competency_id or competency_id}_{len(self.candidate_turns)}",
-                answer_eval=answer_eval,
-            )
+            moved_slots = ()
+            if not factually_wrong:
+                moved_slots = promote(
+                    self.evidence_ledger,
+                    competency_id=competency_id,
+                    demonstrated=getattr(answer_eval, "slots_demonstrated", ()) or (),
+                    claimed=getattr(answer_eval, "slots_claimed", ()) or (),
+                )
+                apply_coverage(
+                    self.coverage,
+                    competency_id=competency_id,
+                    covered_intents=covered,
+                    evidence_id=f"ev_{self.last_question_competency_id or competency_id}_{len(self.candidate_turns)}",
+                    answer_eval=answer_eval,
+                )
             after = len(
                 (self.coverage.get(competency_id) or {}).get("covered_intents") or []
             )
@@ -1541,20 +1582,74 @@ class InterviewFlow:
         return "interviewer-system-v2"
 
     def _seniority_question_guidance(self) -> str:
+        return self._competency_question_guidance()
+
+    def _competency_family(self, competency: dict | None = None) -> str:
+        blob = " ".join(
+            [
+                str((competency or {}).get("name") or ""),
+                str((competency or {}).get("id") or ""),
+                str(self.focus_item or ""),
+                " ".join(str(item) for item in ((competency or {}).get("topics") or [])),
+            ]
+        ).lower()
+        if is_dsa_topic(blob) or any(
+            token in blob for token in ("algorithm", "data structure", "leetcode")
+        ):
+            return "dsa"
+        if any(token in blob for token in ("python",)):
+            return "python"
+        if any(
+            token in blob
+            for token in ("machine learning", "ml ", " ml", "model evaluation")
+        ):
+            return "ml"
+        if any(token in blob for token in ("sql", "database", "postgres", "mysql")):
+            return "sql"
+        return "generic"
+
+    def _competency_question_guidance(self, competency: dict | None = None) -> str:
         level = self._job_target_level().strip().lower()
-        if level in {"intern", "junior", "entry", "entry_level"}:
+        junior = level in {"intern", "junior", "entry", "entry_level"}
+        senior = level in {"senior", "lead", "staff", "principal"}
+        family = self._competency_family(competency)
+        if family == "dsa":
+            if junior:
+                return "This is a DSA competency. Ask about arrays, strings, basic searching, sorting, or recursion."
+            if senior:
+                return "This is a DSA competency. Ask about algorithmic design, complexity trade-offs, or distributed algorithms."
+            return "This is a DSA competency. Ask about trees, graphs, recursion, or dynamic programming."
+        if family == "python":
+            if junior:
+                return "This is a Python competency. Ask about types, functions, iteration, or common standard-library use."
+            if senior:
+                return "This is a Python competency. Ask about concurrency, performance, or API design choices."
+            return "This is a Python competency. Ask about OOP, generators, errors, or packaging."
+        if family == "ml":
+            if junior:
+                return "This is a machine-learning competency. Ask about train/test splits, features, or overfitting."
+            if senior:
+                return "This is a machine-learning competency. Ask about production ML, evaluation trade-offs, or failure modes."
+            return "This is a machine-learning competency. Ask about model choice, metrics, or leakage."
+        if family == "sql":
+            if junior:
+                return "This is a SQL competency. Ask about SELECT, JOIN, or GROUP BY."
+            if senior:
+                return "This is a SQL competency. Ask about schema design, consistency, or query planning."
+            return "This is a SQL competency. Ask about window functions, indexes, or EXPLAIN."
+        if junior:
             return (
-                "Ask for a concrete implementation or debugging example at an accessible scope; "
-                "test fundamentals, ownership, and reasoning without assuming architecture leadership."
+                "Ask a concrete, accessible question from the current competency definition. "
+                "Do not default to a DSA puzzle."
             )
-        if level in {"senior", "lead", "staff", "principal"}:
+        if senior:
             return (
-                "Ask for concrete design trade-offs, operational consequences, and technical leadership "
-                "at the scope appropriate to this role."
+                "Ask a judgment or trade-off question from the current competency definition. "
+                "Do not default to a DSA puzzle."
             )
         return (
-            "Ask for a concrete implementation decision, the reasoning behind it, and the resulting impact "
-            "at an independent contributor scope."
+            "Ask an applied question from the current competency definition. "
+            "Do not default to a DSA puzzle."
         )
 
     def _resume_project_context(self) -> str:
@@ -1565,14 +1660,13 @@ class InterviewFlow:
             excerpt = self._resume_project_context()
             if excerpt:
                 return f"Resume project excerpt for {self.focus_item}:\n{excerpt}"
-        if self._phase_intent() == "jd_requirement" or self.policy_mode:
-            focus = self.focus_item or "this competency"
-            return (
-                "Published interview-brain competency selected for this turn: "
-                f"{focus}. Use its configured definition, evidence, and ladder objective; "
-                "use the JD only to make that competency question concrete."
-            )
-        return f"Candidate background focus: {self.focus_item}"
+            return f"Resume project: {self.focus_item or 'this project'}"
+        focus = self.focus_item or "this competency"
+        return (
+            "Standalone competency for this turn: "
+            f"{focus}. Use only its definition, evidence, and seniority guidance. "
+            "Do not mention resume projects."
+        )
 
     def _validate_prompt_briefing(
         self,
@@ -1638,6 +1732,36 @@ class InterviewFlow:
             if isinstance(intelligence, dict):
                 role = intelligence.get("role") or {}
         active_focus = self.focus_item or str(competency.get("name") or "this requirement")
+        section = decision.section if decision else self._phase_intent()
+        is_resume_project = bool(project_name) or section == "resume_project"
+        include_resume_materials = is_resume_project or section in {
+            "opening",
+            "candidate_map",
+            "await_introduction",
+        }
+        entered_competency = (
+            (decision.section if decision else "") == "competency_assessment"
+            and not any(
+                infer_phase_intent(phase) not in {"intro", "resume_project"}
+                and phase.get("competency_id")
+                for phase in self.phases[: self.phase_index]
+            )
+            and not self.interviewer_turns
+        )
+        if (
+            (decision.section if decision else "") == "competency_assessment"
+            and self.phase_index > 0
+            and infer_phase_intent(self.phases[self.phase_index - 1]) == "resume_project"
+            and self.probe_count == 0
+        ):
+            entered_competency = True
+        transition_context = (
+            "You are now moving from the project discussion to a structured technical assessment. "
+            "Thank them briefly for the project walkthrough, then invent the first standalone "
+            "question for the current competency."
+            if entered_competency
+            else ""
+        )
         briefing = {
             "action": decision.action if decision else "OPEN_INTERVIEW",
             "intent": intent,
@@ -1670,14 +1794,23 @@ class InterviewFlow:
             "known_facts": self._known_facts_brief(competency_id),
             "last_probe_shape": self._probe_shape_guidance(competency_id),
             "action_phrasing": action_phrasing_note(decision.action if decision else None),
-            "interview_structure": self._interview_structure_text(),
-            "published_context": self._published_context_text(competency_id),
+            "interview_structure": self._interview_structure_text(
+                redact_resume_projects=not include_resume_materials
+            ),
+            "published_context": self._published_context_text(
+                competency_id, include_resume=include_resume_materials
+            ),
             "job_target_level": self._job_target_level(),
-            "seniority_question_guidance": self._seniority_question_guidance(),
+            "seniority_question_guidance": self._competency_question_guidance(competency),
             "candidate_framing": self._profile_type(),
-            "claim_brief": claim_brief(self.candidate_profile),
-            "claim_guidance": self._claim_guidance(),
-            "resume_excerpt": clip_source_text(self.resume_text, 800),
+            "claim_brief": claim_brief(self.candidate_profile)
+            if include_resume_materials
+            else "(do not reference resume claims on this competency turn)",
+            "claim_guidance": self._claim_guidance() if include_resume_materials else "",
+            "resume_excerpt": clip_source_text(self.resume_text, 800)
+            if include_resume_materials
+            else "(resume omitted — ask a standalone competency question)",
+            "transition_context": transition_context,
             "jd_excerpt": clip_source_text(self.job_description, 2_000),
             "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-2:])
             or "(none yet)",
@@ -1693,11 +1826,25 @@ class InterviewFlow:
         system = prompt_pack(self._prompt_version())
         if last_candidate_turn:
             self._validate_prompt_briefing(briefing, TURN_INSTRUCTIONS_V2, "TURN_INSTRUCTIONS_V2")
-            template = TURN_INSTRUCTIONS_V2.format_map(briefing)
-            if len(system) + len(template) + 2 > 8500:
-                compact = dict(briefing)
+            compact = dict(briefing)
+            template = TURN_INSTRUCTIONS_V2.format_map(compact)
+            for published_limit, structure_limit, jd_limit in (
+                (2_400, 1_200, 2_000),
+                (900, 400, 400),
+                (400, 240, 200),
+                (180, 120, 120),
+            ):
+                if len(system) + len(template) + 2 <= TURN_PROMPT_BUDGET_CHARS:
+                    break
                 compact["published_context"] = clip_source_text(
-                    briefing["published_context"], 120
+                    briefing["published_context"], published_limit
+                )
+                compact["interview_structure"] = clip_source_text(
+                    briefing["interview_structure"], structure_limit
+                )
+                compact["jd_excerpt"] = clip_source_text(briefing["jd_excerpt"], jd_limit)
+                compact["resume_excerpt"] = clip_source_text(
+                    briefing["resume_excerpt"], min(160, jd_limit)
                 )
                 template = TURN_INSTRUCTIONS_V2.format_map(compact)
             return system + "\n\n" + template, last_candidate_turn
@@ -1716,18 +1863,28 @@ class InterviewFlow:
 
     def _answer_adaptation_hint(self) -> str:
         if self.last_answer_quality in {"off_topic", "unsupported"}:
-            return "stay in the same competency, acknowledge briefly, and ask an easier adjacent question"
+            return (
+                "the last transcript is not a usable answer — do not quote it; "
+                "name the current topic and ask an easier, specific question"
+            )
         if self.last_answer_quality in {"unclear", "partial"}:
-            return "ask for the specific missing evidence before changing topic"
+            return (
+                "ask for one missing detail in plain words; do not say "
+                "'regarding' or 'tell me more about this'"
+            )
         if self.last_answer_quality == "sufficient":
             return "increase depth by at most one level or move to the next uncovered topic"
         return "continue with the policy-required intent"
 
-    def _interview_structure_text(self) -> str:
+    def _interview_structure_text(self, *, redact_resume_projects: bool = False) -> str:
         lines: list[str] = []
         for index, phase in enumerate(self.phases, start=1):
+            intent = infer_phase_intent(phase)
             name = str(phase.get("name") or "section").strip()
             topics = ", ".join(str(item) for item in (phase.get("topics") or [])[:4])
+            if redact_resume_projects and intent == "resume_project":
+                name = "resume project"
+                topics = "resume project"
             depth = phase.get("max_depth") or "standard"
             probes = phase.get("max_probes") or "standard"
             lines.append(
@@ -1736,12 +1893,17 @@ class InterviewFlow:
             )
         return "\n".join(lines) or "(structure unavailable)"
 
-    def _published_context_text(self, competency_id: str | None = None) -> str:
+    def _published_context_text(
+        self,
+        competency_id: str | None = None,
+        *,
+        include_resume: bool = False,
+    ) -> str:
         definition = self.interview_definition
         if not isinstance(definition, dict):
             return "(published definition unavailable)"
 
-        def values(items: Any, limit: int = 12) -> str:
+        def values(items: Any, limit: int = 4) -> str:
             result: list[str] = []
             for item in items if isinstance(items, list) else []:
                 if isinstance(item, dict):
@@ -1749,15 +1911,40 @@ class InterviewFlow:
                 else:
                     text = str(item).strip()
                 if text:
-                    result.append(text[:300])
+                    result.append(text[:80])
             return "; ".join(result[:limit]) or "(none)"
 
         intelligence = definition.get("job_intelligence")
         role = intelligence.get("role") if isinstance(intelligence, dict) else {}
+        ladders = {
+            str(item.get("competency_id")): item
+            for item in definition.get("question_ladders") or []
+            if isinstance(item, dict)
+        }
         lines = [
             "REFERENCE CONTEXT (use for technical grounding; policy remains authoritative):",
             f"Role: {role.get('title', '')} | Domain: {role.get('domain', '')} | Level: {role.get('target_level', '')}",
+            "Competencies and technical coverage:",
         ]
+        for item in (definition.get("competencies") or [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            item_competency_id = str(item.get("id") or "")
+            expand = not competency_id or item_competency_id == competency_id
+            name = item.get("name", item_competency_id)
+            if not expand:
+                lines.append(f"- {name}")
+                continue
+            lines.append(f"- {name}: {str(item.get('definition') or '')[:500]}")
+            lines.append(f"  Evidence: {values(item.get('evidence_expected'), 8)}")
+            ladder = ladders.get(item_competency_id) or {}
+            for step in (ladder.get("levels") or [])[:5]:
+                if isinstance(step, dict):
+                    lines.append(
+                        f"  Depth {step.get('depth')}, {step.get('intent')}: "
+                        f"{str(step.get('objective') or '')[:240]} | "
+                        f"Example: {str(step.get('example_question') or '')[:300]}"
+                    )
         if isinstance(intelligence, dict):
             for label, key in (
                 ("Responsibilities", "responsibilities"),
@@ -1769,34 +1956,27 @@ class InterviewFlow:
                 ("Expected outcomes", "expected_outcomes"),
             ):
                 lines.append(f"{label}: {values(intelligence.get(key))}")
-
-        ladders = {
-            str(item.get("competency_id")): item
-            for item in definition.get("question_ladders") or []
-            if isinstance(item, dict)
-        }
-        lines.append("Competencies and technical coverage:")
-        for item in (definition.get("competencies") or [])[:8]:
-            if not isinstance(item, dict):
-                continue
-            item_competency_id = str(item.get("id") or "")
-            lines.append(
-                f"- {item.get('name', item_competency_id)}: {str(item.get('definition') or '')[:500]}"
-            )
-            lines.append(f"  Evidence: {values(item.get('evidence_expected'), 8)}")
-            ladder = ladders.get(item_competency_id) or {}
-            for step in (ladder.get("levels") or [])[:5]:
-                if isinstance(step, dict):
-                    lines.append(
-                        f"  Depth {step.get('depth')}, {step.get('intent')}: "
-                        f"{str(step.get('objective') or '')[:240]} | "
-                        f"Example: {str(step.get('example_question') or '')[:300]}"
-                    )
-        lines.append("Resume facts:")
-        lines.append(claim_brief(self.candidate_profile, limit=30))
+        if include_resume:
+            lines.append("Resume facts:")
+            lines.append(claim_brief(self.candidate_profile, limit=30))
         lines.append("Raw JD excerpt:")
         lines.append(clip_source_text(self.job_description, 3000))
         return "\n".join(lines)[:PUBLISHED_CONTEXT_LIMIT_CHARS]
+
+    def _soft_advance_speech(self, policy: PolicyDecision | None) -> str:
+        nxt = self.next_phase()
+        name = (
+            str((nxt or {}).get("name") or "").strip()
+            or str((policy.competency_id if policy else "") or "").strip()
+            or "the next topic"
+        )
+        self._used_soft_advance = True
+        # Include phase/probe so a second repair on the same seam is not a
+        # verbatim duplicate of the previous transition line.
+        return (
+            f"Let's move on — {name} is something I'd like to explore "
+            f"({self.phase_index + 1}.{self.probe_count + 1})."
+        )
 
     def _fallback_spoken_question(
         self,
@@ -1805,45 +1985,11 @@ class InterviewFlow:
         *,
         last_turn: str | None = None,
     ) -> str:
-        if last_candidate_turn is None:
-            last_candidate_turn = last_turn
-        intent = policy.intent if policy else "opening"
-        competency_id = policy.competency_id if policy else None
+        del last_candidate_turn, last_turn
         if not self.policy_mode:
+            self._used_soft_advance = True
             return FALLBACK_FOLLOWUP
-        # Checked against the whole interview, not a recent window: a canned
-        # question reappearing ten turns later is still a repeat to the candidate.
-        asked = {fingerprint(q) for q in self.interviewer_turns}
-        candidate_turn = last_candidate_turn or (
-            self.candidate_turns[-1] if self.candidate_turns else None
-        )
-        candidate = ladder_fallback_question(
-            self.interview_definition,
-            competency_id=competency_id,
-            intent=intent,
-            last_candidate_turn=candidate_turn,
-        )
-        if fingerprint(candidate) not in asked:
-            return candidate
-        # The ladder example for this intent was already spoken; walk the rest of
-        # the ladder rather than repeating it verbatim.
-        for step in ladder_steps(self.interview_definition, competency_id):
-            example = str(step.get("example_question") or "").strip()
-            if example and fingerprint(example) not in asked:
-                return example
-        for generic in FALLBACK_PROBE_ROTATION:
-            if fingerprint(generic) not in asked:
-                return generic
-        # Everything canned has been used. Repeat the one asked longest ago so the
-        # repetition is at least maximally spaced.
-        order = [fingerprint(q) for q in self.interviewer_turns]
-        pool = [candidate, *FALLBACK_PROBE_ROTATION]
-        return min(
-            pool,
-            key=lambda text: order.index(fingerprint(text))
-            if fingerprint(text) in order
-            else -1,
-        )
+        return self._soft_advance_speech(policy)
 
     _REPAIR_HINTS = {
         "duplicate_question": "that question repeats one already asked — ask about a different, unexplored angle",
@@ -1856,6 +2002,9 @@ class InterviewFlow:
         "depth_jump": "advance depth by at most one level",
         "unknown_claim_id": "only cite resume claim ids that were supplied",
         "empty_question": "the question field was empty",
+        "generic_parrot_question": (
+            "do not say Regarding or tell me more; name the topic and ask a real question"
+        ),
     }
 
     def _repair_instruction(self, reasons: list[str]) -> str:
@@ -1899,6 +2048,9 @@ class InterviewFlow:
             job_description=self.job_description,
             resume_text=self.resume_text,
             recent_turns=self.candidate_turns[-4:],
+            resume_focus=self.focus_item,
+            resume_projects=self.resume_projects,
+            require_resume_grounding=self._phase_intent() == "resume_project",
         )
         if not result.ok:
             logger.info(
@@ -1951,6 +2103,7 @@ class InterviewFlow:
                     recent_turns=self.candidate_turns[-4:]
                     + ([last_candidate_turn] if last_candidate_turn else []),
                     resume_focus=self.focus_item,
+                    resume_projects=self.resume_projects,
                     require_resume_grounding=self._phase_intent() == "resume_project",
                 )
                 if result.ok:
@@ -1990,6 +2143,9 @@ class InterviewFlow:
             resume_text=self.resume_text,
             recent_turns=self.candidate_turns[-4:]
             + ([last_candidate_turn] if last_candidate_turn else []),
+            resume_focus=self.focus_item,
+            resume_projects=self.resume_projects,
+            require_resume_grounding=self._phase_intent() == "resume_project",
         )
         self._capture_replay(raw, validator_ok=result.ok, reasons=result.reasons)
         if result.ok:
@@ -2222,6 +2378,9 @@ class InterviewFlow:
                     )
             if spoken_question:
                 generated.question = spoken_question
+            if getattr(self, "_used_soft_advance", False):
+                generated.decision = "advance"
+                self._used_soft_advance = False
             decision, question = generated.decision, generated.question
             self._remember_generated(generated, policy)
             self._refine_answer_quality(last_candidate_turn, generated)
@@ -2402,7 +2561,11 @@ class InterviewFlow:
             )
         question = "".join(spoken_parts).strip()
         if not question:
-            question = self._fallback_opening() if is_opening else FALLBACK_FOLLOWUP
+            question = (
+                self._fallback_opening()
+                if is_opening
+                else self._fallback_spoken_question(self.last_policy_decision)
+            )
             yield question
         self._commit_turn(
             last_candidate_turn,
