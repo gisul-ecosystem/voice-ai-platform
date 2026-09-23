@@ -137,14 +137,34 @@ def _role_rubric(
     ]
 
 
+# JD boilerplate that gets extracted along with the actual skill name.
+_LABEL_PREFIXES = re.compile(
+    r"^(?:required|requirements?|must[- ]have|nice[- ]to[- ]have|preferred|essential|"
+    r"desired|responsibilities|responsibility|skills?|experience(?:\s+(?:in|with))?|"
+    r"strong|proven|solid|deep|hands[- ]on|excellent|good|expert(?:ise)?(?:\s+in)?|"
+    r"knowledge\s+of|familiarity\s+with|proficiency\s+(?:in|with)|ability\s+to)"
+    r"\s*[:\-–]?\s+",
+    re.IGNORECASE,
+)
+
+
 def normalize_skill_label(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", (value or "")).strip(" -•:")
     if not cleaned:
         return cleaned
+    # Strip stacked prefixes: "Required: strong data structures" -> "data structures".
+    for _ in range(3):
+        stripped = _LABEL_PREFIXES.sub("", cleaned, count=1).strip(" -•:")
+        if stripped == cleaned or not stripped:
+            break
+        cleaned = stripped
     alias = _SKILL_ALIASES.get(cleaned.lower())
     if alias:
         return alias
-    return cleaned
+    # A label that is now a bare fragment is worse than the original.
+    if len(cleaned) < 2:
+        return re.sub(r"\s+", " ", (value or "")).strip(" -•:")
+    return cleaned[:1].upper() + cleaned[1:]
 
 
 def _evidence_for(name: str, jd_hints: list[str]) -> list[str]:

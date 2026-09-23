@@ -61,6 +61,22 @@ HOOK_STOPWORDS = frozenset(
     }
 )
 
+# Soft validation reasons: a question failing only these is still spoken because a
+# real question beats a canned one that ignores what the candidate just said.
+HARD_BLOCK_REASONS: frozenset[str] = frozenset(
+    (
+        "empty_question",
+        "protected_topic",
+        "duplicate_question",
+    )
+)
+
+
+def is_speakable(reasons: list[str]) -> bool:
+    """True when the question may be spoken despite failing validation."""
+    return not any(reason in HARD_BLOCK_REASONS for reason in reasons)
+
+
 SKIP_HOOK_INTENTS = frozenset(
     {
         "opening",
@@ -114,7 +130,24 @@ TRIVIA_MARKERS = (
     "puzzle",
 )
 
-UNGROUNDED_TECH_TERMS = (
+# Only these justify discarding the model's question. Everything else is a
+# quality note: worth a repair retry and worth logging, but a slightly imperfect
+# real question beats a canned one that ignores what the candidate just said.
+HARD_BLOCK_REASONS: frozenset[str] = frozenset(
+    (
+        "empty_question",
+        "protected_topic",
+        "duplicate_question",
+    )
+)
+
+
+def is_speakable(reasons: list[str]) -> bool:
+    """True when the question may be spoken despite failing validation."""
+    return not any(reason in HARD_BLOCK_REASONS for reason in reasons)
+
+
+UNGROUNDED_TECH_TERMS = TECH_TERMS = (
     "api",
     "schema",
     "queue",

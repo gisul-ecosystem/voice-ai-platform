@@ -52,6 +52,9 @@ _STT_CHUNK_BYTES = _STT_SAMPLE_RATE // 20 * 2  # 50 ms of 16-bit mono
 # Sarvam transcript arriving just after speech_end is worth the small delay.
 _SARVAM_FINAL_GRACE_SECONDS = 0.6
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+# Upper bound on a single TTS request so very long replies still start quickly.
+# Interview questions sit well under this, so they synthesise in one piece.
+_MAX_SYNTH_CHARS = 600
 
 
 def _to_api_error(exc: Exception) -> APIConnectionError:
@@ -520,10 +523,16 @@ class _LaptopSynthesizeStream(tts.SynthesizeStream):
                 buffer = ""
                 continue
             buffer += data
-            pieces = _SENTENCE_SPLIT.split(buffer)
-            if len(pieces) > 1:
-                buffer = pieces[-1]
-                await emit_text(" ".join(pieces[:-1]))
+            # One synthesis per reply keeps the audio continuous. Splitting on
+            # sentences issues a separate request each time and the join is
+            # audible. Only break up genuinely long text so first audio is not
+            # held back; stream_synthesize already streams within a request.
+            if len(buffer) >= _MAX_SYNTH_CHARS:
+                split_at = buffer.rfind(" ", 0, _MAX_SYNTH_CHARS)
+                if split_at <= 0:
+                    split_at = _MAX_SYNTH_CHARS
+                await emit_text(buffer[:split_at])
+                buffer = buffer[split_at:].lstrip()
         await emit_text(buffer)
         output_emitter.end_segment()
         output_emitter.flush()

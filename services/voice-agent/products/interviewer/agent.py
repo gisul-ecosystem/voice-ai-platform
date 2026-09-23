@@ -38,6 +38,8 @@ class AaptorAgent(Agent):
         brain_bridge: BrainSessionBridge | None = None,
         interview_definition: dict | None = None,
         candidate_profile: dict | None = None,
+        difficulty: str | None = None,
+        language: str | None = None,
     ) -> None:
         super().__init__(
             instructions=(
@@ -64,6 +66,10 @@ class AaptorAgent(Agent):
             flow_kwargs["interview_definition"] = interview_definition
         if candidate_profile is not None:
             flow_kwargs["candidate_profile"] = candidate_profile
+        if difficulty:
+            flow_kwargs["difficulty"] = difficulty
+        if language:
+            flow_kwargs["language"] = language
         restored_state = dict(initial_state or {})
         self._sequence_number = int(restored_state.pop("initial_sequence_number", 0))
         # Brain metadata is not InterviewFlow constructor input.
@@ -176,13 +182,15 @@ class AaptorAgent(Agent):
         # Claim the opening before awaiting synthesis so a concurrent LLM callback
         # cannot schedule a second opening/question for the same room.
         self._opened = True
-        self._opening_in_progress = True
+        logger.info("interviewer_on_enter_start", extra={"event": "interviewer_on_enter_start"})
         try:
             parts: list[str] = []
             async for chunk in self.flow.generate_next_question_stream(None):
                 parts.append(chunk)
             opening = "".join(parts).strip() or FALLBACK_OPENING
+            logger.info("interviewer_speaking_opening", extra={"event": "interviewer_speaking_opening", "opening": opening})
             await self.session.say(opening, allow_interruptions=False)
+            logger.info("interviewer_speaking_opening_done", extra={"event": "interviewer_speaking_opening_done"})
             self._last_agent_text = opening
             turn_id = await self._record("agent", opening)
             await self._persist_brain_after_exchange(

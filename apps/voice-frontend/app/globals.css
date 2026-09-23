@@ -2028,7 +2028,7 @@ select:focus-visible,
   min-height: 0;
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
 }
@@ -2095,9 +2095,13 @@ select:focus-visible,
 .interview-workspace .transcript-panel {
   min-height: 0;
   display: grid;
+  /* Heading stays put; only the list scrolls, so the newest line is always
+     visible at the bottom and older lines scroll up out of view. */
   grid-template-rows: auto minmax(0, 1fr);
   margin: 0;
   padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
   overflow: hidden;
   background: var(--surface);
 }
@@ -2131,7 +2135,9 @@ select:focus-visible,
 }
 
 .interview-workspace .transcript-list {
+  min-height: 0;
   max-height: none;
+  align-content: start;
   padding: 16px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -3108,6 +3114,12 @@ select:focus-visible,
 .scorecard-missing {
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.scorecard-proven {
+  color: var(--success);
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 .scorecard-anchor {

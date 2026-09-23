@@ -470,10 +470,22 @@ def build_scorecard_bundle(
         best_text = ""
         missing = list(expected)
         excerpts: list[str] = []
+        proven_dimensions: list[str] = []
+        claimed_dimensions: list[str] = []
         for answer in related_answers:
             text = str(answer.get("final_transcript") or "").strip()
             if not text:
                 continue
+            evaluation = answer.get("answer_evaluation")
+            if isinstance(evaluation, dict):
+                for slot in evaluation.get("slots_demonstrated") or []:
+                    name = str(slot).strip()
+                    if name and name not in proven_dimensions:
+                        proven_dimensions.append(name)
+                for slot in evaluation.get("slots_claimed") or []:
+                    name = str(slot).strip()
+                    if name and name not in claimed_dimensions:
+                        claimed_dimensions.append(name)
             strength = _strength_for_answer(text, expected, answer)
             rank = {
                 "none": 0,
@@ -578,6 +590,12 @@ def build_scorecard_bundle(
                 contradictory_evidence_ids=contradicted_evidence_ids[:50],
                 missing_evidence=missing[:20],
                 missing_intents=missing_intents[:20],
+                proven_dimensions=[
+                    slot for slot in proven_dimensions if slot not in claimed_dimensions
+                ][:12],
+                claimed_dimensions=[
+                    slot for slot in claimed_dimensions if slot not in proven_dimensions
+                ][:12],
                 excerpts=excerpts[:8],
                 confidence=(
                     0.0

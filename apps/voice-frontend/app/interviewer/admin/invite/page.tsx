@@ -52,7 +52,20 @@ export default function InviteCandidatesPage() {
       const upload = await fetch(`/api/admin/candidates/${created.candidate_id}/resume`, { method: "POST", body: form });
       if (!upload.ok) throw new Error("CV upload failed.");
       const settings = state as Record<string, unknown>;
-      const schedule = await fetch("/api/interviews", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ candidateId: created.candidate_id, definitionId, candidateName: candidate.name, candidateEmail: candidate.email, startsAt: new Date().toISOString(), joinEarlyMinutes: 0, lateGraceMinutes: 120, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", jobDescription: settings.jobDescription, resumeText: "stored on candidate record", interviewSetup: { title: settings.title, role: settings.role, seniority: settings.seniority, difficulty: "applied", durationMinutes: Number(settings.durationMinutes || 30), language: "English", competencies: String(settings.competencies || "").split(",").map((item) => item.trim()).filter(Boolean), maxProbesPerPhase: 2, monitoringEnabled: true, recordingEnabled: false } }) });
+      // The published competencies are the real interview scope; the design
+      // page's "assessment areas" box is only an optional hint and is normally
+      // empty now that competencies come from the job description.
+      const publishedNames = [
+        ...(Array.isArray(published?.competencies) ? published.competencies : []),
+        ...(Array.isArray(draft?.competencies) ? draft.competencies : []),
+      ]
+        .map((item) => (item && typeof item === "object" ? String((item as Record<string, unknown>).name || "") : ""))
+        .map((name) => name.trim())
+        .filter(Boolean);
+      const hintNames = String(settings.competencies || "").split(",").map((item) => item.trim()).filter(Boolean);
+      const setupCompetencies = Array.from(new Set(publishedNames.length ? publishedNames : hintNames)).slice(0, 12);
+      if (setupCompetencies.length === 0) { throw new Error("No competencies found. Regenerate the interview structure."); }
+      const schedule = await fetch("/api/interviews", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ candidateId: created.candidate_id, definitionId, candidateName: candidate.name, candidateEmail: candidate.email, startsAt: new Date().toISOString(), joinEarlyMinutes: 0, lateGraceMinutes: 120, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", jobDescription: settings.jobDescription, resumeText: "stored on candidate record", interviewSetup: { title: settings.title, role: settings.role, seniority: settings.seniority, difficulty: String(settings.difficulty || "applied"), durationMinutes: Number(settings.durationMinutes || 30), language: String(settings.language || "English"), competencies: setupCompetencies, maxProbesPerPhase: 3, monitoringEnabled: settings.monitoringEnabled !== false, recordingEnabled: settings.recordingEnabled === true } }) });
       const scheduled = await schedule.json().catch(() => ({}));
       if (!schedule.ok) throw new Error(String(scheduled.error || "Interview scheduling failed."));
       update(index, { invite: String(scheduled.candidatePath), busy: false });

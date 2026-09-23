@@ -135,6 +135,8 @@ class PolicyState:
     contradiction_pending: bool = False
     # Resume project being walked through, when the active phase is a project phase.
     project_name: str | None = None
+    # Set once the closing "anything to add?" has already been asked.
+    final_addition_offered: bool = False
     clarify_after: int = 1
     rephrase_after: int = 2
     change_topic_after: int = 3
@@ -170,13 +172,19 @@ def outline_from_definition(
             "source": "generic",
         },
     ]
+    valid = [item for item in competencies if isinstance(item, dict)]
+    # Competencies are the assessment; the resume walkthrough only supplies
+    # concrete material to probe. Reserve competency time FIRST, then spend what
+    # is left on projects, so a long CV can never squeeze out a required skill.
+    generic_minutes = 7
+    min_per_competency = 3
+    competency_floor = min_per_competency * max(len(valid), 1)
+    project_pool = max(0, duration - generic_minutes - competency_floor)
     projects = [
         str(name).strip()
         for name in (resume_projects or [])
         if str(name).strip()
-    ][:3]
-    # Resume walkthrough sits between the map and the competencies: the candidate
-    # talks about their own work first, then the JD competencies are assessed.
+    ][: max(0, min(2, project_pool // 2))]
     project_budget = 2 if projects else 0
     for project in projects:
         phases.append(
@@ -188,16 +196,24 @@ def outline_from_definition(
                 "intent": "resume_project",
                 "project_name": project,
                 "max_depth": 3,
-                "max_probes": 2,
+                # One opener plus one follow-up: enough to surface the work,
+                # not enough to eat the competency budget.
+                "max_probes": 1,
             }
         )
 
-    reserved = 7 + project_budget * len(projects)
-    remaining = max(8, duration - reserved)
-    per = max(3, remaining // max(len(competencies), 1))
-    for item in competencies:
-        if not isinstance(item, dict):
-            continue
+    reserved = generic_minutes + project_budget * len(projects)
+    remaining = max(competency_floor, duration - reserved)
+    # Recruiter weighting decides how the competency time is split, not an even share.
+    weights = [max(0.0, float(item.get("weight") or 0)) for item in valid]
+    weight_total = sum(weights)
+    even = max(3, remaining // max(len(valid), 1))
+    for item, weight in zip(valid, weights, strict=True):
+        share = (
+            max(3, round(remaining * weight / weight_total))
+            if weight_total > 0
+            else even
+        )
         name = str(item.get("name") or item.get("id") or "competency").strip()
         evidence = [
             str(x).strip()
@@ -207,7 +223,7 @@ def outline_from_definition(
         phases.append(
             {
                 "name": name,
-                "duration_minutes": per,
+                "duration_minutes": share,
                 "topics": evidence[:4] or [name],
                 "source": "jd",
                 "competency_id": item.get("id"),
@@ -499,6 +515,19 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
                 competency_id=state.competency_id,
                 intent="closing",
                 reason="target end reached",
+                section="closing",
+            )
+        if state.final_addition_offered:
+            # Asking "anything else?" repeatedly is the closing-loop failure mode.
+            return PolicyDecision(
+                action=CLOSE_INTERVIEW,
+                forced_flow_decision="close",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="closing",
+                reason="final addition already offered",
                 section="closing",
             )
         return PolicyDecision(

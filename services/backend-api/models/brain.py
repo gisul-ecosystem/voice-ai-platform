@@ -402,6 +402,9 @@ class AnswerEvaluation(BaseModel):
     matches_evidence_expected: bool = False
     needs_clarification: bool = False
     factually_correct: bool = True
+    # Evidence dimensions the answer proved / merely asserted. Mirrors
+    # products/interviewer/evidence.py in the voice agent; without these the
+    # scorecard cannot show WHICH evidence a rating rests on.
     slots_demonstrated: list[str] = Field(default_factory=list, max_length=20)
     slots_claimed: list[str] = Field(default_factory=list, max_length=20)
     contradicts_earlier: bool = False
@@ -483,6 +486,10 @@ class CompetencyScore(BaseModel):
     contradictory_evidence_ids: list[str] = Field(default_factory=list, max_length=50)
     missing_evidence: list[str] = Field(default_factory=list, max_length=20)
     missing_intents: list[str] = Field(default_factory=list, max_length=20)
+    # Technical evidence dimensions the candidate actually demonstrated, so a
+    # reviewer can see what the rating rests on rather than trusting a number.
+    proven_dimensions: list[str] = Field(default_factory=list, max_length=12)
+    claimed_dimensions: list[str] = Field(default_factory=list, max_length=12)
     excerpts: list[str] = Field(default_factory=list, max_length=8)
     confidence: float = Field(ge=0, le=1, default=0)
     review_required: bool = True

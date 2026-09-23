@@ -7,12 +7,10 @@ import re
 import time
 from typing import Any, Protocol
 
-from products.interviewer.latency import PUBLISHED_CONTEXT_LIMIT_CHARS
 from products.interviewer.coverage import (
     apply_coverage,
     classify_live_answer,
     competency_by_id,
-    evidenced_intents,
     first_incomplete_competency,
     init_coverage,
     ladder_steps,
@@ -29,6 +27,13 @@ from products.interviewer.policy import (
     PolicyDecision,
     PolicyState,
 )
+from products.interviewer.evidence import (
+    build_ledger,
+    difficulty_profile,
+    ledger_brief,
+    promote,
+    target_slot_brief,
+)
 from products.interviewer.prompts import (
     OPENING_INSTRUCTIONS_V2,
     TURN_INSTRUCTIONS_V2,
@@ -37,12 +42,12 @@ from products.interviewer.prompts import (
     framing_notes,
     prompt_pack,
 )
+from products.interviewer.latency import PUBLISHED_CONTEXT_LIMIT_CHARS
 from products.interviewer.validator import (
-    SKIP_HOOK_INTENTS,
     GeneratedQuestion,
-    extract_hook_fact,
+    fingerprint,
+    is_speakable,
     ladder_fallback_question,
-    next_probe_shape,
     parse_generated_question,
     validate_generated_question,
 )
@@ -50,14 +55,6 @@ from products.interviewer.validator import (
 logger = logging.getLogger("voice-agent.aaptor")
 
 MAX_PROBES_PER_PHASE = int(os.getenv("MAX_PROBES_PER_PHASE", "8"))
-
-
-def legacy_decision_flow_enabled() -> bool:
-    return os.getenv("ALLOW_LEGACY_INTERVIEW_FLOW", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
 FALLBACK_OPENING = (
     "Hi — thanks for coming in. I'm Aaptor, and I'll be speaking with you today. "
     "Who are you, and what work from the last couple of years are you most proud of?"
@@ -73,6 +70,15 @@ FALLBACK_FOLLOWUP = (
 FALLBACK_FOLLOWUP_NEUTRAL = (
     "Thank you. Could you share one specific example of work you personally "
     "handled, and what happened as a result?"
+)
+
+# Walked in order when the ladder example for the current intent was already asked.
+FALLBACK_PROBE_ROTATION = (
+    "What exactly did you change, and what did that number go from and to?",
+    "Which parts of that were your call?",
+    "Why that approach rather than the obvious alternative?",
+    "Where would that approach break, and what changes at ten times the load?",
+    "If you had half the time, what would you have cut?",
 )
 
 INTERVIEWER_SYSTEM = """You are Aaptor, a senior technical interviewer speaking live. Behave like a thoughtful human in the room, not a script or a form. Invent every spoken line yourself from the materials below.
@@ -217,6 +223,11 @@ def extract_resume_projects(resume_text: str) -> list[str]:
         if in_section:
             bullet = _BULLET.match(line)
             candidate = bullet.group(1) if bullet else line.strip()
+            # A wrapped description continues the previous entry; treating it as
+            # its own project produces mid-sentence fragments like
+            # "against Stripe payouts, cutting manual reconciliation from 6".
+            if not bullet and candidate[:1].islower():
+                continue
             title = _project_title(candidate)
             if title and not _NEXT_HEADING.match(title):
                 titles.append(title)
@@ -350,7 +361,6 @@ def resume_project_excerpt(resume_text: str, project_name: str, *, limit: int = 
                 chunks.append(text)
     excerpt = " ".join(chunks)
     return clip_source_text(excerpt, limit) if excerpt else clip_source_text(cleaned, limit)
-
 def rank_projects_by_competency_gap(
     claims: list[dict],
     *,
@@ -626,6 +636,11 @@ class SpokenJsonQuestionStream:
         self._emitted = len(self.question)
         return extra
 
+    @property
+    def question_complete(self) -> bool:
+        """True once the closing quote of the `question` field has arrived."""
+        return self._done
+
 
 class InterviewFlow:
     """State and question generation independent of LiveKit transport."""
@@ -648,7 +663,8 @@ class InterviewFlow:
         interview_definition: dict[str, Any] | None = None,
         candidate_profile: dict[str, Any] | None = None,
         initial_coverage: dict[str, Any] | None = None,
-        allow_legacy_flow: bool | None = None,
+        difficulty: str | None = None,
+        language: str | None = None,
     ) -> None:
         policy_outline = outline_from_definition(
             interview_definition,
@@ -658,11 +674,6 @@ class InterviewFlow:
             interview_definition if isinstance(interview_definition, dict) else None
         )
         self.policy_mode = bool(policy_outline)
-        self.allow_legacy_flow = (
-            legacy_decision_flow_enabled()
-            if allow_legacy_flow is None
-            else bool(allow_legacy_flow)
-        )
         effective_outline = policy_outline or outline
         self.outline = effective_outline
         self.llm_client = llm_client
@@ -708,9 +719,19 @@ class InterviewFlow:
         self.last_answer_quality = "partial"
         self.last_answer_evaluation: dict[str, Any] | None = None
         self.known_facts: dict[str, list[str]] = {}
-        self.no_gain_probes: dict[str, int] = {}
-        self._last_ledger_answer: tuple[str, str] | None = None
         self.last_probe_shape: dict[str, str] = {}
+        self.probes_without_gain = 0
+        self.contradiction_pending = False
+        self.final_addition_offered = False
+        self._last_target_sent = ""
+        self.difficulty = (difficulty or "applied").strip().lower()
+        self.language = (language or "English").strip() or "English"
+        self.difficulty_profile = difficulty_profile(self.difficulty)
+        self.evidence_ledger = build_ledger(
+            self.interview_definition,
+            target_level=str(self.candidate_profile.get("job_target_level") or "mid"),
+            difficulty=self.difficulty,
+        )
         self.last_question_competency_id: str | None = None
         self.last_question_intent = "opening"
         self.last_question_depth = 1
@@ -752,14 +773,15 @@ class InterviewFlow:
             else max(12, self.target_duration_minutes // 2)
         )
         if self.policy_mode:
-            # Competency phases carry their own probe ceilings.
+            # Competency phases carry their own probe ceilings; the global cap is a
+            # backstop, so it must not clamp a recruiter's per-competency setting.
             phase_caps = [
                 int(phase.get("max_probes") or max_probes_per_phase)
                 for phase in self.phases
                 if phase.get("competency_id")
             ]
             if phase_caps:
-                self.max_probes_per_phase = min(self.max_probes_per_phase, max(phase_caps))
+                self.max_probes_per_phase = max(self.max_probes_per_phase, max(phase_caps))
 
     def current_phase(self) -> dict:
         if not self.phases:
@@ -821,13 +843,11 @@ class InterviewFlow:
             return
         if decision == "advance" or must_advance:
             previous = self.current_phase().get("name")
-            previous_competency_id = self.current_phase().get("competency_id")
             self.phase_index += 1
             self.probe_count = 0
+            self.probes_without_gain = 0
             self.phase_started_at = time.monotonic()
             self.focus_item = ""
-            if previous_competency_id:
-                self.no_gain_probes.pop(str(previous_competency_id), None)
             self._ensure_focus(None)
             logger.info(
                 "phase_advanced",
@@ -880,7 +900,11 @@ class InterviewFlow:
         coverage_entry = self.coverage.get(competency_id) if competency_id else None
         missing = list((coverage_entry or {}).get("missing_intents") or [])
         required = list((coverage_entry or {}).get("required_intents") or [])
-        coverage_complete = bool(required) and not missing
+        ledger_entry = self.evidence_ledger.get(competency_id or "")
+        # Named-but-unproven evidence must not close a competency; probe caps and
+        # the time guard remain the only other way out.
+        evidence_satisfied = ledger_entry is None or ledger_entry.is_satisfied()
+        coverage_complete = bool(required) and not missing and evidence_satisfied
         competency_ids = [
             str(item.get("competency_id"))
             for item in self.phases
@@ -907,11 +931,13 @@ class InterviewFlow:
             has_uncovered_competencies=has_uncovered,
             missing_intents=missing,
             coverage_complete=coverage_complete,
-            consecutive_no_gain_probes=(
-                self.no_gain_probes.get(competency_id or "", 0)
-            ),
             has_coverage_gaps=bool(gap_id),
             gap_competency_id=gap_id,
+            probes_without_gain=self.probes_without_gain,
+            target_slot=ledger_entry.weakest_slot() if ledger_entry else None,
+            contradiction_pending=self.contradiction_pending,
+            final_addition_offered=self.final_addition_offered,
+            project_name=str(phase.get("project_name") or "") or None,
             clarify_after=self.clarify_after,
             rephrase_after=self.rephrase_after,
             change_topic_after=self.change_topic_after,
@@ -1022,17 +1048,6 @@ class InterviewFlow:
             )[0]
             return
         if intent == "jd_requirement":
-            if self.policy_mode:
-                competency = competency_by_id(
-                    self.interview_definition,
-                    str(self.current_phase().get("competency_id") or "") or None,
-                )
-                self.focus_item = str(
-                    competency.get("name")
-                    or self.current_phase().get("name")
-                    or "this competency"
-                ).strip()
-                return
             if self.focus_item and self.focus_item.lower() not in self._touched_topics:
                 return
             uncovered = (
@@ -1149,6 +1164,9 @@ class InterviewFlow:
             if not competency_id:
                 return self.probe_count >= min(2, self.max_probes_per_phase)
             missing = list((self.coverage.get(str(competency_id)) or {}).get("missing_intents") or [])
+            ledger_entry = self.evidence_ledger.get(str(competency_id))
+            if ledger_entry is not None and not ledger_entry.is_satisfied():
+                return self.probe_count >= self._phase_probe_limit()
             if missing and self.probe_count < self._phase_probe_limit():
                 return False
             if not missing and self.probe_count >= 1:
@@ -1239,7 +1257,7 @@ class InterviewFlow:
         )
         competency = competency_by_id(self.interview_definition, competency_id)
         required = required_intents_for(self.interview_definition, competency_id)
-        usability, quality, hinted = classify_live_answer(
+        usability, quality, covered = classify_live_answer(
             last_candidate_turn,
             required_intents=required,
             evidence_expected=list(competency.get("evidence_expected") or []),
@@ -1249,70 +1267,64 @@ class InterviewFlow:
         # An LLM substance verdict outranks the keyword heuristic when available.
         llm_quality = quality_from_evaluation(answer_eval) if answer_eval else None
         self.last_answer_quality = llm_quality or quality
-        covered = evidenced_intents(
-            required_intents=required,
-            evidence_expected=list(competency.get("evidence_expected") or []),
-            answer_eval=answer_eval,
-            asked_intent=self.last_question_intent,
-            answer_text=last_candidate_turn,
-        )
         if answer_eval is not None:
             self._remember_known_facts(competency_id, answer_eval)
-        logger.info(
-            "answer_quality_evaluated",
-            extra={
-                "event": "answer_quality_evaluated",
-                "llm_substance": getattr(answer_eval, "technical_substance", None)
-                if answer_eval is not None
-                else None,
-                "keyword_quality": quality,
-                "applied_quality": self.last_answer_quality,
-                "hinted_intents": hinted,
-                "evidenced_intents": covered,
-                "competency_id": competency_id,
-            },
-        )
+            logger.info(
+                "answer_quality_evaluated",
+                extra={
+                    "event": "answer_quality_evaluated",
+                    "llm_substance": getattr(
+                        answer_eval, "technical_substance", None
+                    ),
+                    "keyword_quality": quality,
+                    "applied_quality": self.last_answer_quality,
+                    "competency_id": competency_id,
+                },
+            )
         if update_counters:
             if usability == "usable":
                 self.consecutive_unusable = 0
             elif usability not in {"silence", "stt_failure", "network_failure"}:
                 self.consecutive_unusable += 1
         if self.policy_mode and competency_id:
-            answer_key = (competency_id, last_candidate_turn.strip())
-            if answer_key != self._last_ledger_answer:
-                before = set(
-                    (self.coverage.get(competency_id) or {}).get("covered_intents") or []
-                )
-                apply_coverage(
-                    self.coverage,
-                    competency_id=competency_id,
-                    covered_intents=covered,
-                    evidence_id=f"ev_{self.last_question_competency_id or competency_id}_{len(self.candidate_turns)}",
-                    answer_eval=answer_eval,
-                )
-                after = set(
-                    (self.coverage.get(competency_id) or {}).get("covered_intents") or []
-                )
-                if after - before:
-                    self.no_gain_probes[competency_id] = 0
-                else:
-                    self.no_gain_probes[competency_id] = (
-                        self.no_gain_probes.get(competency_id, 0) + 1
-                    )
-                self._last_ledger_answer = answer_key
-                return
+            before = len(
+                (self.coverage.get(competency_id) or {}).get("covered_intents") or []
+            )
+            facts_before = len(self.known_facts.get(competency_id, []))
+            moved_slots = promote(
+                self.evidence_ledger,
+                competency_id=competency_id,
+                demonstrated=getattr(answer_eval, "slots_demonstrated", ()) or (),
+                claimed=getattr(answer_eval, "slots_claimed", ()) or (),
+            )
             apply_coverage(
                 self.coverage,
                 competency_id=competency_id,
                 covered_intents=covered,
-                evidence_id=(
-                    f"ev_{self.last_question_competency_id or competency_id}_"
-                    f"{len(self.candidate_turns)}"
-                    if covered
-                    else None
-                ),
+                evidence_id=f"ev_{self.last_question_competency_id or competency_id}_{len(self.candidate_turns)}",
                 answer_eval=answer_eval,
             )
+            after = len(
+                (self.coverage.get(competency_id) or {}).get("covered_intents") or []
+            )
+            gained = (
+                bool(moved_slots)
+                or after > before
+                or len(self.known_facts.get(competency_id, [])) > facts_before
+            )
+            if gained:
+                self.probes_without_gain = 0
+            elif update_counters:
+                self.probes_without_gain += 1
+            if moved_slots:
+                logger.info(
+                    "evidence_slots_moved",
+                    extra={
+                        "event": "evidence_slots_moved",
+                        "competency_id": competency_id,
+                        "slots": moved_slots,
+                    },
+                )
 
     def _remember_known_facts(self, competency_id: str | None, answer_eval: Any) -> None:
         if not competency_id:
@@ -1334,34 +1346,18 @@ class InterviewFlow:
         shape = self.last_probe_shape.get(competency_id or "")
         return shape or "(none yet)"
 
-    def _hook_fact(
-        self,
-        last_turn: str | None,
-        competency_id: str | None,
-        intent: str | None = None,
-    ) -> str:
-        if not last_turn or (intent or "") in SKIP_HOOK_INTENTS:
-            return ""
-        facts = self.known_facts.get(competency_id or "", [])
-        if facts:
-            return facts[-1]
-        return extract_hook_fact(last_turn)
-
-    def _next_probe_shape(
-        self, competency_id: str | None, intent: str | None = None
-    ) -> str:
-        if (intent or "") in SKIP_HOOK_INTENTS:
-            return ""
-        return next_probe_shape(self.last_probe_shape.get(competency_id or ""))
-
     def _refine_answer_quality(
         self, last_candidate_turn: str | None, generated: GeneratedQuestion
     ) -> None:
         """Re-score the just-answered turn once the LLM verdict arrives with the next question."""
         answer_eval = generated.answer_evaluation
         if answer_eval is None:
+            self.last_answer_evaluation = None
             return
         self.last_answer_evaluation = answer_eval.as_dict()
+        self.contradiction_pending = bool(
+            getattr(answer_eval, "contradicts_earlier", False)
+        )
         if not last_candidate_turn or not self.policy_mode:
             return
         # candidate_turns has not been appended yet, so intro detection still holds.
@@ -1385,6 +1381,10 @@ class InterviewFlow:
             )
 
     def _remember_generated(self, generated: GeneratedQuestion, policy: PolicyDecision | None) -> None:
+        if policy and policy.intent == "consistency_check":
+            self.contradiction_pending = False
+        if policy and policy.intent == "final_addition":
+            self.final_addition_offered = True
         self.last_question_competency_id = generated.competency_id or (
             policy.competency_id if policy else None
         )
@@ -1402,35 +1402,6 @@ class InterviewFlow:
     def _job_target_level(self) -> str:
         return str(self.candidate_profile.get("job_target_level") or "mid")
 
-    def _seniority_question_guidance(self) -> str:
-        level = self._job_target_level().strip().lower()
-        if level in {"intern", "junior", "entry", "entry_level"}:
-            return (
-                "Ask for a concrete implementation or debugging example at an accessible scope; "
-                "test fundamentals, ownership, and reasoning without assuming architecture leadership."
-            )
-        if level in {"senior", "lead", "staff", "principal"}:
-            return (
-                "Ask for concrete design trade-offs, operational consequences, and technical leadership "
-                "at the scope appropriate to this role."
-            )
-        return (
-            "Ask for a concrete implementation decision, the reasoning behind it, and the resulting impact "
-            "at an independent contributor scope."
-        )
-
-    def _active_focus_context(self) -> str:
-        if self._phase_intent() == "resume_project":
-            excerpt = self._resume_project_context()
-            if excerpt:
-                return f"Resume project excerpt for {self.focus_item}:\n{excerpt}"
-        if self._phase_intent() == "jd_requirement":
-            return (
-                "Published interview-brain competency selected for this turn: "
-                f"{self.focus_item}. Use its configured definition, evidence, and ladder objective; "
-                "use the JD only to make that competency question concrete."
-            )
-        return f"Candidate background focus: {self.focus_item}"
     def _role_title(self) -> str:
         if isinstance(self.interview_definition, dict):
             intelligence = self.interview_definition.get("job_intelligence")
@@ -1441,7 +1412,6 @@ class InterviewFlow:
                     if title:
                         return title
         return ""
-
 
     def _opening_cites_context(self, question: str) -> bool:
         """True when spoken opening mentions the chosen claim/JD signal (PBI-B1)."""
@@ -1570,6 +1540,40 @@ class InterviewFlow:
             return str(self.interview_definition.get("prompt_version") or "interviewer-system-v2")
         return "interviewer-system-v2"
 
+    def _seniority_question_guidance(self) -> str:
+        level = self._job_target_level().strip().lower()
+        if level in {"intern", "junior", "entry", "entry_level"}:
+            return (
+                "Ask for a concrete implementation or debugging example at an accessible scope; "
+                "test fundamentals, ownership, and reasoning without assuming architecture leadership."
+            )
+        if level in {"senior", "lead", "staff", "principal"}:
+            return (
+                "Ask for concrete design trade-offs, operational consequences, and technical leadership "
+                "at the scope appropriate to this role."
+            )
+        return (
+            "Ask for a concrete implementation decision, the reasoning behind it, and the resulting impact "
+            "at an independent contributor scope."
+        )
+
+    def _resume_project_context(self) -> str:
+        return resume_project_excerpt(self.resume_text, self.focus_item)
+
+    def _active_focus_context(self) -> str:
+        if self._phase_intent() == "resume_project":
+            excerpt = self._resume_project_context()
+            if excerpt:
+                return f"Resume project excerpt for {self.focus_item}:\n{excerpt}"
+        if self._phase_intent() == "jd_requirement" or self.policy_mode:
+            focus = self.focus_item or "this competency"
+            return (
+                "Published interview-brain competency selected for this turn: "
+                f"{focus}. Use its configured definition, evidence, and ladder objective; "
+                "use the JD only to make that competency question concrete."
+            )
+        return f"Candidate background focus: {self.focus_item}"
+
     def _validate_prompt_briefing(
         self,
         briefing: dict[str, Any],
@@ -1609,20 +1613,37 @@ class InterviewFlow:
             "",
         )
         missing = list((self.coverage.get(competency_id) or {}).get("missing_intents") or [])
+        ledger_entry = self.evidence_ledger.get(competency_id or "")
+        target_slot, slot_instruction = target_slot_brief(ledger_entry)
+        self._last_target_sent = target_slot
+        phase = self.current_phase()
+        project_name = str(phase.get("project_name") or "").strip()
+        if project_name:
+            # Resume walkthrough: the project is the topic, not a JD competency.
+            competency = {
+                "name": project_name,
+                "definition": (
+                    "The candidate's own project from their resume. Establish what it "
+                    "actually was, what they personally built, and how it works."
+                ),
+            }
+            target_slot, slot_instruction = "", (
+                f"Walk through '{project_name}' from the candidate's resume. Get the real "
+                "technical substance: what the system did, what they personally built, "
+                "and how their part works. Do not move to job competencies yet."
+            )
         role = {}
         if isinstance(self.interview_definition, dict):
             intelligence = self.interview_definition.get("job_intelligence")
             if isinstance(intelligence, dict):
                 role = intelligence.get("role") or {}
+        active_focus = self.focus_item or str(competency.get("name") or "this requirement")
         briefing = {
             "action": decision.action if decision else "OPEN_INTERVIEW",
             "intent": intent,
             "section": decision.section if decision else "opening",
             "current_depth": decision.current_depth if decision else 1,
             "max_depth": decision.max_depth if decision else 1,
-            "followups_used": self.probe_count,
-            "followups_remaining": max(0, self._phase_probe_limit() - self.probe_count),
-            "max_followups": self._phase_probe_limit(),
             "forced_flow_decision": decision.forced_flow_decision if decision else "probe",
             "reason": decision.reason if decision else "open the interview",
             "target_minutes": self.target_duration_minutes,
@@ -1631,7 +1652,7 @@ class InterviewFlow:
             "competency_name": str(competency.get("name") or "general"),
             "competency_id": competency_id or "",
             "competency_definition": str(competency.get("definition") or "job-related work"),
-            "active_focus": self.focus_item or str(competency.get("name") or "this requirement"),
+            "active_focus": active_focus,
             "active_focus_context": self._active_focus_context(),
             "priority_guidance": self._priority_guidance(competency),
             "ladder_objective": objective or "Ask one job-related question.",
@@ -1641,11 +1662,12 @@ class InterviewFlow:
             )
             or "(use the last answer)",
             "allowed_probes": "; ".join(self._allowed_probes()) or "(STAR probes)",
+            "evidence_ledger": ledger_brief(ledger_entry)
+            if not project_name
+            else f"Resume excerpt for this project:\n{resume_project_excerpt(self.resume_text, project_name)}",
+            "target_slot": target_slot or "(none)",
+            "slot_instruction": slot_instruction,
             "known_facts": self._known_facts_brief(competency_id),
-            "hook_fact": self._hook_fact(last_candidate_turn, competency_id, intent)
-            or "(none)",
-            "required_probe_shape": self._next_probe_shape(competency_id, intent)
-            or "(none)",
             "last_probe_shape": self._probe_shape_guidance(competency_id),
             "action_phrasing": action_phrasing_note(decision.action if decision else None),
             "interview_structure": self._interview_structure_text(),
@@ -1653,19 +1675,19 @@ class InterviewFlow:
             "job_target_level": self._job_target_level(),
             "seniority_question_guidance": self._seniority_question_guidance(),
             "candidate_framing": self._profile_type(),
-            "claim_brief": claim_brief(self.candidate_profile, limit=2),
+            "claim_brief": claim_brief(self.candidate_profile),
             "claim_guidance": self._claim_guidance(),
-            "resume_excerpt": clip_source_text(self.resume_text, 100),
-            "jd_excerpt": clip_source_text(self.job_description, 100),
-            "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-1:])
+            "resume_excerpt": clip_source_text(self.resume_text, 800),
+            "jd_excerpt": clip_source_text(self.job_description, 2_000),
+            "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-2:])
             or "(none yet)",
-            "recent_questions": "\n".join(f"- {q}" for q in self.interviewer_turns[-3:])
+            "recent_questions": "\n".join(f"- {q}" for q in self.interviewer_turns[-8:])
             or "(none yet)",
             "last_turn": last_candidate_turn or "(interview opening)",
             "answer_quality": self.last_answer_quality,
             "answer_adaptation": self._answer_adaptation_hint(),
-            "previous_evaluation": self._previous_evaluation_brief(),
             "framing_notes": framing_notes(self._profile_type(), self._job_target_level()),
+            "language_note": self._language_note(),
             "role_title": str(role.get("title") or ""),
         }
         system = prompt_pack(self._prompt_version())
@@ -1684,6 +1706,14 @@ class InterviewFlow:
             "Open the interview in your own words and invite them to introduce themselves."
         )
 
+    def _language_note(self) -> str:
+        if self.language.strip().lower() in {"english", "en", ""}:
+            return "Speak English."
+        return (
+            f"Speak {self.language}. Ask every question in {self.language}, but keep "
+            "technical terms, tool names and code identifiers in their original form."
+        )
+
     def _answer_adaptation_hint(self) -> str:
         if self.last_answer_quality in {"off_topic", "unsupported"}:
             return "stay in the same competency, acknowledge briefly, and ask an easier adjacent question"
@@ -1693,37 +1723,25 @@ class InterviewFlow:
             return "increase depth by at most one level or move to the next uncovered topic"
         return "continue with the policy-required intent"
 
-    def _previous_evaluation_brief(self) -> str:
-        evaluation = self.last_answer_evaluation
-        if not isinstance(evaluation, dict) or not evaluation:
-            return "(none)"
-        substance = str(evaluation.get("technical_substance") or "unknown")
-        facts = [
-            str(item).strip()
-            for item in (evaluation.get("key_facts_stated") or [])
-            if str(item).strip()
-        ]
-        fact_text = ", ".join(facts[:4]) if facts else "no facts stored"
-        correct = evaluation.get("factually_correct", True)
-        return (
-            f"substance={substance}; factually_correct={correct}; "
-            f"facts={fact_text}"
-        )
-
     def _interview_structure_text(self) -> str:
-        names = [
-            str(phase.get("name") or "section").strip()
-            for phase in self.phases
-            if str(phase.get("name") or "").strip()
-        ]
-        return " → ".join(names) if names else "(structure unavailable)"
+        lines: list[str] = []
+        for index, phase in enumerate(self.phases, start=1):
+            name = str(phase.get("name") or "section").strip()
+            topics = ", ".join(str(item) for item in (phase.get("topics") or [])[:4])
+            depth = phase.get("max_depth") or "standard"
+            probes = phase.get("max_probes") or "standard"
+            lines.append(
+                f"{index}. {name}: topics={topics or '(none)'}, "
+                f"max_depth={depth}, max_follow_ups={probes}"
+            )
+        return "\n".join(lines) or "(structure unavailable)"
 
     def _published_context_text(self, competency_id: str | None = None) -> str:
         definition = self.interview_definition
         if not isinstance(definition, dict):
             return "(published definition unavailable)"
 
-        def values(items: Any, limit: int = 4) -> str:
+        def values(items: Any, limit: int = 12) -> str:
             result: list[str] = []
             for item in items if isinstance(items, list) else []:
                 if isinstance(item, dict):
@@ -1731,66 +1749,54 @@ class InterviewFlow:
                 else:
                     text = str(item).strip()
                 if text:
-                    result.append(text[:80])
+                    result.append(text[:300])
             return "; ".join(result[:limit]) or "(none)"
 
         intelligence = definition.get("job_intelligence")
         role = intelligence.get("role") if isinstance(intelligence, dict) else {}
-        competency = competency_by_id(definition, competency_id)
         lines = [
-            "ACTIVE CONTEXT (policy remains authoritative):",
-            f"Role: {role.get('title', '')} | Level: {role.get('target_level', '')}",
+            "REFERENCE CONTEXT (use for technical grounding; policy remains authoritative):",
+            f"Role: {role.get('title', '')} | Domain: {role.get('domain', '')} | Level: {role.get('target_level', '')}",
         ]
         if isinstance(intelligence, dict):
-            tools = values(intelligence.get("tools"), 3)
-            skills = values(intelligence.get("skills"), 3)
-            if tools != "(none)":
-                lines.append(f"Tools: {tools}")
-            if skills != "(none)":
-                lines.append(f"Skills: {skills}")
-        if competency:
-            lines.append(
-                f"Competency: {competency.get('name') or competency_id}: "
-                f"{str(competency.get('definition') or '')[:240]}"
-            )
-            evidence = ", ".join(
-                str(item) for item in (competency.get("evidence_expected") or [])[:6]
-            )
-            if evidence:
-                lines.append(f"Evidence needed: {evidence}")
-            for step in ladder_steps(definition, competency_id):
-                if str(step.get("intent") or "") == (
-                    self.last_policy_decision.intent if self.last_policy_decision else ""
-                ):
-                    objective = str(step.get("objective") or "").strip()
-                    if objective:
-                        lines.append(f"Current objective: {objective[:180]}")
-                    break
-        objectives: list[str] = []
-        for ladder in definition.get("question_ladders") or []:
-            if not isinstance(ladder, dict):
-                continue
-            for step in ladder.get("levels") or []:
-                if isinstance(step, dict):
-                    objective = str(step.get("objective") or "").strip()
-                    if objective and objective not in objectives:
-                        objectives.append(objective[:100])
-        if objectives:
-            lines.append("Other approved objectives: " + "; ".join(objectives[:4]))
-        lines.append(f"Claims: {claim_brief(self.candidate_profile, limit=2)}")
-        jd = clip_source_text(self.job_description, 100)
-        if jd:
-            lines.append(f"JD: {jd}")
-        return "\n".join(lines)[:300]
+            for label, key in (
+                ("Responsibilities", "responsibilities"),
+                ("Mandatory requirements", "mandatory_requirements"),
+                ("Preferred requirements", "preferred_requirements"),
+                ("Knowledge", "knowledge"),
+                ("Skills", "skills"),
+                ("Tools", "tools"),
+                ("Expected outcomes", "expected_outcomes"),
+            ):
+                lines.append(f"{label}: {values(intelligence.get(key))}")
 
-    def _question_was_asked(self, question: str) -> bool:
-        normalized = " ".join((question or "").lower().split()).strip()
-        if not normalized:
-            return False
-        return any(
-            normalized == " ".join(previous.lower().split()).strip()
-            for previous in self.interviewer_turns[-8:]
-        )
+        ladders = {
+            str(item.get("competency_id")): item
+            for item in definition.get("question_ladders") or []
+            if isinstance(item, dict)
+        }
+        lines.append("Competencies and technical coverage:")
+        for item in (definition.get("competencies") or [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            item_competency_id = str(item.get("id") or "")
+            lines.append(
+                f"- {item.get('name', item_competency_id)}: {str(item.get('definition') or '')[:500]}"
+            )
+            lines.append(f"  Evidence: {values(item.get('evidence_expected'), 8)}")
+            ladder = ladders.get(item_competency_id) or {}
+            for step in (ladder.get("levels") or [])[:5]:
+                if isinstance(step, dict):
+                    lines.append(
+                        f"  Depth {step.get('depth')}, {step.get('intent')}: "
+                        f"{str(step.get('objective') or '')[:240]} | "
+                        f"Example: {str(step.get('example_question') or '')[:300]}"
+                    )
+        lines.append("Resume facts:")
+        lines.append(claim_brief(self.candidate_profile, limit=30))
+        lines.append("Raw JD excerpt:")
+        lines.append(clip_source_text(self.job_description, 3000))
+        return "\n".join(lines)[:PUBLISHED_CONTEXT_LIMIT_CHARS]
 
     def _fallback_spoken_question(
         self,
@@ -1803,51 +1809,110 @@ class InterviewFlow:
             last_candidate_turn = last_turn
         intent = policy.intent if policy else "opening"
         competency_id = policy.competency_id if policy else None
-        if self._uses_legacy_decision_flow():
+        if not self.policy_mode:
             return FALLBACK_FOLLOWUP
-        if last_candidate_turn and not self.candidate_turns:
-            return (
-                "Thanks for sharing that. Which project or experience would you like "
-                "to use as the main example for this interview?"
-            )
-        candidate = last_candidate_turn or (
+        # Checked against the whole interview, not a recent window: a canned
+        # question reappearing ten turns later is still a repeat to the candidate.
+        asked = {fingerprint(q) for q in self.interviewer_turns}
+        candidate_turn = last_candidate_turn or (
             self.candidate_turns[-1] if self.candidate_turns else None
         )
-        fallback = ladder_fallback_question(
+        candidate = ladder_fallback_question(
             self.interview_definition,
             competency_id=competency_id,
             intent=intent,
-            last_candidate_turn=candidate,
+            last_candidate_turn=candidate_turn,
         )
-        hook = self._hook_fact(candidate, competency_id, intent)
-        if hook and hook.lower() not in fallback.lower():
-            fallback = f"You mentioned {hook}. {fallback}"
-        if not self._question_was_asked(fallback):
-            return fallback
-        if candidate:
-            contextual = ladder_fallback_question(
-                self.interview_definition,
-                competency_id=competency_id,
-                intent="baseline",
-                last_candidate_turn=candidate,
-            )
-            if not self._question_was_asked(contextual):
-                if hook and hook.lower() not in contextual.lower():
-                    contextual = f"You mentioned {hook}. {contextual}"
-                return contextual
-        focus = self.focus_item or "this area"
-        dynamic_fallbacks = (
-            f"Let's look at {focus} from another angle. What concrete result did your work produce?",
-            f"What is one detail about {focus} that we have not covered yet?",
-            "Could you give one new detail about the work that we have not discussed?",
-            FALLBACK_FOLLOWUP_NEUTRAL,
+        if fingerprint(candidate) not in asked:
+            return candidate
+        # The ladder example for this intent was already spoken; walk the rest of
+        # the ladder rather than repeating it verbatim.
+        for step in ladder_steps(self.interview_definition, competency_id):
+            example = str(step.get("example_question") or "").strip()
+            if example and fingerprint(example) not in asked:
+                return example
+        for generic in FALLBACK_PROBE_ROTATION:
+            if fingerprint(generic) not in asked:
+                return generic
+        # Everything canned has been used. Repeat the one asked longest ago so the
+        # repetition is at least maximally spaced.
+        order = [fingerprint(q) for q in self.interviewer_turns]
+        pool = [candidate, *FALLBACK_PROBE_ROTATION]
+        return min(
+            pool,
+            key=lambda text: order.index(fingerprint(text))
+            if fingerprint(text) in order
+            else -1,
         )
-        for dynamic_fallback in dynamic_fallbacks:
-            if not self._question_was_asked(dynamic_fallback):
-                return dynamic_fallback
+
+    _REPAIR_HINTS = {
+        "duplicate_question": "that question repeats one already asked — ask about a different, unexplored angle",
+        "compound_question": "ask exactly one question, not two",
+        "leading_question": "do not put the answer inside the question",
+        "protected_topic": "remove the protected-class reference",
+        "competency_mismatch": "stay on the competency the policy engine selected",
+        "unknown_intent": "use the intent the policy engine supplied",
+        "depth_exceeded": "stay within the allowed depth",
+        "depth_jump": "advance depth by at most one level",
+        "unknown_claim_id": "only cite resume claim ids that were supplied",
+        "empty_question": "the question field was empty",
+    }
+
+    def _repair_instruction(self, reasons: list[str]) -> str:
+        notes = [self._REPAIR_HINTS[r] for r in reasons if r in self._REPAIR_HINTS]
+        if not notes:
+            return ""
         return (
-            f"What is one different detail about {focus} that you have not mentioned yet?"
+            "\n\nYour previous question was rejected. Rewrite it: "
+            + "; ".join(notes)
+            + ". Return the same JSON shape."
         )
+
+    def _precheck_spoken_question(
+        self, question: str, policy: PolicyDecision | None
+    ) -> bool:
+        """Validate a streamed question before any of it reaches TTS.
+
+        Once audio starts there is no way to retract it, so the duplicate,
+        compound, leading and protected-topic rules have to run here rather than
+        after the turn completes.
+        """
+        text = (question or "").strip()
+        if not text:
+            return False
+        candidate = GeneratedQuestion(
+            question=text,
+            competency_id=policy.competency_id if policy else None,
+            intent=policy.intent if policy else "live_question",
+            depth=policy.current_depth if policy else 1,
+        )
+        result = validate_generated_question(
+            candidate,
+            definition=self.interview_definition,
+            policy_competency_id=policy.competency_id if policy else None,
+            policy_intent=policy.intent if policy else candidate.intent,
+            policy_depth=policy.current_depth if policy else candidate.depth,
+            max_depth=policy.max_depth if policy else 5,
+            recent_questions=self.interviewer_turns[-8:],
+            allowed_probes=self._allowed_probes(),
+            profile=self.candidate_profile,
+            job_description=self.job_description,
+            resume_text=self.resume_text,
+            recent_turns=self.candidate_turns[-4:],
+        )
+        if not result.ok:
+            logger.info(
+                "question_blocked_before_speech",
+                extra={
+                    "event": "question_blocked_before_speech",
+                    "reasons": result.reasons,
+                    "prompt_version": self._prompt_version(),
+                },
+            )
+        # Strict here on purpose: blocking buys a repair retry. The relaxed rule
+        # lives in _coerce_generated, which decides what to say once the model
+        # has had that second attempt.
+        return result.ok
 
     def _coerce_generated(
         self,
@@ -1858,15 +1923,12 @@ class InterviewFlow:
     ) -> GeneratedQuestion:
         parsed = parse_generated_question(raw)
         if parsed is None:
-            plain_text = re.sub(
-                r"^\s*DECISION:\s*(?:probe|advance)\s*",
-                "",
-                raw or "",
-                flags=re.IGNORECASE,
-            )
-            plain_text = " ".join(plain_text.strip().split())
-            if plain_text and policy and (
-                policy.intent == "opening" or "?" in plain_text
+            _, spoken = parse_stage2(raw)
+            plain_text = (spoken or raw or "").strip()
+            if (
+                policy
+                and plain_text
+                and (policy.intent == "opening" or "?" in plain_text)
             ):
                 candidate = GeneratedQuestion(
                     question=plain_text,
@@ -1914,15 +1976,11 @@ class InterviewFlow:
                 intent=policy.intent if policy else "live_question",
                 depth=policy.current_depth if policy else 1,
             )
-        policy_intent = policy.intent if policy else parsed.intent
-        competency_id = policy.competency_id if policy else None
-        hook_fact = self._hook_fact(last_candidate_turn, competency_id, policy_intent)
-        required_shape = self._next_probe_shape(competency_id, policy_intent)
         result = validate_generated_question(
             parsed,
             definition=self.interview_definition,
-            policy_competency_id=competency_id,
-            policy_intent=policy_intent,
+            policy_competency_id=policy.competency_id if policy else None,
+            policy_intent=policy.intent if policy else parsed.intent,
             policy_depth=policy.current_depth if policy else parsed.depth,
             max_depth=policy.max_depth if policy else 5,
             recent_questions=self.interviewer_turns[-8:],
@@ -1932,11 +1990,6 @@ class InterviewFlow:
             resume_text=self.resume_text,
             recent_turns=self.candidate_turns[-4:]
             + ([last_candidate_turn] if last_candidate_turn else []),
-            resume_focus=self.focus_item,
-            require_resume_grounding=self._phase_intent() == "resume_project",
-            hook_fact=hook_fact,
-            required_probe_shape=required_shape or None,
-            last_probe_shape=self.last_probe_shape.get(competency_id or "") or None,
         )
         self._capture_replay(raw, validator_ok=result.ok, reasons=result.reasons)
         if result.ok:
@@ -1946,34 +1999,31 @@ class InterviewFlow:
             extra={
                 "event": "question_validation_failed",
                 "reasons": result.reasons,
+                "speakable": is_speakable(result.reasons),
                 "prompt_version": self._prompt_version(),
             },
         )
+        # Soft failures (leading phrasing, depth jump, odd intent) are logged and
+        # still spoken: the model's question is grounded in what the candidate
+        # just said, which a canned line can never be. Only unsafe or repeated
+        # questions are replaced.
+        if is_speakable(result.reasons) and result.question.question.strip():
+            return result.question
         fallback = self._fallback_spoken_question(policy, last_candidate_turn)
-        logger.warning(
-            "question_fallback_selected",
-            extra={
-                "event": "question_fallback_selected",
-                "reason": "validation_failed",
-                "reasons": result.reasons,
-                "fallback": fallback,
-                "policy_intent": policy.intent if policy else None,
-            },
-        )
         return GeneratedQuestion(
             question=fallback,
             competency_id=policy.competency_id if policy else None,
             intent=policy.intent if policy else "live_question",
             depth=policy.current_depth if policy else 1,
+            # The verdict is about the candidate's previous answer, so a rejected
+            # question must not discard it — that stalls the evidence ledger.
+            answer_evaluation=parsed.answer_evaluation,
         )
-
-    def _uses_legacy_decision_flow(self) -> bool:
-        return (not self.policy_mode) and self.allow_legacy_flow
 
     def _prompt_for_turn(
         self, last_candidate_turn: str | None
     ) -> tuple[str, str]:
-        if not self._uses_legacy_decision_flow():
+        if self.policy_mode:
             is_intro_reply = bool(last_candidate_turn) and not self.candidate_turns
             self._ensure_focus(last_candidate_turn, is_intro_reply=is_intro_reply)
             return self._structured_system_prompt(
@@ -2063,16 +2113,7 @@ class InterviewFlow:
         if closing:
             return closing
         if last_candidate_turn is None:
-            # Legacy path: skip LLM only when there is nothing to personalize from.
-            has_opening_context = bool(
-                (self.job_description or "").strip()
-                or (self.resume_text or "").strip()
-                or (
-                    isinstance(self.candidate_profile, dict)
-                    and (self.candidate_profile.get("claims") or [])
-                )
-            )
-            if self._uses_legacy_decision_flow() and not has_opening_context:
+            if not self.policy_mode:
                 started = time.perf_counter()
                 opening = self._fallback_opening()
                 self.last_question_competency_id = None
@@ -2090,7 +2131,7 @@ class InterviewFlow:
                     question=opening,
                 )
                 return opening
-        if last_candidate_turn and not self._uses_legacy_decision_flow():
+        if last_candidate_turn and self.policy_mode:
             is_intro_reply = not self.candidate_turns
             self._record_answer_quality(
                 last_candidate_turn, is_intro_reply=is_intro_reply
@@ -2153,45 +2194,40 @@ class InterviewFlow:
         user_content: str,
         allow_retry: bool = True,
         spoken_question: str | None = None,
-        spoken_any: bool = False,
     ) -> str:
         policy = self.last_policy_decision
-        if not self._uses_legacy_decision_flow():
+        if self.policy_mode:
             generated = self._coerce_generated(
                 raw, policy=policy, last_candidate_turn=last_candidate_turn
             )
-            parsed = parse_generated_question(raw)
-            if (
-                allow_retry
-                and parsed is None
-                and generated.question
-                == self._fallback_spoken_question(
-                    policy, last_candidate_turn
-                )
-            ):
+            if allow_retry and self.last_validator_ok is False:
+                repair = self._repair_instruction(self.last_validator_reasons)
                 try:
                     raw = await self.llm_client.generate_reply(
                         [
                             {"role": "system", "content": prompt},
-                            {"role": "user", "content": user_content},
-                        ]
+                            {"role": "user", "content": user_content + repair},
+                        ],
+                        extra_body={"max_completion_tokens": 1024},
                     )
-                    generated = self._coerce_generated(
+                    retried = self._coerce_generated(
                         raw, policy=policy, last_candidate_turn=last_candidate_turn
                     )
+                    if self.last_validator_ok:
+                        generated = retried
                 except Exception:
                     logger.exception(
                         "stage2_question_retry_failed",
                         extra={"event": "stage2_question_retry_failed"},
                     )
-            if spoken_any and spoken_question:
+            if spoken_question:
                 generated.question = spoken_question
             decision, question = generated.decision, generated.question
             self._remember_generated(generated, policy)
             self._refine_answer_quality(last_candidate_turn, generated)
         else:
             decision, question = parse_stage2(raw)
-            if spoken_any and spoken_question:
+            if spoken_question:
                 question = spoken_question
         if last_candidate_turn:
             is_intro_reply = not self.candidate_turns
@@ -2231,7 +2267,6 @@ class InterviewFlow:
                 "phase_index": self.phase_index,
                 "probe_count": self.probe_count,
                 "is_opening": last_candidate_turn is None,
-                "prompt_chars": len(prompt),
             },
         )
         return question
@@ -2316,7 +2351,7 @@ class InterviewFlow:
             yield pending
 
     async def generate_next_question_stream(self, last_candidate_turn: str | None):
-        if not self._uses_legacy_decision_flow():
+        if self.policy_mode:
             async for chunk in self._stream_policy_question(last_candidate_turn):
                 yield chunk
             return
@@ -2369,11 +2404,6 @@ class InterviewFlow:
         if not question:
             question = self._fallback_opening() if is_opening else FALLBACK_FOLLOWUP
             yield question
-        elif is_opening:
-            ensured = self._ensure_opening_cites_context(question)
-            if ensured != question:
-                question = ensured
-                yield question
         self._commit_turn(
             last_candidate_turn,
             parser.decision or "probe",
@@ -2402,71 +2432,35 @@ class InterviewFlow:
         prompt, user_content = self._prompt_for_turn(last_candidate_turn)
         started = time.perf_counter()
         policy = self.last_policy_decision
-        attempt: dict[str, Any] = {}
-
-        async def _pump_stream() -> None:
-            parser = SpokenJsonQuestionStream()
-            raw_parts: list[str] = []
-            spoken_any = False
-            failed = False
-            try:
-                async for delta in stream(
-                    [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": user_content},
-                    ]
-                ):
-                    raw_parts.append(delta or "")
-                    spoken = parser.push(delta or "")
-                    if spoken:
+        parser = SpokenJsonQuestionStream()
+        raw_parts: list[str] = []
+        spoken_any = False
+        gated = False
+        try:
+            async for delta in stream(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_content},
+                ]
+            ):
+                raw_parts.append(delta or "")
+                parser.push(delta or "")
+                # Speak only once the whole question has arrived and passed the
+                # quality rules; a half-spoken question cannot be retracted.
+                if not gated and parser.question_complete:
+                    gated = True
+                    if self._precheck_spoken_question(parser.question, policy):
                         spoken_any = True
-            except Exception:
-                logger.exception(
-                    "stage2_question_failed",
-                    extra={"event": "stage2_question_failed"},
-                )
-                failed = True
-            leftover = parser.finish()
-            if leftover:
-                spoken_any = True
-            attempt["parser"] = parser
-            attempt["raw_parts"] = raw_parts
-            attempt["spoken_any"] = spoken_any
-            attempt["failed"] = failed
-
-        await _pump_stream()
-        spoken_any = bool(attempt.get("spoken_any"))
-        if not spoken_any and not attempt.get("failed"):
-            logger.warning(
-                "stage2_empty_stream_retry",
-                extra={"event": "stage2_empty_stream_retry"},
+                        yield parser.question.strip()
+        except Exception:
+            logger.exception(
+                "stage2_question_failed",
+                extra={"event": "stage2_question_failed"},
             )
-            await _pump_stream()
-            spoken_any = bool(attempt.get("spoken_any"))
-
-        parser = attempt.get("parser") or SpokenJsonQuestionStream()
-        raw_parts = list(attempt.get("raw_parts") or [])
-        failed = bool(attempt.get("failed"))
-
-        if not failed and self._coerce_generated(
-            "".join(raw_parts),
-            policy=policy,
-            last_candidate_turn=last_candidate_turn,
-        ) and self.last_validator_ok is False:
-            attempt.clear()
-            await _pump_stream()
-            parser = attempt.get("parser") or SpokenJsonQuestionStream()
-            raw_parts = list(attempt.get("raw_parts") or [])
-            failed = bool(attempt.get("failed"))
-            spoken_any = bool(attempt.get("spoken_any"))
-
-        if failed:
             fallback = (
                 self._fallback_opening()
                 if last_candidate_turn is None
-                else self._fallback_spoken_question(
-                    policy, last_turn=last_candidate_turn
-                )
+                else self._fallback_spoken_question(policy)
             )
             if self.completed:
                 fallback = CLOSING_MESSAGE
@@ -2489,8 +2483,12 @@ class InterviewFlow:
             if not spoken_any:
                 yield question
             return
-        # finish() already ran inside _pump_stream; reuse the spoken question text.
-        spoken = parser.question.strip() or None
+        # Stream ended mid-question (truncated JSON): gate whatever arrived.
+        if not gated and parser.question.strip():
+            gated = True
+            if self._precheck_spoken_question(parser.question, policy):
+                spoken_any = True
+                yield parser.question.strip()
         question = await self._complete_generated_turn(
             "".join(raw_parts),
             last_candidate_turn,
@@ -2498,16 +2496,11 @@ class InterviewFlow:
             prompt=prompt,
             user_content=user_content,
             allow_retry=not spoken_any,
-            spoken_question=spoken,
-            spoken_any=spoken_any,
+            spoken_question=parser.question.strip() if spoken_any else None,
         )
         if question == CLOSING_MESSAGE:
-            if (spoken or "") != CLOSING_MESSAGE:
+            if parser.question.strip() != CLOSING_MESSAGE:
                 yield question
             return
-        if last_candidate_turn is None and spoken_any and question != (spoken or ""):
-            # Soft-replaced opening after stream — speak corrected claim-aware line once.
-            yield question
-            return
-        if question:
+        if not spoken_any and question:
             yield question

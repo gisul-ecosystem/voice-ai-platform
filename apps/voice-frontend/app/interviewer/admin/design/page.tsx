@@ -11,14 +11,18 @@ const DRAFT_KEY = "ai-interview:role-draft";
 type RoleDraft = {
   title: string; role: string; seniority: string; durationMinutes: string;
   jobDescription: string; competencies: string; definitionId: string; startsAt: string;
+  difficulty: string; language: string;
+  monitoringEnabled: boolean; recordingEnabled: boolean;
   draft?: Record<string, unknown>;
 };
 
 export default function DesignRolePage() {
   const [value, setValue] = useState<RoleDraft>({
     title: "AI Engineer interview", role: "AI Engineer", seniority: "junior",
-    durationMinutes: "30", jobDescription: "", competencies: "Problem solving, Role expertise, Communication",
+    durationMinutes: "30", jobDescription: "", competencies: "",
     definitionId: "ai-engineer-junior-v1", startsAt: "",
+    difficulty: "applied", language: "English",
+    monitoringEnabled: true, recordingEnabled: false,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -55,7 +59,8 @@ export default function DesignRolePage() {
     try {
       const response = await fetch("/api/admin/blueprint", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
         action: "compile", title: value.title, seniority: value.seniority, durationMinutes: Number(value.durationMinutes),
-        jobDescription: value.jobDescription, competencies: value.competencies.split(",").map((item) => item.trim()).filter(Boolean),
+        language: value.language, jobDescription: value.jobDescription,
+        competencies: value.competencies.split(",").map((item) => item.trim()).filter(Boolean),
       }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(String(data.error || data.detail || "Alignment generation failed."));
@@ -75,10 +80,29 @@ export default function DesignRolePage() {
         <label>Role<input required value={value.role} onChange={(e) => setField("role", e.target.value)} /></label>
         <label>Seniority<select value={value.seniority} onChange={(e) => setField("seniority", e.target.value)}><option>intern</option><option>junior</option><option>mid</option><option>senior</option><option>lead</option></select></label>
         <label>Duration<select value={value.durationMinutes} onChange={(e) => setField("durationMinutes", e.target.value)}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option></select></label>
+        <label>Question depth
+          <select value={value.difficulty} onChange={(e) => setField("difficulty", e.target.value)}>
+            <option value="foundational">Foundational — concepts and approach</option>
+            <option value="applied">Applied — adds cost and trade-offs</option>
+            <option value="diagnostic">Diagnostic — adds failure modes</option>
+            <option value="strategic">Strategic — full depth incl. optimisation</option>
+          </select>
+        </label>
+        <label>Interview language<input required maxLength={32} value={value.language} onChange={(e) => setField("language", e.target.value)} /></label>
+        <div className="admin-field-wide">
+          <label className="policy-option">
+            <input type="checkbox" checked={value.monitoringEnabled} onChange={(e) => setField("monitoringEnabled", e.target.checked)} />
+            <span><strong>Human monitoring</strong><small>Allow an authorised reviewer to listen silently after disclosure.</small></span>
+          </label>
+          <label className="policy-option">
+            <input type="checkbox" checked={value.recordingEnabled} onChange={(e) => setField("recordingEnabled", e.target.checked)} />
+            <span><strong>Session recording</strong><small>Record the interview only after explicit candidate consent.</small></span>
+          </label>
+        </div>
         <label className="admin-field-wide">Job description <span className="field-required">Required</span><textarea required rows={12} value={value.jobDescription} onChange={(e) => setField("jobDescription", e.target.value)} placeholder="Paste the job description and responsibilities..." /></label>
         <div className="admin-field-wide competency-input-block">
-          <label>Assessment areas <span className="field-optional">Optional guidance for the AI</span></label>
-          <p className="section-help">The AI will infer the interview structure from the job description. Add topics here to ensure they are assessed.</p>
+          <label>Assessment areas <span className="field-optional">Optional — leave empty to use the job description</span></label>
+          <p className="section-help">Competencies are extracted from the job description automatically, and you can edit them on the next screen. Only add topics here to force something the job description does not mention — anything added takes priority and reduces the number of competencies drawn from the job description.</p>
           <div className="competency-chips">
             {competencyList().map((item) => (
               <span className="competency-chip" key={item}>
