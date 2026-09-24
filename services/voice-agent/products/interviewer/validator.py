@@ -695,8 +695,10 @@ def ladder_fallback_question(
             "To get started, please introduce yourself — a short overview of your "
             "background, and the work that is most relevant to this role."
         ),
-        "clarify": "Please continue — tell me a bit more about that.",
+        "clarify": "What part of that work did you personally handle?",
+        "rephrase": "Can you walk through one concrete step you took?",
         "final_addition": "Before we close, is there one example you would still like to add?",
+        "recovery": "Can you share one concrete example from related work?",
     }
     return defaults.get(
         intent,
@@ -879,6 +881,55 @@ def _looks_like_non_job_trivia(question: str, *, corpus: str) -> bool:
     return False
 
 
+_VAGUE_FOLLOWUP = re.compile(
+    r"(?i)^\s*("
+    r"can you tell me more( about that)?|"
+    r"tell me more( about that)?|"
+    r"could you (tell me|say|share) more( about that)?|"
+    r"can you elaborate( on that)?|"
+    r"please elaborate|"
+    r"can you say (a bit )?more|"
+    r"go on\.?"
+    r")\s*[?.!]?\s*$"
+)
+_CANDIDATE_ECHO_PREFIX = re.compile(
+    r"(?i)^\s*("
+    r"(good\s+)?(morning|afternoon|evening)\s+(sir|madam|ma'?am)|"
+    r"(hello|hi|hey)(\s+(sir|madam|ma'?am))?|"
+    r"morning(\s+sir)?|"
+    r"namaste"
+    r")\s*[,!.:\-]+\s*"
+)
+
+
+def looks_like_vague_followup(question: str) -> bool:
+    """True for empty probes like 'Can you tell me more about that?'."""
+    cleaned = " ".join((question or "").strip().split())
+    if not cleaned:
+        return False
+    if _VAGUE_FOLLOWUP.match(cleaned):
+        return True
+    lowered = cleaned.lower()
+    if lowered in {"about that?", "about that.", "more about that?"}:
+        return True
+    return False
+
+
+def strip_candidate_echo_prefix(question: str) -> str:
+    """Remove candidate greeting echoes leaked into interviewer questions."""
+    cleaned = (question or "").strip()
+    if not cleaned:
+        return cleaned
+    stripped = _CANDIDATE_ECHO_PREFIX.sub("", cleaned, count=1).strip()
+    if stripped and stripped[0].islower():
+        stripped = stripped[0].upper() + stripped[1:]
+    return stripped or cleaned
+
+
+def has_candidate_echo_prefix(question: str) -> bool:
+    return bool(_CANDIDATE_ECHO_PREFIX.match((question or "").strip()))
+
+
 def speaks_competency_label(question: str, competency_name: str | None) -> bool:
     """True when the spoken question leaks a rubric/competency title.
 
@@ -932,6 +983,15 @@ def validate_generated_question(
     question = (generated.question or "").strip()
     if not question:
         reasons.append("empty_question")
+    else:
+        sanitized = strip_candidate_echo_prefix(question)
+        if sanitized != question:
+            generated.question = sanitized
+            question = sanitized
+        if has_candidate_echo_prefix(question):
+            reasons.append("candidate_echo_prefix")
+        if looks_like_vague_followup(question):
+            reasons.append("vague_followup")
     if looks_like_compound_question(question):
         reasons.append("compound_question")
     lowered = question.lower()

@@ -33,6 +33,68 @@ def test_speaks_competency_label_blocks_rubric_leakage() -> None:
     )
 
 
+def test_vague_followup_is_rejected() -> None:
+    from products.interviewer.validator import looks_like_vague_followup
+
+    assert looks_like_vague_followup("Can you tell me more about that?")
+    assert looks_like_vague_followup("Tell me more")
+    assert not looks_like_vague_followup(
+        "What did you personally implement in the LiveKit proctoring path?"
+    )
+    generated = GeneratedQuestion(
+        question="Can you tell me more about that?",
+        competency_id="python",
+        intent="establish_ownership",
+        depth=2,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=None,
+        policy_competency_id="python",
+        policy_intent="establish_ownership",
+        policy_depth=2,
+        max_depth=4,
+        recent_questions=[],
+        allowed_probes=[],
+        hook_fact=None,
+    )
+    assert result.ok is False
+    assert "vague_followup" in result.reasons
+
+
+def test_candidate_echo_prefix_is_stripped_and_flagged() -> None:
+    from products.interviewer.validator import (
+        has_candidate_echo_prefix,
+        strip_candidate_echo_prefix,
+    )
+
+    raw = "morning sir, can you describe a Python project you worked on?"
+    assert has_candidate_echo_prefix(raw)
+    cleaned = strip_candidate_echo_prefix(raw)
+    assert cleaned.lower().startswith("can you describe")
+    assert not has_candidate_echo_prefix(cleaned)
+    generated = GeneratedQuestion(
+        question=raw,
+        competency_id="python",
+        intent="establish_context",
+        depth=1,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=None,
+        policy_competency_id="python",
+        policy_intent="establish_context",
+        policy_depth=1,
+        max_depth=4,
+        recent_questions=[],
+        allowed_probes=[],
+        hook_fact=None,
+    )
+    # After sanitize, question should no longer carry the echo prefix.
+    assert not has_candidate_echo_prefix(result.question.question)
+    assert result.question.question.lower().startswith("can you describe")
+
+
 def test_competency_label_spoken_is_rejected() -> None:
     generated = GeneratedQuestion(
         question="What part of the Role expertise solution did you personally implement?",

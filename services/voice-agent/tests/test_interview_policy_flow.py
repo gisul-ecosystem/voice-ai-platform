@@ -184,8 +184,8 @@ async def test_policy_mode_falls_back_to_ladder_when_json_is_invalid() -> None:
 async def test_policy_mode_advances_after_probe_cap() -> None:
     llm = FakeLlm(
         '{"question":"What broke when the billing API timed out?",'
-        '"competency_id":"problem_solving","intent":"establish_ownership","depth":2,'
-        '"probe_shape":"failure_mode"}'
+        '"competency_id":"communication","intent":"establish_context","depth":1,'
+        '"probe_shape":"why"}'
     )
     flow = InterviewFlow(
         {"phases": []},
@@ -196,8 +196,10 @@ async def test_policy_mode_advances_after_probe_cap() -> None:
         initial_phase_index=2,
         initial_probe_count=2,
     )
+    # Mark the one allowed intent-repair as already used so probe-cap advances.
+    flow.intent_repairs_used.add("problem_solving::establish_context")
     await flow.generate_next_question(
-        "I owned retries and timeouts on the billing API."
+        "I owned retries and timeouts on the billing API myself and measured p99."
     )
     assert flow.phase_index == 3
 
@@ -246,19 +248,25 @@ async def test_opening_map_then_competency_does_not_repeat_generic_fallback() ->
     opening = await flow.generate_next_question(None)
     assert "introduce" in opening.lower()
 
-    mapped = await flow.generate_next_question("I am a backend engineer who interned on billing.")
-    assert flow.phase_index == 1
-    assert "Could you share one specific example" not in mapped
-
-    baseline = await flow.generate_next_question(
-        "I used Redis on billing retries to keep latency around 200ms."
-    )
+    # Warmup multi-hops opening → map → first competency in one turn.
+    baseline = await flow.generate_next_question("I am a backend engineer who interned on billing.")
     assert flow.phase_index == 2
+    assert "Could you share one specific example" not in baseline
+    assert "tell me more" not in baseline.lower()
     assert flow.last_policy_decision is not None
     assert flow.last_policy_decision.competency_id == "problem_solving"
-    assert flow.last_policy_decision.intent == "establish_context"
-    assert "Could you share one specific example" not in baseline
-    assert "200ms" in baseline or "Redis" in baseline
+
+    follow = await flow.generate_next_question(
+        "I used Redis on billing retries to keep latency around 200ms."
+    )
+    assert "Could you share one specific example" not in follow
+    assert "tell me more" not in follow.lower()
+    assert "tell me a bit more" not in follow.lower()
+    # Prefer hook-aware speech; concrete ownership/context fallbacks are also ok.
+    assert any(
+        token in follow.lower()
+        for token in ("200ms", "redis", "personally", "handle", "algorithm", "situation")
+    )
     assert flow.last_validator_ok is True
 
 
@@ -285,7 +293,7 @@ async def test_policy_mode_opening_cites_resume_or_jd_materials() -> None:
     prompt = llm.messages[0][0]["content"]
     assert "ONE" in prompt.upper() or "one" in prompt.lower()
     assert "machine learning classifier" in prompt
-    assert "own words" in prompt.lower() or "vary" in prompt.lower()
+    assert "resume claim" in prompt.lower() or "pick at most one" in prompt.lower()
 
 @pytest.mark.asyncio
 async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:

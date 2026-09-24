@@ -43,10 +43,13 @@ from products.interviewer.validator import (
     SKIP_HOOK_INTENTS,
     GeneratedQuestion,
     extract_hook_fact,
+    is_clean_hook_fact,
     ladder_fallback_question,
     looks_like_compound_question,
+    looks_like_vague_followup,
     next_probe_shape,
     parse_generated_question,
+    strip_candidate_echo_prefix,
     validate_generated_question,
 )
 
@@ -701,6 +704,8 @@ class InterviewFlow:
         self.started_at = time.monotonic()
         self.phase_started_at = self.started_at
         self.consecutive_unusable = 0
+        self.consecutive_explicit_unknown = 0
+        self.usable_exchanges_on_competency = 0
         self.last_policy_decision: PolicyDecision | None = None
         self.last_answer_usability = "usable"
         self.last_answer_quality = "partial"
@@ -750,6 +755,9 @@ class InterviewFlow:
             else max(8, self.target_duration_minutes // 3)
             if self.policy_mode
             else max(12, self.target_duration_minutes // 2)
+        )
+        self.min_elapsed_before_close_seconds = max(
+            60, int(self.target_duration_minutes * 60 * 0.4)
         )
         if self.policy_mode:
             # Competency phases carry their own probe ceilings.
@@ -829,6 +837,8 @@ class InterviewFlow:
             self.phase_index += 1
             self.probe_count = 0
             self.consecutive_dry_probes = 0
+            self.usable_exchanges_on_competency = 0
+            self.consecutive_explicit_unknown = 0
             self.phase_started_at = time.monotonic()
             self.focus_item = ""
             self._ensure_focus(None)
@@ -898,6 +908,7 @@ class InterviewFlow:
             probe_count=self.probe_count,
             elapsed_seconds=max(0, int(time.monotonic() - self.started_at)),
             consecutive_unusable=self.consecutive_unusable,
+            consecutive_explicit_unknown=self.consecutive_explicit_unknown,
             completed=self.completed,
             phase_name=str(phase.get("name") or ""),
             competency_id=competency_id,
@@ -906,6 +917,8 @@ class InterviewFlow:
             soft_end_seconds=self.soft_end_seconds,
             target_end_seconds=self.target_end_seconds,
             hard_end_seconds=self.max_duration_seconds,
+            min_elapsed_before_close_seconds=self.min_elapsed_before_close_seconds,
+            min_candidate_turns_before_close=self.min_turns_before_close,
             at_last_competency=at_last,
             has_uncovered_competencies=has_uncovered,
             missing_intents=missing,
@@ -921,6 +934,9 @@ class InterviewFlow:
             intent_repair_available=self._intent_repair_available(
                 competency_id, missing
             ),
+            last_answer_usability=self.last_answer_usability,
+            last_answer_quality=self.last_answer_quality,
+            usable_exchanges_on_competency=self.usable_exchanges_on_competency,
         )
 
     def _intent_repair_key(self, competency_id: str | None, intent: str | None) -> str:
@@ -954,14 +970,21 @@ class InterviewFlow:
                 leaving = self.current_phase()
                 leaving_is_warmup = not bool(leaving.get("competency_id"))
                 self.apply_decision("advance")
+                if not leaving_is_warmup:
+                    # Prior answer belonged to the competency we just left. Do not
+                    # re-apply thin/unknown policy to the newly entered topic.
+                    self.last_answer_usability = "usable"
+                    self.last_answer_quality = "adequate"
+                    self.consecutive_unusable = 0
+                    self.consecutive_explicit_unknown = 0
                 decision = decide_next_action(
                     self._policy_state(pending_candidate_turn=pending_candidate_turn)
                 )
                 landed = self.current_phase()
-                if landed.get("competency_id"):
-                    break
                 if not leaving_is_warmup:
                     # Left a competency; do not cascade further this turn.
+                    break
+                if landed.get("competency_id"):
                     break
         self.last_policy_decision = decision
         if decision is not None and decision.intent in {
@@ -1202,11 +1225,21 @@ class InterviewFlow:
             if not competency_id:
                 return self.probe_count >= min(2, self.max_probes_per_phase)
             missing = list((self.coverage.get(str(competency_id)) or {}).get("missing_intents") or [])
-            if missing and self.probe_count < self._phase_probe_limit():
+            limit = self._phase_probe_limit()
+            # Stay until one usable exchange unless soft/hard end or probe budget spent.
+            if (
+                self.usable_exchanges_on_competency < 1
+                and not self._soft_time_reached()
+                and not self._time_up()
+                and self.probe_count < limit
+            ):
                 return False
-            if not missing and self.probe_count >= 1:
+            # Selective: intents covered after a usable exchange → leave (no max-probe force).
+            if not missing and self.usable_exchanges_on_competency >= 1:
                 return True
-            return self.probe_count >= self._phase_probe_limit()
+            if missing and self.probe_count < limit:
+                return False
+            return self.probe_count >= limit
         if self._is_warmup_phase():
             return self.probe_count >= 1
         remaining_topics = (
@@ -1338,8 +1371,19 @@ class InterviewFlow:
         if update_counters:
             # Off-topic / jailbreak land as usability=off_topic and climb the
             # clarify ladder. Silence / STT / network failures do not.
+            if usability == "explicit_unknown":
+                self.consecutive_explicit_unknown += 1
+            else:
+                self.consecutive_explicit_unknown = 0
             if usability == "usable" and quality not in {"off_topic", "unsupported"}:
                 self.consecutive_unusable = 0
+                if self.last_answer_quality in {
+                    "adequate",
+                    "strong",
+                    "partial",
+                    "sufficient",
+                }:
+                    self.usable_exchanges_on_competency += 1
             elif usability not in {"silence", "stt_failure", "network_failure"}:
                 self.consecutive_unusable += 1
         if self.policy_mode and competency_id and usability != "off_topic":
@@ -2085,11 +2129,23 @@ class InterviewFlow:
     def _ultimate_clean_question(self, hook_fact: str) -> str:
         """Guaranteed single-ask bland prompt — preferred over shipping known-bad.
 
-        Never echo candidate STT fragments ("Regarding thank you…"). The LLM
-        should phrase hooks; this path only keeps the conversation alive.
+        Never echo candidate STT fragments. Never use a vague "tell me more".
         """
-        _ = hook_fact  # retained for call-site compatibility
-        return "Can you tell me more about that?"
+        policy = self.last_policy_decision
+        intent = (policy.intent if policy else None) or "establish_ownership"
+        spoken = ladder_fallback_question(
+            self.interview_definition,
+            competency_id=policy.competency_id if policy else None,
+            intent=intent,
+        )
+        cleaned = strip_candidate_echo_prefix(spoken)
+        if looks_like_vague_followup(cleaned):
+            return "What part of that work did you personally handle?"
+        if hook_fact and is_clean_hook_fact(hook_fact):
+            stem = hook_fact.strip()
+            if stem and stem.lower() not in cleaned.lower():
+                return f"On {stem}, what did you personally handle?"
+        return cleaned or "What part of that work did you personally handle?"
 
     def _capture_spoken_validation(
         self,
@@ -2446,6 +2502,7 @@ class InterviewFlow:
                 question = CLOSING_MESSAGE
         if last_candidate_turn is None:
             question = self._ensure_opening_cites_context(question)
+        question = strip_candidate_echo_prefix(question or "")
         self._remember_question(question)
         logger.info(
             "stage2_question",
@@ -2498,6 +2555,7 @@ class InterviewFlow:
                 decision, is_intro_reply=is_intro_reply
             )
             self._apply_turn_decision(decision, is_intro_reply=is_intro_reply)
+        question = strip_candidate_echo_prefix(question or "")
         self._remember_question(question)
         logger.info(
             "stage2_question",

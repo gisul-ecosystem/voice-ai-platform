@@ -83,6 +83,7 @@ class PolicyState:
     probe_count: int = 0
     elapsed_seconds: int = 0
     consecutive_unusable: int = 0
+    consecutive_explicit_unknown: int = 0
     completed: bool = False
     phase_name: str = ""
     competency_id: str | None = None
@@ -91,6 +92,8 @@ class PolicyState:
     soft_end_seconds: int = 27 * 60
     target_end_seconds: int = 30 * 60
     hard_end_seconds: int = 35 * 60
+    min_elapsed_before_close_seconds: int = 0
+    min_candidate_turns_before_close: int = 8
     at_last_competency: bool = False
     has_uncovered_competencies: bool = False
     missing_intents: list[str] = field(default_factory=list)
@@ -105,6 +108,40 @@ class PolicyState:
     close_after: int = 4
     # One reframed attempt allowed per competency+intent before abandoning.
     intent_repair_available: bool = False
+    last_answer_usability: str = "usable"
+    last_answer_quality: str = "adequate"
+    usable_exchanges_on_competency: int = 0
+
+
+def _answer_is_thin(state: PolicyState) -> bool:
+    if state.last_answer_usability in {
+        "too_short",
+        "silence",
+        "explicit_unknown",
+        "off_topic",
+    }:
+        return True
+    return state.last_answer_quality in {"unclear", "partial", "off_topic", "unsupported"}
+
+
+def _answer_is_substantive(state: PolicyState) -> bool:
+    return (
+        state.last_answer_usability == "usable"
+        and state.last_answer_quality in {"adequate", "strong", "partial", "sufficient"}
+        and state.last_answer_quality not in {"off_topic", "unsupported"}
+    )
+
+
+def _may_close_or_wrap(state: PolicyState) -> bool:
+    """Block early wrap-up before min time/turns (hard end still wins upstream)."""
+    min_elapsed = max(
+        0,
+        int(state.min_elapsed_before_close_seconds)
+        or int(state.target_end_seconds * 0.4),
+    )
+    if state.elapsed_seconds >= min_elapsed:
+        return True
+    return state.candidate_turn_count >= max(1, state.min_candidate_turns_before_close)
 
 
 def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -145,6 +182,9 @@ def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any]
         usable_competencies = [
             item for item in competencies if isinstance(item, dict)
         ][:4]
+    # Keep interviews deep: fewer competencies on short slots.
+    max_comps = 3 if duration <= 20 else 4
+    usable_competencies = usable_competencies[:max_comps]
     remaining = max(8, duration - 7)
     per = max(3, remaining // max(len(usable_competencies), 1))
     for item in usable_competencies:
@@ -304,6 +344,56 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="closing",
         )
 
+    # "I don't know": one same-topic clarify, then advance — not an instant hop.
+    if state.last_answer_usability == "explicit_unknown":
+        if state.consecutive_explicit_unknown < 2:
+            return PolicyDecision(
+                action=CLARIFY_CURRENT_ANSWER,
+                forced_flow_decision="probe",
+                allow_llm_decision=False,
+                current_depth=max(1, min(state.probe_count + 1, state.max_depth)),
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="clarify",
+                reason="explicit unknown — one same-topic rephrase before moving on",
+                section=_section_for_phase(state.phase_name),
+            )
+        if state.has_uncovered_competencies:
+            return PolicyDecision(
+                action=MOVE_TO_NEXT_COMPETENCY,
+                forced_flow_decision="advance",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="recovery",
+                reason="second explicit unknown — advance topic",
+                section=_section_for_phase(state.phase_name),
+            )
+        if _may_close_or_wrap(state):
+            return PolicyDecision(
+                action=OFFER_FINAL_ADDITION,
+                forced_flow_decision="close",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="recovery",
+                reason="second explicit unknown — wrap up",
+                section="closing",
+            )
+        return PolicyDecision(
+            action=PROBE_FOR_REFLECTION,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=max(1, min(state.probe_count + 1, state.max_depth)),
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="tradeoff_or_transfer",
+            reason="too early to close — one reflective probe on last topic",
+            section="competency_assessment",
+        )
+
     if (
         state.consecutive_unusable >= state.clarify_after
         and state.consecutive_unusable < state.change_topic_after
@@ -326,6 +416,30 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         )
 
     if state.consecutive_unusable >= state.close_after:
+        if not _may_close_or_wrap(state):
+            if state.has_uncovered_competencies:
+                return PolicyDecision(
+                    action=MOVE_TO_NEXT_COMPETENCY,
+                    forced_flow_decision="advance",
+                    allow_llm_decision=False,
+                    current_depth=1,
+                    max_depth=state.max_depth,
+                    competency_id=state.competency_id,
+                    intent="recovery",
+                    reason="repeated unusable — advance, too early to close",
+                    section=_section_for_phase(state.phase_name),
+                )
+            return PolicyDecision(
+                action=PROBE_FOR_REFLECTION,
+                forced_flow_decision="probe",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="tradeoff_or_transfer",
+                reason="repeated unusable — too early to close, one more probe",
+                section="competency_assessment",
+            )
         return PolicyDecision(
             action=CLOSE_INTERVIEW,
             forced_flow_decision="close",
@@ -339,20 +453,40 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         )
 
     if state.consecutive_unusable >= state.change_topic_after:
+        if state.has_uncovered_competencies:
+            return PolicyDecision(
+                action=MOVE_TO_NEXT_COMPETENCY,
+                forced_flow_decision="advance",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="recovery",
+                reason="repeated unusable answers",
+                section=_section_for_phase(state.phase_name),
+            )
+        if _may_close_or_wrap(state):
+            return PolicyDecision(
+                action=OFFER_FINAL_ADDITION,
+                forced_flow_decision="close",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="recovery",
+                reason="repeated unusable answers",
+                section="closing",
+            )
         return PolicyDecision(
-            action=MOVE_TO_NEXT_COMPETENCY
-            if state.has_uncovered_competencies
-            else OFFER_FINAL_ADDITION,
-            forced_flow_decision="advance"
-            if state.has_uncovered_competencies
-            else "close",
+            action=PROBE_FOR_REFLECTION,
+            forced_flow_decision="probe",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=state.max_depth,
             competency_id=state.competency_id,
-            intent="recovery",
-            reason="repeated unusable answers",
-            section=_section_for_phase(state.phase_name),
+            intent="tradeoff_or_transfer",
+            reason="repeated unusable — too early to close",
+            section="competency_assessment",
         )
 
     section = _section_for_phase(state.phase_name)
@@ -427,7 +561,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
     if section == "closing" or (
         state.elapsed_seconds >= state.soft_end_seconds and state.at_last_competency
     ):
-        if state.elapsed_seconds >= state.target_end_seconds:
+        if state.elapsed_seconds >= state.target_end_seconds and _may_close_or_wrap(state):
             return PolicyDecision(
                 action=CLOSE_INTERVIEW,
                 forced_flow_decision="close",
@@ -439,16 +573,30 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
                 reason="target end reached",
                 section="closing",
             )
+        if _may_close_or_wrap(state):
+            return PolicyDecision(
+                action=OFFER_FINAL_ADDITION,
+                forced_flow_decision="probe",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=1,
+                competency_id=state.competency_id,
+                intent="final_addition",
+                reason="soft end — offer final addition",
+                section="closing",
+            )
         return PolicyDecision(
-            action=OFFER_FINAL_ADDITION,
+            action=PROBE_FOR_RESULT
+            if state.missing_intents
+            else PROBE_FOR_REFLECTION,
             forced_flow_decision="probe",
             allow_llm_decision=False,
-            current_depth=1,
-            max_depth=1,
+            current_depth=max(1, min(state.probe_count + 1, state.max_depth)),
+            max_depth=state.max_depth,
             competency_id=state.competency_id,
-            intent="final_addition",
-            reason="soft end — offer final addition",
-            section="closing",
+            intent=(state.missing_intents[0] if state.missing_intents else "tradeoff_or_transfer"),
+            reason="soft end reached early — deepen last competency before wrap",
+            section="competency_assessment",
         )
 
     # Soft end while competencies remain: advance breadth-first — no new deep probes.
@@ -476,6 +624,50 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         or depth >= state.max_depth
         or dry_exhausted
     )
+
+    # Selective follow-up: intents covered + substantive answer → advance (no extra probe).
+    if (
+        not state.missing_intents
+        and state.coverage_complete
+        and _answer_is_substantive(state)
+        and state.usable_exchanges_on_competency >= 1
+    ):
+        if state.has_uncovered_competencies:
+            return PolicyDecision(
+                action=MOVE_TO_NEXT_COMPETENCY,
+                forced_flow_decision="advance",
+                allow_llm_decision=False,
+                current_depth=depth,
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="coverage",
+                reason="intents covered with substantive answer — advance",
+                section="competency_assessment",
+            )
+        if _may_close_or_wrap(state):
+            return PolicyDecision(
+                action=OFFER_FINAL_ADDITION,
+                forced_flow_decision="probe",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=1,
+                competency_id=state.competency_id,
+                intent="final_addition",
+                reason="all competencies covered — wrap up",
+                section="closing",
+            )
+        return PolicyDecision(
+            action=PROBE_FOR_REFLECTION,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=depth,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="tradeoff_or_transfer",
+            reason="covered early — reflective probe until min interview length",
+            section="competency_assessment",
+        )
+
     if state.missing_intents and probes_exhausted and state.intent_repair_available:
         next_intent = state.missing_intents[0]
         action = _INTENT_ACTIONS.get(next_intent, PROBE_FOR_METHOD)
@@ -494,11 +686,13 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="competency_assessment",
         )
     if state.missing_intents and not probes_exhausted:
-        # Always chase the first (weakest / earliest) unmet assessment intent.
+        # Probe only while evidence is still missing (selective follow-up).
         next_intent = state.missing_intents[0]
         intent_depth = min(state.max_depth, max(depth, 1))
         action = _INTENT_ACTIONS.get(next_intent, _DEPTH_ACTIONS.get(depth, PROBE_FOR_CONTEXT))
         reason = "required assessment intent still missing"
+        if _answer_is_thin(state):
+            reason = "thin answer — concrete follow-up for missing intent"
         if state.consecutive_dry_probes:
             reason = (
                 f"required assessment intent still missing "
@@ -518,6 +712,25 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
 
     if state.coverage_complete or probes_exhausted:
         if state.has_uncovered_competencies:
+            # Stay for a thin first answer while probe budget remains; once
+            # probes are exhausted, advance even without a usable exchange.
+            if (
+                state.usable_exchanges_on_competency < 1
+                and state.elapsed_seconds < state.soft_end_seconds
+                and _answer_is_thin(state)
+                and not probes_exhausted
+            ):
+                return PolicyDecision(
+                    action=CLARIFY_CURRENT_ANSWER,
+                    forced_flow_decision="probe",
+                    allow_llm_decision=False,
+                    current_depth=depth,
+                    max_depth=state.max_depth,
+                    competency_id=state.competency_id,
+                    intent="clarify",
+                    reason="no usable exchange yet — stay on competency",
+                    section="competency_assessment",
+                )
             reason = "competency complete or probe budget exhausted"
             if dry_exhausted and not state.coverage_complete:
                 reason = "two follow-ups without new information — advance"
@@ -544,15 +757,27 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
                 reason="final coverage check before close",
                 section="coverage_check",
             )
+        if _may_close_or_wrap(state):
+            return PolicyDecision(
+                action=MOVE_TO_NEXT_COMPETENCY,
+                forced_flow_decision="advance",
+                allow_llm_decision=False,
+                current_depth=depth,
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="coverage",
+                reason="competency complete",
+                section="competency_assessment",
+            )
         return PolicyDecision(
-            action=MOVE_TO_NEXT_COMPETENCY,
-            forced_flow_decision="advance",
+            action=PROBE_FOR_REFLECTION,
+            forced_flow_decision="probe",
             allow_llm_decision=False,
             current_depth=depth,
             max_depth=state.max_depth,
             competency_id=state.competency_id,
-            intent="coverage",
-            reason="competency complete",
+            intent="tradeoff_or_transfer",
+            reason="competency complete early — continue until min length",
             section="competency_assessment",
         )
 
@@ -610,7 +835,16 @@ def classify_answer_usability(text: str | None, *, min_words: int = 3) -> str:
     lowered = cleaned.lower()
     if any(
         token in lowered
-        for token in ("i don't know", "i do not know", "no idea", "not sure")
+        for token in (
+            "i don't know",
+            "i do not know",
+            "no idea",
+            "not sure",
+            "don't know more",
+            "do not know more",
+            "i'm doing this much",
+            "i am doing this much",
+        )
     ):
         return "explicit_unknown"
     words = cleaned.split()

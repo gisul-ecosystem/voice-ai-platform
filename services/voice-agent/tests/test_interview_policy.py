@@ -8,6 +8,8 @@ from products.interviewer.policy import (
     MAP_CANDIDATE_BACKGROUND,
     MOVE_TO_NEXT_COMPETENCY,
     OPEN_INTERVIEW,
+    PROBE_FOR_REFLECTION,
+    PROBE_FOR_RESULT,
     PolicyState,
     classify_answer_usability,
     decide_next_action,
@@ -88,6 +90,97 @@ def test_outline_skips_jd_duty_fragment_competencies() -> None:
     assert names[0] == "opening"
     assert names[1] == "candidate_map"
     assert names[-1] == "closing"
+
+
+def test_outline_caps_competencies_on_short_interviews() -> None:
+    comps = [
+        {"id": f"c{i}", "name": f"Skill {i}", "evidence_expected": ["x"]}
+        for i in range(1, 7)
+    ]
+    outline = outline_from_definition(
+        {"time_policy": {"duration_minutes": 15}, "competencies": comps}
+    )
+    assert outline is not None
+    competency_phases = [
+        p for p in outline["phases"] if p["name"] not in {"opening", "candidate_map", "closing"}
+    ]
+    assert len(competency_phases) == 3
+
+
+def test_first_explicit_unknown_clarifies_same_topic() -> None:
+    decision = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=4,
+            candidate_turn_count=4,
+            phase_name="Python Proficiency",
+            competency_id="python",
+            last_answer_usability="explicit_unknown",
+            consecutive_explicit_unknown=1,
+            has_uncovered_competencies=True,
+        )
+    )
+    assert decision.action == CLARIFY_CURRENT_ANSWER
+    assert decision.forced_flow_decision == "probe"
+
+
+def test_second_explicit_unknown_advances() -> None:
+    decision = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=5,
+            candidate_turn_count=5,
+            phase_name="Python Proficiency",
+            competency_id="python",
+            last_answer_usability="explicit_unknown",
+            consecutive_explicit_unknown=2,
+            has_uncovered_competencies=True,
+        )
+    )
+    assert decision.action == MOVE_TO_NEXT_COMPETENCY
+
+
+def test_substantive_covered_answer_advances_without_extra_probe() -> None:
+    decision = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=5,
+            candidate_turn_count=5,
+            phase_name="Python Proficiency",
+            competency_id="python",
+            probe_count=2,
+            max_probes=4,
+            missing_intents=[],
+            coverage_complete=True,
+            last_answer_usability="usable",
+            last_answer_quality="sufficient",
+            usable_exchanges_on_competency=1,
+            has_uncovered_competencies=True,
+            elapsed_seconds=600,
+            target_end_seconds=1800,
+        )
+    )
+    assert decision.action == MOVE_TO_NEXT_COMPETENCY
+    assert "substantive" in decision.reason or "covered" in decision.reason
+
+
+def test_early_offer_final_is_blocked_before_min_length() -> None:
+    from products.interviewer.policy import OFFER_FINAL_ADDITION
+
+    decision = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=6,
+            candidate_turn_count=6,
+            phase_name="closing",
+            elapsed_seconds=300,
+            soft_end_seconds=200,
+            target_end_seconds=1800,
+            min_elapsed_before_close_seconds=720,
+            min_candidate_turns_before_close=8,
+            at_last_competency=True,
+        )
+    )
+    assert decision.action != OFFER_FINAL_ADDITION
+    assert decision.action != CLOSE_INTERVIEW
+    assert decision.action in {PROBE_FOR_REFLECTION, PROBE_FOR_RESULT}
+    assert decision.forced_flow_decision == "probe"
 
 
 def test_opening_and_map_are_forced_before_deep_dive() -> None:
@@ -262,15 +355,36 @@ def test_non_answer_policy_thresholds_are_honored() -> None:
 
 
 def test_repeated_unusable_answers_force_controlled_close() -> None:
+    # Min length satisfied — repeated unusable may close.
     closed = decide_next_action(
         PolicyState(
-            interviewer_turn_count=6,
-            candidate_turn_count=6,
+            interviewer_turn_count=10,
+            candidate_turn_count=10,
             phase_name="Problem solving",
             consecutive_unusable=4,
-            has_uncovered_competencies=True,
+            has_uncovered_competencies=False,
+            elapsed_seconds=900,
+            target_end_seconds=1800,
+            min_elapsed_before_close_seconds=720,
+            min_candidate_turns_before_close=8,
         )
     )
     assert closed.action == CLOSE_INTERVIEW
     assert closed.forced_flow_decision == "close"
+
+    # Too early: advance remaining topics instead of closing.
+    early = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=4,
+            candidate_turn_count=4,
+            phase_name="Problem solving",
+            consecutive_unusable=4,
+            has_uncovered_competencies=True,
+            elapsed_seconds=120,
+            target_end_seconds=1800,
+            min_elapsed_before_close_seconds=720,
+            min_candidate_turns_before_close=8,
+        )
+    )
+    assert early.action == MOVE_TO_NEXT_COMPETENCY
 

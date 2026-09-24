@@ -19,7 +19,8 @@ from voice_platform.chat import (
 logger = logging.getLogger("voice-agent.interviewer")
 
 # Soft continue — never apologize for audio/STT or say the answer was unclear.
-CLARIFY_TURN = "Please continue — tell me a bit more about that."
+# Keep it concrete; never a vague "tell me more".
+CLARIFY_TURN = "What part of that work did you personally handle?"
 
 
 class AaptorAgent(Agent):

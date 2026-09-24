@@ -122,7 +122,29 @@ def test_non_answer_ladder_clarify_rephrase_change_close() -> None:
     assert change.action == MOVE_TO_NEXT_COMPETENCY
     assert change.forced_flow_decision == "advance"
 
-    closed = decide_next_action(PolicyState(**base, consecutive_unusable=4))
+    # Early close blocked: still has topics → advance instead of closing.
+    early_close = decide_next_action(
+        PolicyState(
+            **base,
+            consecutive_unusable=4,
+            elapsed_seconds=120,
+            target_end_seconds=1800,
+            min_elapsed_before_close_seconds=720,
+            min_candidate_turns_before_close=8,
+        )
+    )
+    assert early_close.action == MOVE_TO_NEXT_COMPETENCY
+
+    closed = decide_next_action(
+        PolicyState(
+            **{**base, "has_uncovered_competencies": False},
+            consecutive_unusable=4,
+            elapsed_seconds=900,
+            target_end_seconds=1800,
+            min_elapsed_before_close_seconds=720,
+            min_candidate_turns_before_close=8,
+        )
+    )
     assert closed.action == CLOSE_INTERVIEW
     assert closed.forced_flow_decision == "close"
 
@@ -186,6 +208,8 @@ def test_soft_end_advances_remaining_competencies_without_deeper_probes() -> Non
 
 @pytest.mark.asyncio
 async def test_four_unusable_answers_close_with_closing_message() -> None:
+    import time
+
     class Scripted:
         async def generate_reply(self, messages, **_kwargs):
             return (
@@ -206,13 +230,15 @@ async def test_four_unusable_answers_close_with_closing_message() -> None:
     )
     # Opening
     await flow.generate_next_question(None)
-    # Intro usable enough to proceed, then four unusable answers
+    # Intro usable enough to proceed, then unusable shorts (not "I don't know").
     await flow.generate_next_question(
         "I am a backend engineer who worked on APIs and services in Python."
     )
+    # Satisfy min interview length so controlled close is allowed.
+    flow.started_at = time.monotonic() - 900
     for _ in range(3):
-        await flow.generate_next_question("I don't know")
-    question = await flow.generate_next_question("I don't know")
+        await flow.generate_next_question("Yeah.")
+    question = await flow.generate_next_question("Yeah.")
     assert question == CLOSING_MESSAGE
     assert flow.completed is True
 

@@ -69,8 +69,11 @@ def test_replay_next_intent_matches_missing_evidenced_intent(session) -> None:
             "CHECK_REMAINING_GAP",
         }
         and result.missing_after
+        and not session.allow_competency_change
     ):
         assert result.decision.intent == result.missing_after[0]
+    if session.allow_competency_change:
+        assert result.decision.competency_id == session.expected_competency_id
 
 
 @pytest.mark.parametrize("session", SESSIONS, ids=lambda item: item.fixture_id)

@@ -173,6 +173,7 @@ class RecordedSession:
     phase_index: int = 2
     elapsed_seconds: int = 600
     consecutive_unusable: int = 0
+    consecutive_explicit_unknown: int = 0
     last_probe_shape: str = "why"
     profile_type: str = "experienced"
     job_target_level: str = "mid"
@@ -250,7 +251,7 @@ def recorded_sessions() -> list[RecordedSession]:
             last_answer="Not sure about that one.",
             asked_intent="establish_ownership",
             competency_id="problem_solving",
-            expected_intent="rephrase",
+            expected_intent="clarify",
             expected_action=CLARIFY_CURRENT_ANSWER,
             expected_competency_id="problem_solving",
             interviewer_turns=_DEFAULT_QUESTIONS,
@@ -264,15 +265,19 @@ def recorded_sessions() -> list[RecordedSession]:
             scenario="thin_answer",
             last_answer="I have no idea.",
             asked_intent="establish_ownership",
-            competency_id="reliability",
-            expected_intent="recovery",
-            expected_action=OFFER_FINAL_ADDITION,
+            competency_id="problem_solving",
+            expected_intent="establish_context",
+            expected_action="PROBE_FOR_CONTEXT",
             expected_competency_id="reliability",
             interviewer_turns=_DEFAULT_QUESTIONS,
             prior_candidate_turns=_DEFAULT_ANSWERS,
             pre_covered=("establish_context",),
-            phase_index=3,
-            consecutive_unusable=2,
+            phase_index=2,
+            consecutive_unusable=0,
+            # Already had one "I don't know"; this second consecutive unknown advances
+            # onto the next competency baseline (not another vague clarify).
+            consecutive_explicit_unknown=1,
+            allow_competency_change=True,
             must_not_cover=("establish_ownership", "applied_understanding"),
         ),
         RecordedSession(
@@ -551,6 +556,7 @@ def run_replay(session: RecordedSession) -> ReplayResult:
     flow.last_question_competency_id = session.competency_id
     flow.last_probe_shape[session.competency_id] = session.last_probe_shape
     flow.consecutive_unusable = session.consecutive_unusable
+    flow.consecutive_explicit_unknown = session.consecutive_explicit_unknown
     flow.started_at = time.monotonic() - session.elapsed_seconds
     if session.pre_covered:
         apply_coverage(
@@ -646,9 +652,18 @@ def _check_logical(result: ReplayResult, notes: dict[str, str]) -> bool:
     if (
         decision.action not in _RECOVERY_ACTIONS
         and result.missing_after
+        and not session.allow_competency_change
         and decision.intent != result.missing_after[0]
     ):
         notes["logical"] = "skipped first missing evidenced intent"
+        return False
+    if (
+        session.allow_competency_change
+        and decision.competency_id
+        and decision.competency_id != session.competency_id
+        and decision.competency_id != session.expected_competency_id
+    ):
+        notes["logical"] = "landed on unexpected competency after advance"
         return False
     notes["logical"] = "next intent matches the recorded plan"
     return True
