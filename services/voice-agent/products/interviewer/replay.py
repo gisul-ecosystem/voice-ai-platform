@@ -530,6 +530,15 @@ def run_replay(session: RecordedSession) -> ReplayResult:
         for item in definition["competencies"]
         if item.get("id")
     ]
+    phase_index = session.phase_index
+    from products.interviewer.policy import outline_from_definition
+
+    outline = outline_from_definition(definition) or {}
+    if session.competency_id:
+        for index, phase in enumerate(outline.get("phases") or []):
+            if str(phase.get("competency_id") or "") == session.competency_id:
+                phase_index = index
+                break
     flow = InterviewFlow(
         {"phases": []},
         _UnusedLlm(),
@@ -547,7 +556,7 @@ def run_replay(session: RecordedSession) -> ReplayResult:
                 }
             ],
         },
-        initial_phase_index=session.phase_index,
+        initial_phase_index=phase_index,
         initial_probe_count=session.probe_count,
         interviewer_turns=list(session.interviewer_turns),
         candidate_turns=list(session.prior_candidate_turns),

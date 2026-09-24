@@ -152,7 +152,9 @@ class LlmClient(Protocol):
 
 _SECTION_HEADINGS = re.compile(
     r"(?im)^\s*(projects?|key projects|selected projects|academic projects|"
-    r"personal projects|work experience|professional experience|experience)\s*:?\s*$"
+    r"personal projects|work experience|professional experience|experience|"
+    r"internships?|employment|work history|career history|roles?|"
+    r"campaigns?|deals?|key achievements|achievements)\s*:?\s*$"
 )
 _NEXT_HEADING = re.compile(
     r"(?im)^\s*(education|skills|technical skills|certifications|awards|"
@@ -396,7 +398,21 @@ def rank_projects_by_competency_gap(
         ctype = str(item.get("type") or "").lower()
         overlap = sum(1 for token in tokens if token in value)
         gap_hit = 1 if any(gid.replace("_", " ") in value for gid in gap_ids) else 0
-        ownership = 1 if any(w in value for w in ("i ", "led", "owned", "built", "designed")) else 0
+        ownership = 1 if any(
+            w in value
+            for w in (
+                "i ",
+                "led",
+                "owned",
+                "built",
+                "designed",
+                "managed",
+                "negotiated",
+                "closed",
+                "ran",
+                "drove",
+            )
+        ) else 0
         return (
             overlap * 10 + type_boost.get(ctype, 0) + gap_hit * 3 + ownership,
             -len(value),
@@ -688,6 +704,7 @@ class InterviewFlow:
             job_description, self.competencies
         )
         self.focus_item = ""
+        self.active_project = ""
         self._touched_topics: set[str] = set()
         self.candidate_profile = build_candidate_profile(
             resume_text=resume_text,
@@ -695,6 +712,7 @@ class InterviewFlow:
             definition=self.interview_definition,
             existing=candidate_profile,
         )
+        self._hydrate_resume_project_phase()
         self.coverage = (
             dict(initial_coverage)
             if isinstance(initial_coverage, dict) and initial_coverage
@@ -830,18 +848,30 @@ class InterviewFlow:
         if decision == "advance" or must_advance:
             previous = self.current_phase().get("name")
             leaving_id = self.current_phase().get("competency_id")
+            leaving_project = self._is_project_phase()
+            previous_focus = self.focus_item or self.active_project
             if leaving_id:
                 mark_missing_intents_insufficient(
                     self.coverage, competency_id=str(leaving_id)
                 )
+            if leaving_project and previous_focus:
+                self.active_project = previous_focus
+                if previous_focus.lower() not in self._touched_topics:
+                    self._touched_topics.add(previous_focus.lower())
             self.phase_index += 1
             self.probe_count = 0
             self.consecutive_dry_probes = 0
             self.usable_exchanges_on_competency = 0
             self.consecutive_explicit_unknown = 0
             self.phase_started_at = time.monotonic()
-            self.focus_item = ""
-            self._ensure_focus(None)
+            if leaving_project and previous_focus and self.current_phase().get(
+                "competency_id"
+            ):
+                # Keep the discussed project as the hook for competency asks.
+                self.focus_item = previous_focus
+            else:
+                self.focus_item = ""
+                self._ensure_focus(None)
             logger.info(
                 "phase_advanced",
                 extra={
@@ -961,17 +991,17 @@ class InterviewFlow:
             self._policy_state(pending_candidate_turn=pending_candidate_turn)
         )
         if advance_if_ready and decision.forced_flow_decision == "advance" and not self.completed:
-            # Hop warmup phases (opening → candidate_map → first competency) in one
-            # turn so the spoken question is already on a real competency. Never
-            # multi-hop across competency phases — that would skip assessment.
+            # Hop skippable warmups (opening → candidate_map) in one turn, then
+            # stop on resume projects or the first competency. Never multi-hop
+            # across resume/project or competency phases.
             for _ in range(4):
                 if decision.forced_flow_decision != "advance" or self.completed:
                     break
                 leaving = self.current_phase()
-                leaving_is_warmup = not bool(leaving.get("competency_id"))
+                leaving_is_warmup = self._is_skippable_warmup_phase(leaving)
                 self.apply_decision("advance")
                 if not leaving_is_warmup:
-                    # Prior answer belonged to the competency we just left. Do not
+                    # Prior answer belonged to the topic we just left. Do not
                     # re-apply thin/unknown policy to the newly entered topic.
                     self.last_answer_usability = "usable"
                     self.last_answer_quality = "adequate"
@@ -982,9 +1012,9 @@ class InterviewFlow:
                 )
                 landed = self.current_phase()
                 if not leaving_is_warmup:
-                    # Left a competency; do not cascade further this turn.
+                    # Left a real assessment/project phase; do not cascade further.
                     break
-                if landed.get("competency_id"):
+                if landed.get("competency_id") or self._is_project_phase_dict(landed):
                     break
         self.last_policy_decision = decision
         if decision is not None and decision.intent in {
@@ -1030,12 +1060,26 @@ class InterviewFlow:
         )
 
     def _is_warmup_phase(self) -> bool:
-        if self._phase_intent() == "intro":
+        return self._is_skippable_warmup_phase(self.current_phase())
+
+    @staticmethod
+    def _is_project_phase_dict(phase: dict | None) -> bool:
+        if not isinstance(phase, dict):
+            return False
+        if infer_phase_intent(phase) == "resume_project":
             return True
-        name = str(self.current_phase().get("name") or "").lower()
+        name = str(phase.get("name") or "").lower()
+        source = str(phase.get("source") or "").lower()
+        return "project" in name or source == "resume"
+
+    def _is_skippable_warmup_phase(self, phase: dict | None = None) -> bool:
+        """Opening/map only — resume projects and competencies are not hoppable."""
+        phase = phase if isinstance(phase, dict) else self.current_phase()
+        if phase.get("competency_id") or self._is_project_phase_dict(phase):
+            return False
+        name = str(phase.get("name") or "").lower()
         return any(
-            token in name
-            for token in ("warm", "intro", "opening", "map", "candidate")
+            token in name for token in ("warm", "intro", "opening", "map", "candidate")
         )
 
     @staticmethod
@@ -1223,6 +1267,8 @@ class InterviewFlow:
         if self.policy_mode:
             competency_id = self.current_phase().get("competency_id")
             if not competency_id:
+                if self._is_project_phase():
+                    return self.probe_count >= self._phase_probe_limit()
                 return self.probe_count >= min(2, self.max_probes_per_phase)
             missing = list((self.coverage.get(str(competency_id)) or {}).get("missing_intents") or [])
             limit = self._phase_probe_limit()
@@ -1257,6 +1303,45 @@ class InterviewFlow:
             self.probe_count >= self._topic_probe_limit()
             or phase_elapsed >= self._phase_minutes() * 60
         )
+
+    def _hydrate_resume_project_phase(self) -> None:
+        """Fill the resume-projects phase topics from parsed resume / profile claims."""
+        projects: list[str] = list(self.resume_projects)
+        if isinstance(self.candidate_profile, dict):
+            for claim in self.candidate_profile.get("claims") or []:
+                if not isinstance(claim, dict):
+                    continue
+                ctype = str(claim.get("type") or "").lower()
+                value = str(claim.get("value") or "").strip()
+                if not value:
+                    continue
+                if ctype in {"project", "experience", "internship", "achievement"}:
+                    projects.append(value)
+                elif not ctype and len(value.split()) <= 12:
+                    # Untyped short claims are treated as project hooks.
+                    projects.append(value)
+        seen: set[str] = set()
+        unique: list[str] = []
+        for name in projects:
+            key = name.lower()
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            unique.append(name)
+            if len(unique) >= 8:
+                break
+        if unique:
+            self.resume_projects = unique
+        for phase in self.phases:
+            if not self._is_project_phase_dict(phase):
+                continue
+            phase["intent"] = "resume_project"
+            phase["source"] = phase.get("source") or "resume"
+            phase.setdefault("max_depth", 3)
+            phase.setdefault("max_probes", 3)
+            if unique:
+                phase["topics"] = list(unique)
+            break
 
     def _time_up(self) -> bool:
         return time.monotonic() - self.started_at >= self.max_duration_seconds
@@ -1725,6 +1810,21 @@ class InterviewFlow:
         claims = (
             self.candidate_profile.get("claims") if isinstance(self.candidate_profile, dict) else None
         )
+        if self._is_project_phase():
+            return (
+                "You are in the resume-examples section. Ask the candidate to pick "
+                "one named example from the claims list (project, internship, role, "
+                "deal, campaign, or piece of work they just mentioned), then dig into "
+                "what they personally owned and what changed. Do not start a JD "
+                "competency topic yet."
+            )
+        project = (self.active_project or self.focus_item or "").strip()
+        if project and self.current_phase().get("competency_id"):
+            return (
+                f"Prefer anchoring this competency question to their example "
+                f"'{project}' when it fits; otherwise use a relevant claim. "
+                "Never invent a different example."
+            )
         if not claims:
             return (
                 "No resume claim is available for this competency. Ask an exploratory "
@@ -1746,6 +1846,15 @@ class InterviewFlow:
         decision = policy or self._current_policy_decision(
             pending_candidate_turn=bool(last_candidate_turn)
         )
+        is_intro_reply = bool(last_candidate_turn) and not self.candidate_turns
+        on_projects = (
+            self._is_project_phase()
+            or (decision is not None and decision.section == "resume_projects")
+        )
+        if last_candidate_turn and (on_projects or is_intro_reply):
+            self._ensure_focus(last_candidate_turn, is_intro_reply=is_intro_reply)
+            if self.focus_item and on_projects:
+                self.active_project = self.active_project or self.focus_item
         competency_id = decision.competency_id if decision else None
         competency = competency_by_id(self.interview_definition, competency_id)
         steps = ladder_steps(self.interview_definition, competency_id)
@@ -1758,6 +1867,22 @@ class InterviewFlow:
             ),
             "",
         )
+        if on_projects:
+            if not objective:
+                objective = (
+                    f"Discuss the resume example "
+                    f"'{self.focus_item or self.active_project or 'they choose'}' "
+                    "— context, ownership, and outcome."
+                )
+            if not competency:
+                competency = {
+                    "name": "resume examples",
+                    "definition": (
+                        "Candidate's own resume examples — projects, roles, "
+                        "internships, deals, or campaigns — and ownership"
+                    ),
+                    "evidence_expected": ["context", "ownership", "outcome"],
+                }
         missing = list((self.coverage.get(competency_id) or {}).get("missing_intents") or [])
         role = {}
         if isinstance(self.interview_definition, dict):
@@ -1797,9 +1922,9 @@ class InterviewFlow:
             "published_context": self._published_context_text(competency_id),
             "job_target_level": self._job_target_level(),
             "candidate_framing": self._profile_type(),
-            "claim_brief": claim_brief(self.candidate_profile, limit=6),
+            "claim_brief": claim_brief(self.candidate_profile, limit=4),
             "claim_guidance": self._claim_guidance(),
-            "jd_excerpt": clip_source_text(self.job_description, 800),
+            "jd_excerpt": clip_source_text(self.job_description, 650),
             "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-3:])
             or "(none yet)",
             "recent_questions": "\n".join(f"- {q}" for q in self.interviewer_turns[-3:])
@@ -1855,9 +1980,11 @@ class InterviewFlow:
     def _interview_structure_text(self) -> str:
         names = [
             str(phase.get("name") or "section").strip()
-            for phase in self.phases
+            for phase in self.phases[self.phase_index :]
             if str(phase.get("name") or "").strip()
         ]
+        # Keep the turn prompt lean on long outlines — current + next few only.
+        names = names[:4]
         return " → ".join(names) if names else "(structure unavailable)"
 
     def _published_context_text(self, competency_id: str | None = None) -> str:

@@ -31,7 +31,7 @@ Rules:
 - Prefer fast, crisp turns. Do not narrate the interview structure or apologize for audio issues.
 - Never say the candidate's response was cut off, incomplete, or unclear. If the last answer is thin, ask one concrete next question from the required intent instead.
 - Never speak competency titles, rubric labels, section names, or internal ids out loud (for example "Role expertise", "Design" as a competency name, or "probe"). Ask about the candidate's actual work, project, or example in plain language.
-- If you follow up, name a concrete detail from their last answer (tool, module, decision, metric). Never ask only "tell me more", "can you elaborate", or "say more about that".
+- If you follow up, name a concrete detail from their last answer (tool, decision, metric, stakeholder, or outcome). Never ask only "tell me more", "can you elaborate", or "say more about that".
 - Keep a calm, clear voice suitable for any occupation. Do not assume the role is technical.
 
 Output a single JSON object with keys:
@@ -74,7 +74,7 @@ Interview structure — follow this order; do not skip or invent sections:
 
 {published_context}
 
-Use the reference context to recognize concepts such as machine learning, model evaluation, algorithms, data structures, and system design when they are present. Ask from the active competency and current policy intent; do not choose a different competency because the reference context contains it.
+Use the reference context only to recognize concepts that already appear there or in the job text. Ask from the active competency and current policy intent; do not invent a different topic because the reference context mentions related ideas.
 
 Job target level (assessment bar — do not lower): {job_target_level}
 Candidate framing (examples only, not the bar): {candidate_framing}
@@ -202,14 +202,15 @@ ACTION_PHRASING: dict[str, str] = {
         "a brief introduction, and stop. Do not summarize the resume or start a probe."
     ),
     "MAP_CANDIDATE_BACKGROUND": (
-        "Ask one short question that picks a concrete project or skill from their "
-        "materials. Do not re-ask for a full background overview, and never say "
-        "their last response was cut off."
+        "Ask one short question that picks a concrete named example from their "
+        "resume claims — a project, internship, role, deal, campaign, or piece of "
+        "work. Prefer naming one or two claim titles if available. Do not re-ask "
+        "for a full background overview, and never say their last response was cut off."
     ),
     "ASK_BASELINE": (
         "Open this topic with one clear applied question about their work. Keep it "
-        "to one or two short sentences. Prefer a resume claim when one is listed. "
-        "Never say the competency title out loud."
+        "to one or two short sentences. Prefer a resume claim or the active example "
+        "when one is listed. Never say the competency title out loud."
     ),
     "CLARIFY_CURRENT_ANSWER": (
         "This turn must clarify or redirect, not probe further. If the candidate "
@@ -226,11 +227,11 @@ ACTION_PHRASING: dict[str, str] = {
     ),
     "OFFER_FINAL_ADDITION": (
         "This turn wraps up. Use a closing tone and do not open a new probe or ask "
-        "for further technical depth."
+        "for further depth."
     ),
     "CLOSE_INTERVIEW": (
         "This turn closes the interview. Use a closing tone and do not open a new "
-        "probe or ask for further technical depth."
+        "probe or ask for further depth."
     ),
     "PROBE_FOR_CONTEXT": (
         "This is a context follow-up. Ask when, where, or for whom that work "

@@ -230,10 +230,19 @@ async def test_four_unusable_answers_close_with_closing_message() -> None:
     )
     # Opening
     await flow.generate_next_question(None)
-    # Intro usable enough to proceed, then unusable shorts (not "I don't know").
+    # Intro usable enough to proceed onto resume projects.
     await flow.generate_next_question(
         "I am a backend engineer who worked on APIs and services in Python."
     )
+    # Exercise non-answer close on the last competency so change-topic can wrap up.
+    competency_indexes = [
+        index
+        for index, phase in enumerate(flow.phases)
+        if phase.get("competency_id")
+    ]
+    flow.phase_index = competency_indexes[-1]
+    flow.probe_count = 0
+    flow.usable_exchanges_on_competency = 0
     # Satisfy min interview length so controlled close is allowed.
     flow.started_at = time.monotonic() - 900
     for _ in range(3):

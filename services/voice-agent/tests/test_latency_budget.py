@@ -68,7 +68,7 @@ def test_turn_prompt_stays_under_budget_with_fat_definition() -> None:
         },
         interviewer_turns=[f"question {index}" for index in range(10)],
         candidate_turns=[f"answer {index}" for index in range(10)],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
     prompt, _ = flow._structured_system_prompt(
         "I built a machine learning classifier in Python.",

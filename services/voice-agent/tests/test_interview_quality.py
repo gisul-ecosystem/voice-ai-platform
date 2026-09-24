@@ -172,7 +172,7 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
         interview_definition=_junior_backend_definition(),
         interviewer_turns=["q1", "q2", "q3"],
         candidate_turns=["I am a student.", "I did a college project."],
-        initial_phase_index=2,
+        initial_phase_index=3,
         initial_probe_count=0,
         candidate_profile={
             "experience_summary": {"profile_type": "final_year_student"},
@@ -282,9 +282,11 @@ async def test_persisted_questions_include_competency_id(monkeypatch) -> None:
         AsyncMock(),
     )
     llm = FakeLlm(
+        '{"question": "Which campus sales project did you own end to end?",'
+        ' "intent": "establish_context", "depth": 1, "source_claim_ids": []}',
         '{"question": "What part of that customer conversation did you personally handle?",'
         ' "competency_id": "negotiation", "intent": "establish_ownership", "depth": 2,'
-        ' "source_claim_ids": []}'
+        ' "source_claim_ids": []}',
     )
     flow = InterviewFlow(
         {"phases": []},
@@ -294,9 +296,18 @@ async def test_persisted_questions_include_competency_id(monkeypatch) -> None:
         resume_text="Campus sales internship.",
         job_description="Enterprise sales.",
     )
-    question = await flow.generate_next_question(
+    # Land on resume projects after intro, then force into first competency ask.
+    await flow.generate_next_question(
         "I interned in campus sales and spoke with shop owners."
     )
+    assert flow.phases[flow.phase_index]["name"] == "resume projects"
+    flow.probe_count = flow._phase_probe_limit()
+    flow.usable_exchanges_on_competency = 1
+    flow.focus_item = "campus sales internship"
+    question = await flow.generate_next_question(
+        "I owned the shop-owner conversations and closed a pilot."
+    )
+    assert flow.current_phase().get("competency_id") == "negotiation"
     bridge = BrainSessionBridge(session_id="ses_quality01", definition_id="idef_sales_quality_01")
     await bridge.on_agent_question(
         question,

@@ -38,9 +38,11 @@ def test_red_team_rejects_prohibited_and_injected_questions() -> None:
 @pytest.mark.asyncio
 async def test_replay_metadata_is_captured_per_turn() -> None:
     llm = FakeLlm(
+        '{"question": "I saw campus sales on your resume — which shop conversations did you own?",'
+        ' "intent": "establish_context", "depth": 1, "source_claim_ids": []}',
         '{"question": "What did you personally handle when speaking with those shop owners?",'
         ' "competency_id": "negotiation", "intent": "establish_ownership", "depth": 2,'
-        ' "source_claim_ids": []}'
+        ' "source_claim_ids": []}',
     )
     flow = InterviewFlow(
         {"phases": []},
@@ -50,8 +52,16 @@ async def test_replay_metadata_is_captured_per_turn() -> None:
         resume_text="Campus sales internship.",
         job_description="Enterprise sales.",
     )
-    question = await flow.generate_next_question(
+    project_q = await flow.generate_next_question(
         "I interned in campus sales and spoke with shop owners."
+    )
+    assert flow.phases[flow.phase_index]["name"] == "resume projects"
+    assert "shop" in project_q.lower() or "campus" in project_q.lower() or "sales" in project_q.lower()
+    flow.probe_count = flow._phase_probe_limit()
+    flow.usable_exchanges_on_competency = 1
+    flow.focus_item = "campus sales internship"
+    question = await flow.generate_next_question(
+        "I owned the shop-owner conversations end to end."
     )
     assert "personally" in question.lower()
     assert flow.last_validator_ok is True
@@ -59,3 +69,4 @@ async def test_replay_metadata_is_captured_per_turn() -> None:
     assert "competency_id" in flow.last_raw_model_output
     assert flow._prompt_version() == "interviewer-system-v2"
     assert flow.last_policy_decision is not None
+    assert flow.current_phase().get("competency_id") == "negotiation"

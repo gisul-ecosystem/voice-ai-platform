@@ -155,6 +155,7 @@ def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any]
     duration = int(time_policy.get("duration_minutes") or 30)
     duration = 15 if duration < 20 else 45 if duration > 40 else 30
 
+    project_minutes = 5 if duration <= 20 else 8
     phases: list[dict[str, Any]] = [
         {
             "name": "opening",
@@ -164,9 +165,18 @@ def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any]
         },
         {
             "name": "candidate_map",
-            "duration_minutes": 3,
-            "topics": ["background", "relevant experience", "ownership"],
+            "duration_minutes": 2,
+            "topics": ["background", "relevant experience"],
             "source": "generic",
+        },
+        {
+            "name": "resume projects",
+            "duration_minutes": project_minutes,
+            "topics": ["recent project", "ownership", "outcome"],
+            "source": "resume",
+            "intent": "resume_project",
+            "max_depth": 3,
+            "max_probes": 3,
         },
     ]
     usable_competencies: list[dict[str, Any]] = []
@@ -185,7 +195,8 @@ def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any]
     # Keep interviews deep: fewer competencies on short slots.
     max_comps = 3 if duration <= 20 else 4
     usable_competencies = usable_competencies[:max_comps]
-    remaining = max(8, duration - 7)
+    # opening(2) + map(2) + projects + closing(2)
+    remaining = max(8, duration - (6 + project_minutes))
     per = max(3, remaining // max(len(usable_competencies), 1))
     for item in usable_competencies:
         name = str(item.get("name") or item.get("id") or "competency").strip()
@@ -311,6 +322,8 @@ def _section_for_phase(name: str) -> str:
         return "opening"
     if any(token in lowered for token in ("map", "background", "candidate")):
         return "candidate_map"
+    if "project" in lowered or lowered.strip() in {"resume", "resume projects"}:
+        return "resume_projects"
     if "clos" in lowered:
         return "closing"
     return "competency_assessment"
@@ -518,7 +531,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         )
 
     if section == "opening" and state.candidate_turn_count <= 1:
-        # Intro received — hop warmups so the spoken turn is already a competency ask.
+        # Intro received — hop opening/map so the spoken turn lands on resume projects.
         return PolicyDecision(
             action=MAP_CANDIDATE_BACKGROUND,
             forced_flow_decision="advance",
@@ -527,35 +540,76 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=2,
             competency_id=None,
             intent="candidate_map",
-            reason="intro received — advance toward competency baseline",
+            reason="intro received — advance toward resume projects",
             section="candidate_map",
         )
 
-    if section == "candidate_map" and state.candidate_turn_count <= 1:
-        # Skip a second "tell me your background" turn after the opening intro.
+    if section == "candidate_map":
+        # Skip a second "tell me your background" turn; land on resume projects.
         return PolicyDecision(
-            action=ASK_BASELINE,
+            action=MAP_CANDIDATE_BACKGROUND,
             forced_flow_decision="advance",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=2,
-            competency_id=state.competency_id or state.gap_competency_id,
-            intent="establish_context",
-            reason="intro complete — begin first competency question",
-            section="baseline",
+            competency_id=None,
+            intent="resume_project",
+            reason="intro complete — begin resume project discussion",
+            section="resume_projects",
         )
 
-    if section in {"opening", "candidate_map"}:
+    if section == "opening":
         return PolicyDecision(
-            action=ASK_BASELINE,
+            action=MAP_CANDIDATE_BACKGROUND,
             forced_flow_decision="advance",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=2,
-            competency_id=state.competency_id or state.gap_competency_id,
-            intent="establish_context",
-            reason="candidate map complete — move into technical competency baseline",
-            section="baseline",
+            competency_id=None,
+            intent="resume_project",
+            reason="opening complete — begin resume project discussion",
+            section="resume_projects",
+        )
+
+    if section == "resume_projects":
+        max_project_probes = max(2, min(state.max_probes, 3))
+        if state.probe_count >= max_project_probes or (
+            state.usable_exchanges_on_competency >= 1 and state.probe_count >= 2
+        ):
+            return PolicyDecision(
+                action=ASK_BASELINE,
+                forced_flow_decision="advance",
+                allow_llm_decision=False,
+                current_depth=1,
+                max_depth=2,
+                competency_id=state.gap_competency_id or state.competency_id,
+                intent="establish_context",
+                reason="resume project covered — move into first competency",
+                section="baseline",
+            )
+        depth = max(1, min(state.probe_count + 1, min(3, state.max_depth)))
+        if depth <= 1:
+            action = ASK_BASELINE
+            intent = "establish_context"
+            reason = "pick a named resume project and establish context"
+        elif depth == 2:
+            action = PROBE_FOR_OWNERSHIP
+            intent = "establish_ownership"
+            reason = "probe ownership on the chosen resume project"
+        else:
+            action = PROBE_FOR_RESULT
+            intent = "problem_or_complexity"
+            reason = "probe outcome on the chosen resume project"
+        return PolicyDecision(
+            action=action,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=depth,
+            max_depth=min(3, state.max_depth),
+            competency_id=None,
+            intent=intent,
+            reason=reason,
+            section="resume_projects",
         )
 
     if section == "closing" or (

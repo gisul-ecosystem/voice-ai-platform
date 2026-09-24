@@ -18,6 +18,13 @@ class FakeLlm:
         return self.replies.pop(0)
 
 
+def _first_competency_index(flow: InterviewFlow) -> int:
+    for index, phase in enumerate(flow.phases):
+        if phase.get("competency_id"):
+            return index
+    raise AssertionError("no competency phase in outline")
+
+
 def _definition() -> dict:
     return {
         "definition_id": "idef_flow_policy_01",
@@ -88,7 +95,7 @@ def test_policy_prompt_contains_full_technical_reference_context() -> None:
         job_description="Use algorithms, data structures, and model evaluation.",
         resume_text="Built a machine learning classifier in Python.",
         candidate_profile={"claims": [{"claim_id": "c1", "value": "Built a machine learning classifier"}]},
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
 
     prompt, _ = flow._structured_system_prompt(
@@ -120,21 +127,21 @@ async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
         ],
         candidate_turns=["I am a backend engineer."],
         initial_phase_index=1,
+        resume_text="Projects\n- Payments Gateway: checkout retries\n",
     )
     assert flow.policy_mode is True
     assert flow.phases[0]["name"] == "opening"
+    assert flow.phases[2]["name"] == "resume projects"
 
     question = await flow.generate_next_question(
         "I am a backend engineer who worked on payments."
     )
     prompt = llm.messages[0][0]["content"]
     assert "POLICY ENGINE" in prompt
-    # candidate_map's forced advance is resolved before the prompt is built, so the
-    # LLM sees the real next competency it is entering, not the phase it just left.
-    assert "Problem solving" in prompt
-    assert "problem_solving" in prompt
-    # Forced probe — cannot honor LLM advance into deep dive.
+    # Multi-hop lands on resume projects, not the first competency.
+    assert "resume projects" in prompt.lower() or "Payments Gateway" in prompt
     assert flow.phase_index == 2
+    assert flow.phases[flow.phase_index]["name"] == "resume projects"
     assert question == "When did you work on payments, and for whom?"
     assert "Which algorithm did you use" not in question
 
@@ -152,7 +159,7 @@ async def test_policy_mode_speaks_valid_llm_question_not_ladder() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
 
     question = await flow.generate_next_question("I solved a graph problem.")
@@ -170,7 +177,7 @@ async def test_policy_mode_falls_back_to_ladder_when_json_is_invalid() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
 
     question = await flow.generate_next_question("I solved a graph problem.")
@@ -193,7 +200,7 @@ async def test_policy_mode_advances_after_probe_cap() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2", "q3"],
         candidate_turns=["a1", "a2", "a3"],
-        initial_phase_index=2,
+        initial_phase_index=3,
         initial_probe_count=2,
     )
     # Mark the one allowed intent-repair as already used so probe-cap advances.
@@ -201,10 +208,10 @@ async def test_policy_mode_advances_after_probe_cap() -> None:
     await flow.generate_next_question(
         "I owned retries and timeouts on the billing API myself and measured p99."
     )
-    assert flow.phase_index == 3
+    assert flow.phase_index == 4
 
 
-def test_candidate_map_moves_to_technical_baseline_after_one_turn() -> None:
+def test_candidate_map_moves_to_resume_projects_after_one_turn() -> None:
     from products.interviewer.policy import PolicyState, decide_next_action
 
     decision = decide_next_action(
@@ -217,12 +224,13 @@ def test_candidate_map_moves_to_technical_baseline_after_one_turn() -> None:
         )
     )
 
-    assert decision.action == "ASK_BASELINE"
+    assert decision.action == "MAP_CANDIDATE_BACKGROUND"
     assert decision.forced_flow_decision == "advance"
+    assert decision.section == "resume_projects"
 
 
 @pytest.mark.asyncio
-async def test_opening_map_then_competency_does_not_repeat_generic_fallback() -> None:
+async def test_opening_map_then_resume_project_does_not_repeat_generic_fallback() -> None:
     definition = _definition()
     definition["allowed_probes"] = [
         "What was your specific responsibility?",
@@ -232,10 +240,9 @@ async def test_opening_map_then_competency_does_not_repeat_generic_fallback() ->
     ]
     llm = FakeLlm(
         '{"question":"Thanks for joining. Please introduce yourself.","intent":"opening","depth":1}',
-        '{"question":"Which project from your background is most relevant to this role?",'
-        '"intent":"candidate_map","depth":1}',
-        # Live models often label the JSON intent wrong; the spoken line is what matters.
-        '{"question":"You mentioned 200ms. When did you use Redis on billing retries, and for whom?",'
+        '{"question":"I saw Payments Gateway on your resume — could you walk me through that project?",'
+        '"intent":"establish_context","depth":1}',
+        '{"question":"You mentioned 200ms. What part of the billing retries did you personally own?",'
         '"competency_id":"problem_solving","intent":"establish_ownership","depth":2,'
         '"probe_shape":"why"}',
     )
@@ -244,28 +251,37 @@ async def test_opening_map_then_competency_does_not_repeat_generic_fallback() ->
         llm,
         interview_definition=definition,
         job_description="Own Python services.",
+        resume_text="Projects\n- Payments Gateway: checkout and billing retries\n",
     )
     opening = await flow.generate_next_question(None)
     assert "introduce" in opening.lower()
 
-    # Warmup multi-hops opening → map → first competency in one turn.
+    # Warmup multi-hops opening → map → resume projects in one turn.
     baseline = await flow.generate_next_question("I am a backend engineer who interned on billing.")
     assert flow.phase_index == 2
+    assert flow.phases[flow.phase_index]["name"] == "resume projects"
     assert "Could you share one specific example" not in baseline
     assert "tell me more" not in baseline.lower()
     assert flow.last_policy_decision is not None
-    assert flow.last_policy_decision.competency_id == "problem_solving"
+    assert flow.last_policy_decision.section == "resume_projects"
+    assert flow.last_policy_decision.competency_id is None
+    assert "Payments Gateway" in " ".join(flow.phases[2].get("topics") or [])
 
+    # Dig the project, then advance into first competency with project hook retained.
+    flow.probe_count = 3
+    flow.usable_exchanges_on_competency = 1
+    flow.focus_item = "Payments Gateway"
     follow = await flow.generate_next_question(
         "I used Redis on billing retries to keep latency around 200ms."
     )
+    assert flow.phase_index == 3
+    assert flow.active_project == "Payments Gateway" or flow.focus_item == "Payments Gateway"
     assert "Could you share one specific example" not in follow
     assert "tell me more" not in follow.lower()
     assert "tell me a bit more" not in follow.lower()
-    # Prefer hook-aware speech; concrete ownership/context fallbacks are also ok.
     assert any(
         token in follow.lower()
-        for token in ("200ms", "redis", "personally", "handle", "algorithm", "situation")
+        for token in ("200ms", "redis", "personally", "handle", "algorithm", "situation", "payments")
     )
     assert flow.last_validator_ok is True
 
@@ -327,7 +343,7 @@ def test_ownership_prompt_uses_ownership_phrasing_not_method() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
     policy = PolicyDecision(
         action="PROBE_FOR_OWNERSHIP",
@@ -357,7 +373,7 @@ def test_phrasing_prompt_omits_answer_evaluation() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
     flow.last_answer_evaluation = {
         "technical_substance": "partial",
@@ -380,7 +396,7 @@ def test_keyword_rich_answer_keeps_missing_intents() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
     flow.last_question_intent = "establish_context"
     flow._record_answer_quality(
@@ -396,7 +412,7 @@ def test_probe_shape_rotates_away_from_last_shape() -> None:
         {"phases": []},
         FakeLlm(),
         interview_definition=_definition(),
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
     flow.last_probe_shape["problem_solving"] = "why"
     assert flow._next_probe_shape("problem_solving", "establish_ownership") == "failure_mode"
@@ -440,7 +456,7 @@ async def test_empty_stream_retries_once_then_speaks() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
 
     chunks = [
@@ -473,7 +489,7 @@ async def test_policy_stream_yields_question_before_json_closes() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
     agen = flow.generate_next_question_stream("I solved a graph problem.")
     chunk = await asyncio.wait_for(agen.__anext__(), timeout=1)
@@ -506,7 +522,7 @@ async def test_empty_stream_keeps_hooked_fallback_when_nothing_spoken() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
     chunks = [
         chunk
@@ -529,7 +545,7 @@ def test_fallback_spoken_question_uses_ladder_without_candidate_hook() -> None:
         interview_definition=_definition(),
         interviewer_turns=["q1", "q2"],
         candidate_turns=["intro", "background"],
-        initial_phase_index=2,
+        initial_phase_index=3,
     )
     policy = PolicyDecision(
         action="PROBE_FOR_OWNERSHIP",

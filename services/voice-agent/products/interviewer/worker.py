@@ -749,6 +749,10 @@ async def entrypoint(ctx: JobContext) -> None:
         outline = stamp_phase_intents(outline)
         outline = scale_outline_to_duration(outline, target_duration_minutes)
         outline_source = "generated_plan"
+    else:
+        # Published plan already includes a resume-projects phase; fill project names.
+        outline = enrich_outline_with_resume(outline, resume_text)
+        outline = stamp_phase_intents(outline)
     logger.info(
         "stage1_outline",
         extra={

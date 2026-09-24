@@ -51,7 +51,9 @@ def test_outline_is_breadth_first() -> None:
     names = [phase["name"] for phase in outline["phases"]]
     assert names[0] == "opening"
     assert names[1] == "candidate_map"
+    assert names[2] == "resume projects"
     assert "Problem solving" in names
+    assert names.index("resume projects") < names.index("Problem solving")
     assert names[-1] == "closing"
 
 
@@ -89,6 +91,7 @@ def test_outline_skips_jd_duty_fragment_competencies() -> None:
     assert "Debugging" in names
     assert names[0] == "opening"
     assert names[1] == "candidate_map"
+    assert names[2] == "resume projects"
     assert names[-1] == "closing"
 
 
@@ -101,9 +104,8 @@ def test_outline_caps_competencies_on_short_interviews() -> None:
         {"time_policy": {"duration_minutes": 15}, "competencies": comps}
     )
     assert outline is not None
-    competency_phases = [
-        p for p in outline["phases"] if p["name"] not in {"opening", "candidate_map", "closing"}
-    ]
+    skip = {"opening", "candidate_map", "resume projects", "closing"}
+    competency_phases = [p for p in outline["phases"] if p["name"] not in skip]
     assert len(competency_phases) == 3
 
 
@@ -209,9 +211,10 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
             gap_competency_id="problem_solving",
         )
     )
-    assert map_question.action == ASK_BASELINE
+    assert map_question.action == MAP_CANDIDATE_BACKGROUND
     assert map_question.forced_flow_decision == "advance"
-    assert map_question.intent == "establish_context"
+    assert map_question.intent == "resume_project"
+    assert map_question.section == "resume_projects"
 
     after_map = decide_next_action(
         PolicyState(
@@ -221,10 +224,10 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
             gap_competency_id="problem_solving",
         )
     )
-    assert after_map.action == ASK_BASELINE
+    assert after_map.action == MAP_CANDIDATE_BACKGROUND
     assert after_map.forced_flow_decision == "advance"
-    assert after_map.intent == "establish_context"
-    assert after_map.competency_id == "problem_solving"
+    assert after_map.intent == "resume_project"
+    assert after_map.competency_id is None
 
     still_on_opening = decide_next_action(
         PolicyState(
@@ -233,8 +236,55 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
             phase_name="opening",
         )
     )
-    assert still_on_opening.action == ASK_BASELINE
+    assert still_on_opening.action == MAP_CANDIDATE_BACKGROUND
     assert still_on_opening.forced_flow_decision == "advance"
+    assert still_on_opening.section == "resume_projects"
+
+
+def test_resume_projects_probes_before_competency() -> None:
+    first = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=2,
+            candidate_turn_count=2,
+            phase_name="resume projects",
+            probe_count=0,
+            max_probes=3,
+            max_depth=3,
+            gap_competency_id="problem_solving",
+        )
+    )
+    assert first.action == ASK_BASELINE
+    assert first.forced_flow_decision == "probe"
+    assert first.section == "resume_projects"
+    assert first.competency_id is None
+
+    ownership = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=3,
+            candidate_turn_count=3,
+            phase_name="resume projects",
+            probe_count=1,
+            max_probes=3,
+            max_depth=3,
+        )
+    )
+    assert ownership.action == "PROBE_FOR_OWNERSHIP"
+    assert ownership.forced_flow_decision == "probe"
+
+    done = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=5,
+            candidate_turn_count=5,
+            phase_name="resume projects",
+            probe_count=3,
+            max_probes=3,
+            max_depth=3,
+            gap_competency_id="problem_solving",
+            usable_exchanges_on_competency=1,
+        )
+    )
+    assert done.forced_flow_decision == "advance"
+    assert done.intent == "establish_context"
 
 
 def test_baseline_alias_canonicalizes_to_establish_context() -> None:
@@ -286,8 +336,9 @@ def test_baseline_then_depth_caps_force_advance() -> None:
             competency_id="problem_solving",
         )
     )
-    assert baseline.action == ASK_BASELINE
+    assert baseline.action == MAP_CANDIDATE_BACKGROUND
     assert baseline.forced_flow_decision == "advance"
+    assert baseline.section == "resume_projects"
 
     capped = decide_next_action(
         PolicyState(
