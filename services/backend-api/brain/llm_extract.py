@@ -1,6 +1,7 @@
 """Schema-constrained JD/resume LLM extraction with heuristic fallback."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
@@ -9,6 +10,7 @@ from brain.extractors import (
     extract_candidate_profile,
     extract_job_intelligence,
 )
+from brain.pii import strip_pii_from_jd, strip_pii_from_resume
 from brain.safety import contains_prohibited_content, contains_prompt_injection
 from brain.structured_llm import complete_structured_json
 from models.brain import (
@@ -403,11 +405,14 @@ async def extract_job_intelligence_async(
         target_level=target_level,
         domain=domain,
     )
+    # Guardrail: strip PII from the JD before sending to the LLM.
+    # The heuristic extractor already ran on the raw text; LLM only needs clean text.
+    jd_for_llm = strip_pii_from_jd(heuristic.raw_job_description[:20_000])
     payload = await complete_structured_json(
         schema_name="job_intelligence",
         schema=JD_EXTRACT_SCHEMA,
         system_prompt=_JD_SYSTEM,
-        user_prompt=f"JOB DESCRIPTION:\n{heuristic.raw_job_description[:20_000]}",
+        user_prompt=f"JOB DESCRIPTION:\n{jd_for_llm}",
     )
     if not payload:
         return heuristic
@@ -482,16 +487,31 @@ async def extract_job_intelligence_async(
             "extraction_version": merged.extraction_version,
         },
     )
+    # Guardrail: compute and stamp a JD hash so downstream can detect
+    # when the JD changed and invalidate stale derived state.
+    jd_text = (merged.raw_job_description or "").strip().encode("utf-8")
+    jd_hash = hashlib.sha256(jd_text).hexdigest()[:16]
+    merged = merged.model_copy(update={"jd_hash": jd_hash})
+    logger.info(
+        "guardrail_jd_hash_stamped",
+        extra={
+            "event": "guardrail_jd_hash_stamped",
+            "guardrail": "GUARDRAIL_JD_OVERWRITE",
+            "jd_hash": jd_hash,
+        },
+    )
     return merged
 
 
 async def extract_candidate_profile_async(resume_text: str) -> CandidateProfile:
     heuristic = extract_candidate_profile(resume_text)
+    # Guardrail: strip PII from resume before sending to LLM.
+    resume_for_llm = strip_pii_from_resume((heuristic.raw_resume_text or '')[:20_000])
     payload = await complete_structured_json(
         schema_name="candidate_profile",
         schema=RESUME_EXTRACT_SCHEMA,
         system_prompt=_RESUME_SYSTEM,
-        user_prompt=f"RESUME:\n{(heuristic.raw_resume_text or '')[:20_000]}",
+        user_prompt=f"RESUME:\n{resume_for_llm}",
     )
     if not payload:
         return heuristic

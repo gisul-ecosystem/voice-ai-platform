@@ -294,6 +294,10 @@ class JobIntelligence(BaseModel):
     core_competencies: list[str] = Field(default_factory=list, max_length=20)
     raw_job_description: str = Field(min_length=1, max_length=100_000)
     extraction_version: str = Field(default="jd-extractor-v1", max_length=64)
+    # Guardrail: sha256 of raw_job_description (first 16 hex chars stored).
+    # When a new JD is uploaded, this changes and signals that all derived
+    # state (competencies, Redis hot copies) must be invalidated.
+    jd_hash: str | None = Field(default=None, max_length=64)
     approved: bool = False
     approved_at: datetime | None = None
 

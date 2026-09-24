@@ -3322,3 +3322,122 @@ select:focus-visible,
   flex: 1;
   font-size: 0.85rem;
 }
+
+/* =========================================================================
+   STEP 1 GUARDRAILS: Live caption banner + speech speed control
+   ========================================================================= */
+
+/* Live caption banner — always readable, high-contrast, accessible */
+.caption-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem;
+  background: var(--surface-accent, #eef4ff);
+  border-left: 3px solid var(--accent, #2457d6);
+  border-radius: 0 6px 6px 0;
+  margin: 0.5rem 1rem;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  animation: caption-in 0.15s ease;
+}
+
+@keyframes caption-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.caption-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--accent, #2457d6);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-top: 0.1em;
+}
+
+.caption-text {
+  color: var(--foreground, #162033);
+  margin: 0;
+}
+
+/* Hint text inside candidate speaking note */
+.repeat-hint {
+  font-size: 0.8rem;
+  color: var(--muted, #607086);
+  margin-top: 0.25rem;
+}
+
+/* Speech speed control */
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-muted, #f7f8fa);
+  border: 1px solid var(--border, #d9e0e8);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.speed-control-label {
+  flex-shrink: 0;
+  color: var(--muted, #607086);
+  font-weight: 500;
+  min-width: 6.5rem;
+}
+
+.speed-control input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent, #2457d6);
+  cursor: pointer;
+  min-width: 80px;
+}
+
+/* =========================================================================
+   STEP 2 GUARDRAILS: Weight total display
+   ========================================================================= */
+
+.weight-total-display {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+  border: 1px solid var(--border, #d9e0e8);
+  background: var(--surface-muted, #f7f8fa);
+}
+
+.weight-total-label {
+  color: var(--muted, #607086);
+  font-weight: 500;
+}
+
+.weight-total-display.weight-ok {
+  background: #f0faf5;
+  border-color: var(--success, #167455);
+}
+
+.weight-total-display.weight-over {
+  background: var(--danger-background, #fff3f2);
+  border-color: var(--danger-border, #f2b8b5);
+}
+
+.weight-status {
+  color: var(--muted, #607086);
+  margin-left: 0.25rem;
+}
+
+.weight-status.weight-error {
+  color: var(--danger-text, #9d2923);
+  font-weight: 600;
+}
+
+.weight-total-display.weight-ok .weight-status {
+  color: var(--success, #167455);
+  font-weight: 600;
+}

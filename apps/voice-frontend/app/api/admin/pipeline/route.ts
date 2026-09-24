@@ -7,7 +7,7 @@ export async function GET() {
   const services = [
     { name: "STT", provider: "Sarvam Saaras v3", configured: Boolean(process.env.SARVAM_API_KEY || process.env.STT_API_KEY) },
     { name: "LLM", provider: process.env.LLM_PROVIDER === "openai" ? "OpenAI" : "OpenAI-compatible LLM", configured: Boolean(process.env.OPENAI_API_KEY || process.env.LLM_API_KEY) },
-    { name: "TTS", provider: "ElevenLabs", configured: Boolean(process.env.ELEVENLABS_API_KEY || process.env.TTS_API_KEY) },
+    { name: "TTS", provider: process.env.TTS_PROVIDER === "deepgram" ? "Deepgram Aura" : process.env.TTS_PROVIDER === "openai" ? "OpenAI TTS" : "ElevenLabs", configured: Boolean(process.env.DEEPGRAM_API_KEY || process.env.ELEVENLABS_API_KEY || process.env.TTS_API_KEY) },
   ];
   let backend = false;
   if (backendUrl) {

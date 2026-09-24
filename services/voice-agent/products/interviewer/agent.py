@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -16,6 +18,37 @@ logger = logging.getLogger("voice-agent.interviewer")
 CLARIFY_TURN = (
     "Sorry, I did not catch that. Please say a bit more, in a full sentence."
 )
+
+# ---------------------------------------------------------------------------
+# Guardrail config flags (default ON)
+# ---------------------------------------------------------------------------
+
+def _flag(name: str, default: bool = True) -> bool:
+    val = os.getenv(name, "").strip().lower()
+    if not val:
+        return default
+    return val not in {"0", "false", "off", "no"}
+
+
+GUARDRAIL_REPEAT_REQUEST: bool = _flag("GUARDRAIL_REPEAT_REQUEST")
+GUARDRAIL_PAUSE_REQUEST: bool = _flag("GUARDRAIL_PAUSE_REQUEST")
+
+# Patterns that should trigger a repeat of the last question.
+_REPEAT_PATTERNS = re.compile(
+    r"\b(repeat\s+that|say\s+it\s+again|can\s+you\s+repeat|please\s+repeat|"
+    r"what\s+did\s+you\s+say|pardon|come\s+again|i\s+didn[''`]?t\s+(hear|catch)|"
+    r"say\s+that\s+again)\b",
+    re.IGNORECASE,
+)
+# Patterns that should trigger a brief pause acknowledgement.
+_PAUSE_PATTERNS = re.compile(
+    r"\b(give\s+me\s+a\s+(moment|second|minute)|just\s+a\s+(moment|second|minute)|"
+    r"one\s+(moment|second|minute)|let\s+me\s+think|hold\s+on|wait\s+a\s+(moment|second)|"
+    r"need\s+a\s+(moment|second|minute))\b",
+    re.IGNORECASE,
+)
+
+_PAUSE_REPLY = "Of course, take your time."
 
 
 class AaptorAgent(Agent):
@@ -251,6 +284,48 @@ class AaptorAgent(Agent):
             await self._persist_brain_after_exchange(
                 speaker="agent",
                 text=CLARIFY_TURN,
+                turn_id=turn_id,
+            )
+            return
+
+        # ------------------------------------------------------------------
+        # Guardrail: repeat-request — re-speak the last question without
+        # advancing the interview or counting the turn as an answer.
+        # ------------------------------------------------------------------
+        if GUARDRAIL_REPEAT_REQUEST and candidate_turn and _REPEAT_PATTERNS.search(candidate_turn):
+            last_q = self._last_agent_text or CLARIFY_TURN
+            logger.info(
+                "guardrail_repeat_request",
+                extra={
+                    "event": "guardrail_repeat_request",
+                    "guardrail": "GUARDRAIL_REPEAT_REQUEST",
+                    "reason": "candidate_requested_repeat",
+                    "action": "re_speak_last_question",
+                },
+            )
+            yield last_q
+            # Do NOT advance state, do NOT record as answer, do NOT persist.
+            return
+
+        # ------------------------------------------------------------------
+        # Guardrail: pause-request — acknowledge and yield without advancing.
+        # ------------------------------------------------------------------
+        if GUARDRAIL_PAUSE_REQUEST and candidate_turn and _PAUSE_PATTERNS.search(candidate_turn):
+            logger.info(
+                "guardrail_pause_request",
+                extra={
+                    "event": "guardrail_pause_request",
+                    "guardrail": "GUARDRAIL_PAUSE_REQUEST",
+                    "reason": "candidate_requested_pause",
+                    "action": "acknowledge_and_wait",
+                },
+            )
+            yield _PAUSE_REPLY
+            self._last_agent_text = _PAUSE_REPLY
+            turn_id = await self._record("agent", _PAUSE_REPLY)
+            await self._persist_brain_after_exchange(
+                speaker="agent",
+                text=_PAUSE_REPLY,
                 turn_id=turn_id,
             )
             return

@@ -72,6 +72,7 @@ FALLBACK_OPENING = (
     "Who are you, and what work from the last couple of years are you most proud of?"
 )
 CLOSING_MESSAGE = (
+    "Before we wrap up - do you have any questions for us? "
     "Thank you for your time and for sharing your experience. "
     "This concludes the interview."
 )

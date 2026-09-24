@@ -5,6 +5,7 @@ import logging
 
 from clients.errors import ProviderConfigError
 from clients.settings import (
+    DEEPGRAM_API_KEY,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BASE_URL,
     LLM_API_KEY,
@@ -62,7 +63,7 @@ def normalize_provider(
             service or "inference",
             name,
             f"Unknown provider {name!r}. Use self_hosted, openai, sarvam, "
-            "or elevenlabs.",
+            "elevenlabs, or deepgram.",
         )
 
     if service is not None:

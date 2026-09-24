@@ -57,7 +57,6 @@ export default function ReviewAlignmentPage() {
       return { ...item, weight: base };
     });
   }
-
   function syncDraftCompetencies(
     nextComps: Array<Record<string, unknown>>,
   ): RoleDraftState | null {
@@ -96,6 +95,12 @@ export default function ReviewAlignmentPage() {
     };
   }
 
+  const weightTotal = Math.round(
+    competencies.reduce((sum, item) => sum + (Number(item.weight) || 0), 0) * 10,
+  ) / 10;
+  const weightRemaining = Math.round((100 - weightTotal) * 10) / 10;
+  const weightOk = Math.abs(weightTotal - 100) <= 0.01;
+
   function setState(next: RoleDraftState) {
     setEdits(next);
     writeRoleDraft(next);
@@ -103,6 +108,24 @@ export default function ReviewAlignmentPage() {
 
   function update(index: number, patch: Record<string, unknown>) {
     if (!state) return;
+    // Guardrail: if updating weight, ensure the new total does not exceed 100.
+    if ("weight" in patch) {
+      const newWeight = Number(patch.weight) || 0;
+      const otherTotal = competencies.reduce(
+        (sum, item, i) => (i !== index ? sum + (Number(item.weight) || 0) : sum),
+        0,
+      );
+      const newTotal = Math.round((otherTotal + newWeight) * 10) / 10;
+      if (newTotal > 100.01) {
+        const maxAllowed = Math.round((100 - otherTotal) * 10) / 10;
+        setError(
+          `Limit reached: total weight cannot exceed 100. Maximum allowed for this competency is ${maxAllowed}%.`,
+        );
+        return;
+      }
+      // Clear any prior weight error now that the value is valid.
+      setError("");
+    }
     const next = competencies.map((item, itemIndex) =>
       itemIndex === index ? { ...item, ...patch } : item,
     );
@@ -434,6 +457,25 @@ export default function ReviewAlignmentPage() {
                 />
               </label>
             </div>
+            {/* Guardrail: live weight total display */}
+            <div
+              className={`weight-total-display ${weightOk ? "weight-ok" : weightTotal > 100 ? "weight-over" : "weight-under"}`}
+              aria-live="polite"
+            >
+              <span className="weight-total-label">Total weight:</span>
+              <strong>{weightTotal}%</strong>
+              {weightOk ? (
+                <span className="weight-status">✓ Exactly 100</span>
+              ) : weightTotal > 100 ? (
+                <span className="weight-status weight-error">
+                  Over by {Math.round((weightTotal - 100) * 10) / 10}% — reduce a competency weight
+                </span>
+              ) : (
+                <span className="weight-status">
+                  Remaining: <strong>{weightRemaining}%</strong> to assign
+                </span>
+              )}
+            </div>
             <button
               className="button danger-button"
               type="button"
@@ -445,14 +487,15 @@ export default function ReviewAlignmentPage() {
         ) : null}
         <div className="admin-page-actions">
           <span>
-            {competencies.length} competencies · ID {state.definitionId}
+            {competencies.length} competencies · ID {state.definitionId} · Weights: {weightTotal}%{weightOk ? " ✓" : ` (${weightRemaining > 0 ? `${weightRemaining}% remaining` : "over 100%"})` }
           </span>
           <button
             className="button primary"
             disabled={
               busy ||
               competencies.length === 0 ||
-              competencies.some((item) => !isComplete(item))
+              competencies.some((item) => !isComplete(item)) ||
+              !weightOk
             }
             onClick={() => void publish()}
           >

@@ -1,6 +1,8 @@
 """Creator-facing JD/resume intelligence extract and ingest APIs (Milestone 1+2)."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -12,6 +14,7 @@ from brain.llm_extract import (
     recommend_competencies_async,
 )
 from brain.publish import publish_definition, validate_for_publication
+from brain.safety import validate_competency_label
 from db import definitions
 from models.brain import (
     CandidateProfile,
@@ -29,12 +32,39 @@ from security.auth import (
 )
 from security.rate_limit import require_capacity
 
+logger = logging.getLogger("backend-api.brain.intelligence")
+
 router = APIRouter(
     prefix="/interview-brain",
     tags=["interview-brain-intelligence"],
 )
 
 _ALLOWED_KINDS = {"jd", "resume"}
+
+
+class WeightCheckRequest(BaseModel):
+    """Guardrail: validate that a proposed weight change keeps the total ≤ 100."""
+    weights: list[float] = Field(
+        description="All current competency weights as a list of floats.",
+        min_length=0,
+        max_length=12,
+    )
+
+
+class WeightCheckResponse(BaseModel):
+    ok: bool
+    total: float
+    remaining: float
+    message: str
+
+
+class CompetencyLabelCheckRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+
+
+class CompetencyLabelCheckResponse(BaseModel):
+    ok: bool
+    message: str
 
 
 class ExtractJobRequest(BaseModel):
@@ -90,6 +120,56 @@ class PublishBlueprintRequest(BaseModel):
         max_length=64,
         pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*$",
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: weight-check — real-time total validation for the admin UI
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/blueprint/weight-check",
+    response_model=WeightCheckResponse,
+    dependencies=[Depends(require_bff_service)],
+)
+async def check_competency_weights(req: WeightCheckRequest) -> WeightCheckResponse:
+    """Guardrail: validate that proposed competency weights do not exceed 100.
+
+    Called by the admin UI on every weight change to give instant feedback
+    before publish. Never mutates state.
+    """
+    weights = [float(w) for w in req.weights]
+    total = round(sum(weights), 2)
+    remaining = round(100.0 - total, 2)
+    ok = total <= 100.0 + 0.01
+    if ok:
+        msg = f"Remaining: {remaining}/100" if remaining > 0.01 else "Total is exactly 100."
+    else:
+        msg = f"Limit reached: total weight cannot exceed 100 (currently {total:.1f}%)"
+    logger.info(
+        "guardrail_weight_check",
+        extra={
+            "event": "guardrail_weight_check",
+            "guardrail": "GUARDRAIL_WEIGHT_CAP",
+            "total": total,
+            "ok": ok,
+        },
+    )
+    return WeightCheckResponse(ok=ok, total=total, remaining=remaining, message=msg)
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: competency label validation
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/blueprint/validate-competency",
+    response_model=CompetencyLabelCheckResponse,
+    dependencies=[Depends(require_bff_service)],
+)
+async def validate_competency(req: CompetencyLabelCheckRequest) -> CompetencyLabelCheckResponse:
+    """Guardrail: reject labels that are seniority/education/years rather than skills."""
+    ok, reason = validate_competency_label(req.label)
+    return CompetencyLabelCheckResponse(ok=ok, message=reason)
 
 
 @router.post(

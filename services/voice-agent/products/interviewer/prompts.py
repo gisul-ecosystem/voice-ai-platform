@@ -1,12 +1,45 @@
 """Versioned, domain-neutral interviewer prompt packs.
 
 Role-specific content is supplied in the turn payload, never in the system prompt.
+
+Config flags (read from env at import time):
+  GUARDRAIL_TONE_RULES   – default ON. Adds polite/neutral tone rules to the system prompt.
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 PROMPT_VERSION_V2 = "interviewer-system-v2"
+
+# ---------------------------------------------------------------------------
+# Config flags — all default ON; set env var to "0" / "false" / "off" to disable.
+# ---------------------------------------------------------------------------
+
+def _flag(name: str, default: bool = True) -> bool:
+    val = os.getenv(name, "").strip().lower()
+    if not val:
+        return default
+    return val not in {"0", "false", "off", "no"}
+
+
+GUARDRAIL_TONE_RULES: bool = _flag("GUARDRAIL_TONE_RULES")
+
+# ---------------------------------------------------------------------------
+# Tone guardrail block — injected into the system prompt when the flag is ON.
+# ---------------------------------------------------------------------------
+
+_TONE_GUARDRAIL_BLOCK = """
+Tone and conduct rules (guardrail — always follow):
+- Speak in a warm, neutral, professional tone throughout. Never be harsh, curt, or dismissive.
+- Never use sarcasm, irony, condescension, or any language that could feel discouraging.
+- Do not imply the candidate is wrong, slow, or under-performing. If an answer is incomplete, ask for the missing detail gently.
+- Never say things like "that is not right", "you are wrong", "surely you know", or "I expected more".
+- Treat every candidate equally regardless of how much they speak or how technical their answer sounds.
+- If the candidate asks to repeat a question, repeat the exact last question clearly and calmly, without comment.
+- If the candidate asks for a short pause, acknowledge it briefly ("Of course, take your time.") and wait — do not advance the interview or count it as an answer.
+- The closing turn must always include the question "Do you have any questions for us?" before ending. This cannot be skipped.
+"""
 
 UNIVERSAL_SYSTEM_V2 = """You are a professional structured interviewer speaking live.
 
@@ -271,9 +304,10 @@ def action_phrasing_note(action: str | None) -> str:
 
 
 def prompt_pack(version: str | None) -> str:
-    if (version or "").strip() in {"", PROMPT_VERSION_V2}:
-        return UNIVERSAL_SYSTEM_V2
-    return UNIVERSAL_SYSTEM_V2
+    base = UNIVERSAL_SYSTEM_V2
+    if GUARDRAIL_TONE_RULES:
+        base = base + _TONE_GUARDRAIL_BLOCK
+    return base
 
 
 def framing_notes(profile_type: str | None, job_target_level: str | None) -> str:

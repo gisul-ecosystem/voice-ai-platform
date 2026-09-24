@@ -19,7 +19,7 @@ from brain.defaults import (
     default_question_ladder,
     default_time_policy_for_duration,
 )
-from brain.safety import contains_prohibited_content, contains_prompt_injection
+from brain.safety import contains_prohibited_content, contains_prompt_injection, validate_competency_label
 from models.brain import (
     CompetencyDefinition,
     DurationMinutes,
@@ -223,6 +223,20 @@ def _candidate_competency_seeds(
         if len(cleaned) < 2:
             return
         if contains_prohibited_content(cleaned) or contains_prompt_injection(cleaned):
+            return
+        # Guardrail: reject entries that look like seniority/education/YOE not skills
+        label_ok, label_reason = validate_competency_label(cleaned)
+        if not label_ok:
+            import logging as _logging
+            _logging.getLogger("backend-api.brain.compiler").warning(
+                "guardrail_competency_label_rejected",
+                extra={
+                    "event": "guardrail_competency_label_rejected",
+                    "guardrail": "GUARDRAIL_COMPETENCY_LABEL_VALIDATION",
+                    "label": cleaned,
+                    "reason": label_reason,
+                },
+            )
             return
         key = cleaned.lower()
         if key in seen_names:
