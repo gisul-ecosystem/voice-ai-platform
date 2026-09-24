@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from brain.compiler import compile_blueprint
+from brain.compiler import (
+    compile_blueprint,
+    is_interviewable_competency_label,
+    normalize_skill_label,
+)
 from brain.llm_extract import (
     extract_job_intelligence_async,
 )
@@ -16,7 +20,7 @@ logger = logging.getLogger("backend-api.brain.definitions")
 
 
 _MIN_JD_CHARS = 20
-_MIN_COMPETENCY_CHARS = 2
+_MIN_COMPETENCY_CHARS = 3
 
 
 def _require_publishable_setup(
@@ -34,15 +38,26 @@ def _require_publishable_setup(
     role = (interview_setup.role or "").strip()
     if len(title) < 2 or len(role) < 2:
         raise ValueError("interview title and role are required before publishing")
-    competencies = [
-        item.strip()
-        for item in interview_setup.competencies
-        if isinstance(item, str) and item.strip()
-    ]
+    competencies: list[str] = []
+    seen: set[str] = set()
+    for item in interview_setup.competencies:
+        if not isinstance(item, str):
+            continue
+        cleaned = normalize_skill_label(item)
+        if len(cleaned) < _MIN_COMPETENCY_CHARS:
+            continue
+        if not is_interviewable_competency_label(cleaned):
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        competencies.append(cleaned)
     if not competencies:
-        raise ValueError("creator competencies are required to publish a definition")
-    if any(len(item) < _MIN_COMPETENCY_CHARS for item in competencies):
-        raise ValueError("each competency must be a real skill name, not a blank token")
+        raise ValueError(
+            "creator competencies are required; use real skill names "
+            "(not duty fragments like Design/develop/test)"
+        )
     return jd, competencies
 
 

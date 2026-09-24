@@ -9,13 +9,17 @@ from livekit.agents import Agent, ModelSettings, llm
 
 from products.interviewer.brain_runtime import BrainSessionBridge
 from products.interviewer.flow import CLOSING_MESSAGE, FALLBACK_FOLLOWUP, InterviewFlow
-from voice_platform.chat import is_usable_candidate_turn, last_text
+from voice_platform.chat import (
+    is_usable_candidate_turn,
+    last_text,
+    looks_like_agent_echo,
+    word_count,
+)
 
 logger = logging.getLogger("voice-agent.interviewer")
 
-CLARIFY_TURN = (
-    "Sorry, I did not catch that. Please say a bit more, in a full sentence."
-)
+# Soft continue — never apologize for audio/STT or say the answer was unclear.
+CLARIFY_TURN = "Please continue — tell me a bit more about that."
 
 
 class AaptorAgent(Agent):
@@ -83,6 +87,9 @@ class AaptorAgent(Agent):
         self._last_agent_text = (
             self.flow.interviewer_turns[-1] if self.flow.interviewer_turns else ""
         )
+        # Short non-echo STT fragments buffer here until a usable joined answer.
+        self._pending_candidate_fragments: list[str] = []
+        self._max_pending_fragments = 3
 
     @property
     def _opened(self) -> bool:
@@ -184,8 +191,7 @@ class AaptorAgent(Agent):
             # Rejoin/restore or concurrent enter: do not re-speak the opening.
             return
         # Block llm_node until greeting audio is committed — otherwise early STT
-        # steals the turn with CLARIFY ("Sorry, I did not catch that") and the
-        # UI stays on "Starting the interview" with no greeting.
+        # steals the turn with a soft continue and the UI never hears the greeting.
         self._greeting_in_progress = True
         parts: list[str] = []
         try:
@@ -231,13 +237,48 @@ class AaptorAgent(Agent):
         if self._greeting_in_progress or not self._greeting_done:
             return
         candidate_brain_turn_id = None
+        min_words = 1 if not self.flow.candidate_turns else 3
+
+        # Echo of agent TTS: never buffer, never advance — soft continue only.
+        if candidate_turn and looks_like_agent_echo(candidate_turn, self._last_agent_text):
+            self._pending_candidate_fragments.clear()
+            yield CLARIFY_TURN
+            self._last_agent_text = CLARIFY_TURN
+            turn_id = await self._record("agent", CLARIFY_TURN)
+            await self._persist_brain_after_exchange(
+                speaker="agent",
+                text=CLARIFY_TURN,
+                turn_id=turn_id,
+            )
+            return
+
+        # Buffer short non-echo fragments so one spoken answer is not 3 policy turns.
+        if candidate_turn and word_count(candidate_turn) < min_words:
+            self._pending_candidate_fragments.append(candidate_turn.strip())
+            if len(self._pending_candidate_fragments) < self._max_pending_fragments:
+                yield CLARIFY_TURN
+                self._last_agent_text = CLARIFY_TURN
+                turn_id = await self._record("agent", CLARIFY_TURN)
+                await self._persist_brain_after_exchange(
+                    speaker="agent",
+                    text=CLARIFY_TURN,
+                    turn_id=turn_id,
+                )
+                return
+            candidate_turn = " ".join(self._pending_candidate_fragments).strip()
+            self._pending_candidate_fragments.clear()
+        elif candidate_turn and self._pending_candidate_fragments:
+            candidate_turn = (
+                " ".join(self._pending_candidate_fragments + [candidate_turn.strip()]).strip()
+            )
+            self._pending_candidate_fragments.clear()
+
         if not is_usable_candidate_turn(
             candidate_turn,
             self._last_agent_text,
-            min_words=1 if not self.flow.candidate_turns else 3,
+            min_words=min_words,
         ):
-            # Echo / noise / too-short STT must not pollute durable transcript or scoring.
-            # Still ask for a clearer answer so the live session recovers.
+            # Noise / still-too-short after join — soft continue, no candidate persist.
             yield CLARIFY_TURN
             self._last_agent_text = CLARIFY_TURN
             turn_id = await self._record("agent", CLARIFY_TURN)

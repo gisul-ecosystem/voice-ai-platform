@@ -9,8 +9,64 @@ from products.interviewer.validator import (
     GeneratedQuestion,
     ladder_fallback_question,
     parse_generated_question,
+    speaks_competency_label,
     validate_generated_question,
 )
+
+
+def test_speaks_competency_label_blocks_rubric_leakage() -> None:
+    assert speaks_competency_label(
+        "What part of the Role expertise solution did you personally implement?",
+        "Role expertise",
+    )
+    assert speaks_competency_label(
+        "Can you describe a technical problem where you used Design?",
+        "Design",
+    )
+    assert not speaks_competency_label(
+        "Can you walk me through the system design for that service?",
+        "Design",
+    )
+    assert not speaks_competency_label(
+        "What did you personally implement on the proctoring module?",
+        "Role expertise",
+    )
+
+
+def test_competency_label_spoken_is_rejected() -> None:
+    generated = GeneratedQuestion(
+        question="What part of the Role expertise solution did you personally implement?",
+        competency_id="role_expertise",
+        intent="establish_ownership",
+        depth=2,
+    )
+    result = validate_generated_question(
+        generated,
+        definition={
+            "competencies": [
+                {
+                    "id": "role_expertise",
+                    "name": "Role expertise",
+                    "definition": "Hands-on ownership of role-critical work.",
+                }
+            ]
+        },
+        policy_competency_id="role_expertise",
+        policy_intent="establish_ownership",
+        policy_depth=2,
+        max_depth=4,
+        recent_questions=[],
+        allowed_probes=[],
+        hook_fact=None,
+    )
+    assert result.ok is False
+    assert "competency_label_spoken" in result.reasons
+
+
+def test_clarify_fallback_is_not_robotic_apology() -> None:
+    text = ladder_fallback_question(None, competency_id=None, intent="clarify")
+    assert "sorry" not in text.lower()
+    assert "did not catch" not in text.lower()
 
 
 def test_near_duplicate_questions_are_rejected() -> None:

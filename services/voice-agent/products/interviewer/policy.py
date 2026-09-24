@@ -132,11 +132,22 @@ def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any]
             "source": "generic",
         },
     ]
-    remaining = max(8, duration - 7)
-    per = max(3, remaining // max(len(competencies), 1))
+    usable_competencies: list[dict[str, Any]] = []
     for item in competencies:
         if not isinstance(item, dict):
             continue
+        name = str(item.get("name") or item.get("id") or "").strip()
+        if not _is_interviewable_phase_name(name):
+            continue
+        usable_competencies.append(item)
+    if not usable_competencies:
+        # Keep interview runnable even on a polluted published definition.
+        usable_competencies = [
+            item for item in competencies if isinstance(item, dict)
+        ][:4]
+    remaining = max(8, duration - 7)
+    per = max(3, remaining // max(len(usable_competencies), 1))
+    for item in usable_competencies:
         name = str(item.get("name") or item.get("id") or "competency").strip()
         evidence = [
             str(x).strip()
@@ -163,6 +174,44 @@ def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any]
         }
     )
     return {"phases": phases, "policy_mode": True}
+
+
+_BARE_DUTY_PHASE_TOKENS = frozenset(
+    {
+        "design",
+        "develop",
+        "test",
+        "build",
+        "maintain",
+        "create",
+        "implement",
+        "manage",
+        "support",
+        "analyze",
+        "optimize",
+        "deploy",
+        "write",
+        "code",
+    }
+)
+
+
+def _is_interviewable_phase_name(name: str) -> bool:
+    """Skip JD duty fragments that leaked into published competency names."""
+    cleaned = (name or "").strip()
+    if len(cleaned) < 3:
+        return False
+    words = cleaned.split()
+    first = words[0].lower().strip(".,;:")
+    if first in {"and", "or", "the", "a", "an", "to", "of", "for", "with"}:
+        return False
+    if len(words) == 1 and first in _BARE_DUTY_PHASE_TOKENS:
+        return False
+    if cleaned.lower().startswith("and "):
+        return False
+    if len(cleaned) > 72 and ("," in cleaned or cleaned.count(" ") >= 8):
+        return False
+    return True
 
 
 def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict[str, int]:

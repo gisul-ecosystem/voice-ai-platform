@@ -147,6 +147,65 @@ def normalize_skill_label(value: str) -> str:
     return cleaned
 
 
+# Bare verbs / duty fragments from comma-splitting JD responsibility lines.
+# These are not interviewable competency titles.
+_BARE_DUTY_TOKENS = frozenset(
+    {
+        "design",
+        "designs",
+        "designing",
+        "develop",
+        "develops",
+        "developing",
+        "test",
+        "tests",
+        "testing",
+        "build",
+        "builds",
+        "building",
+        "maintain",
+        "maintains",
+        "maintaining",
+        "create",
+        "implement",
+        "manage",
+        "support",
+        "analyze",
+        "optimize",
+        "deploy",
+        "write",
+        "code",
+    }
+)
+
+
+def is_interviewable_competency_label(value: str) -> bool:
+    """Reject JD duty fragments that should never become interview phases.
+
+    Blocks bare verbs (Design/develop/test), leading ``and …`` scraps, and
+    long comma-heavy responsibility sentences pasted as competency names.
+    Real skill titles like ``Python``, ``Negotiation``, ``Role expertise`` pass.
+    """
+    cleaned = normalize_skill_label(value)
+    if len(cleaned) < 3:
+        return False
+    words = [w for w in re.split(r"\s+", cleaned) if w]
+    if not words:
+        return False
+    first = words[0].lower().strip(".,;:")
+    if first in {"and", "or", "the", "a", "an", "to", "of", "for", "with"}:
+        return False
+    if len(words) == 1 and first in _BARE_DUTY_TOKENS:
+        return False
+    # Comma-split duty residue: "and maintain applications using Python."
+    if cleaned.lower().startswith("and "):
+        return False
+    # Full responsibility sentence used as a label (too long + clause-like).
+    if len(cleaned) > 72 and ("," in cleaned or cleaned.count(" ") >= 8):
+        return False
+    return True
+
+
 def _evidence_for(name: str, jd_hints: list[str]) -> list[str]:
     base = [
         "context of the work",
@@ -192,7 +251,7 @@ def _candidate_competency_seeds(
 
     def add(name: str, hints: list[str], *, required: bool) -> None:
         cleaned = normalize_skill_label(name)
-        if len(cleaned) < 2:
+        if not is_interviewable_competency_label(cleaned):
             return
         if contains_prohibited_content(cleaned) or contains_prompt_injection(cleaned):
             return
@@ -207,16 +266,18 @@ def _candidate_competency_seeds(
     for name in creator_competencies or []:
         add(name, [], required=True)
 
-    # LLM / explicit creator recommendations should own the interview plan.
-    # Only fall back to JD fragment heuristics when we do not have enough.
-    skip_jd_pad = creator_exclusive and len(seeds) >= _MIN_COMPETENCIES
+    # Creator-provided chips own the plan. Never invent phases from JD duty lines.
+    skip_jd_pad = creator_exclusive or len(seeds) >= _MIN_COMPETENCIES
 
     def _usable(item: ExtractedItem, *, max_len: int = 96) -> bool:
         text = item.text.strip()
-        # Allow comma-separated skill lists by using the first segment when long.
-        if "," in text:
-            text = text.split(",", 1)[0].strip()
-        if len(text) < 2 or len(text) > max_len:
+        # Do not take the first comma segment of a duty line ("Design, develop…").
+        # Only accept compact skill labels without clause punctuation.
+        if "," in text or ";" in text:
+            return False
+        if len(text) < 3 or len(text) > max_len:
+            return False
+        if not is_interviewable_competency_label(text):
             return False
         if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
             return False
@@ -225,25 +286,17 @@ def _candidate_competency_seeds(
     if not skip_jd_pad:
         for item in job.skills + job.mandatory_requirements:
             if _usable(item):
-                label = item.text.strip()
-                if "," in label:
-                    label = label.split(",", 1)[0].strip()
-                add(label, [item.text], required=True)
+                add(item.text.strip(), [item.text], required=True)
 
-        for item in job.responsibilities[:4]:
-            text = item.text.strip()
-            if 8 <= len(text) <= 72 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
-                add(text, [text], required=True)
+        # Responsibilities are duties, not competency titles — never seed phases
+        # from them (that produced Design/develop/test fragments).
 
         preferred_pool = (
             list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
         )
         for item in preferred_pool:
             if _usable(item, max_len=72):
-                label = item.text.strip()
-                if "," in label:
-                    label = label.split(",", 1)[0].strip()
-                add(label, [item.text], required=False)
+                add(item.text.strip(), [item.text], required=False)
 
     required_seeds = [seed for seed in seeds if seed[3]]
     preferred_seeds = [seed for seed in seeds if not seed[3]]
