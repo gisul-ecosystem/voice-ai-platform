@@ -8,6 +8,7 @@ from datetime import timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from brain.definition_service import publish_and_store
+from brain.extractors import extract_candidate_profile
 from db import candidates, definitions, interviews
 from models.schemas import (
     CreateScheduledInterviewRequest,
@@ -82,12 +83,23 @@ async def create_scheduled_interview(
     expires_at = starts_at + timedelta(minutes=req.late_grace_minutes)
     interview_id = f"int_{uuid.uuid4().hex}"
     candidate_id = candidate_id or f"candidate_{uuid.uuid4().hex}"
+    candidate_profile = (candidate_record or {}).get("candidate_profile")
+    if not isinstance(candidate_profile, dict) or not candidate_profile:
+        if isinstance(req.candidate_profile, dict) and req.candidate_profile:
+            candidate_profile = req.candidate_profile
+        else:
+            try:
+                candidate_profile = extract_candidate_profile(
+                    effective_resume_text
+                ).model_dump(mode="python")
+            except ValueError:
+                candidate_profile = None
     context = await interviews.create_context(
         req.job_description.strip(),
         effective_resume_text,
         req.interview_setup.model_dump(mode="python"),
         definition_id=published.definition_id,
-        candidate_profile=(candidate_record or {}).get("candidate_profile"),
+        candidate_profile=candidate_profile,
         expires_at_override=starts_at
         + timedelta(
             days=max(1, int(os.getenv("INTERVIEW_CONTEXT_RETENTION_DAYS", "30")))

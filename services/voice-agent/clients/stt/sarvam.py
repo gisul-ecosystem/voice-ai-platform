@@ -83,7 +83,7 @@ def build_realtime_ws_url(
             # Sarvam's own server-side endpointing — independent of the LiveKit VAD.
             # Kept short for responsiveness; the LiveKit-side grace-period commit
             # (see livekit_adapters.py) absorbs late corrections without this delay.
-            "silence_duration_ms": "500",
+            "silence_duration_ms": "1200",
             "min_speech_duration_ms": "250",
         }
     )
@@ -97,11 +97,20 @@ def parse_realtime_message(payload: object) -> tuple[str, str]:
     event = str(payload.get("event") or payload.get("type") or "")
     text = payload.get("text")
     if not isinstance(text, str):
+        text = payload.get("transcript")
+    if not isinstance(text, str):
         nested = payload.get("data")
         if isinstance(nested, dict) and isinstance(nested.get("text"), str):
             text = nested["text"]
         elif isinstance(nested, dict):
             text = transcript_from_payload(nested)
+        elif isinstance(nested, list):
+            parts = [
+                transcript_from_payload(item)
+                for item in nested
+                if isinstance(item, (dict, str))
+            ]
+            text = " ".join(part.strip() for part in parts if part.strip())
         else:
             text = transcript_from_payload(payload)
     text = (text or "").strip()

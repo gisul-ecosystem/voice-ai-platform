@@ -1,12 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 const DRAFT_KEY = "ai-interview:role-draft";
 type Candidate = { name: string; email: string; resume: File | null; invite?: string; error?: string; busy?: boolean };
 
 type Pipeline = { backend: boolean; services: Array<{ name: string; provider: string; configured: boolean }> };
+
+const subscribeToHydration = () => () => undefined;
+const getClientHydration = () => true;
+const getServerHydration = () => false;
 
 function readDraft(): { state?: Record<string, unknown>; error: string } {
   if (typeof window === "undefined") return { error: "" };
@@ -19,19 +23,10 @@ function readDraft(): { state?: Record<string, unknown>; error: string } {
 }
 
 export default function InviteCandidatesPage() {
-  const [hydrated, setHydrated] = useState(false);
-  const [state, setState] = useState<Record<string, unknown> | undefined>(undefined);
-  const [error, setError] = useState("");
+  const hydrated = useSyncExternalStore(subscribeToHydration, getClientHydration, getServerHydration);
+  const { state, error } = hydrated ? readDraft() : { state: undefined, error: "" };
   const [candidates, setCandidates] = useState<Candidate[]>([{ name: "", email: "", resume: null }]);
   const [pipeline, setPipeline] = useState<Pipeline>();
-
-  // sessionStorage is client-only; reading it during render breaks hydration.
-  useEffect(() => {
-    const boot = readDraft();
-    setState(boot.state);
-    setError(boot.error);
-    setHydrated(true);
-  }, []);
 
   useEffect(() => {
     fetch("/api/admin/pipeline")
@@ -77,7 +72,6 @@ export default function InviteCandidatesPage() {
     } catch (reason) { update(index, { busy: false, error: reason instanceof Error ? reason.message : "Invitation failed." }); }
   }
 
-  if (!hydrated) return <main className="interviewer-home admin-builder-page"><div className="center-state"><h2>Loading published interview…</h2></div></main>;
   if (!state || !published) return <main className="interviewer-home admin-builder-page"><div className="center-state"><h2>Publish the interview first</h2><Link className="button primary" href="/interviewer/admin/design">Start design</Link></div></main>;
   return <main className="interviewer-home admin-builder-page">
     <nav className="landing-nav" aria-label="Admin navigation"><Link href="/interviewer" className="brand"><span className="brand-mark">AI</span>AI Interviewer</Link><span className="environment-badge">03 Invite candidates</span></nav>

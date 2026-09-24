@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-const defaultStart = new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
+function defaultStartTime(): string {
+  return new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
+}
 const DRAFT_KEY = "ai-interview:role-draft";
 
 type RoleDraft = {
@@ -18,13 +20,20 @@ export default function DesignRolePage() {
   const [value, setValue] = useState<RoleDraft>({
     title: "AI Engineer interview", role: "AI Engineer", seniority: "junior",
     durationMinutes: "30", jobDescription: "", competencies: "",
-    definitionId: "ai-engineer-junior-v1", startsAt: defaultStart,
+    definitionId: "ai-engineer-junior-v1", startsAt: "",
     difficulty: "applied", language: "English",
     monitoringEnabled: true, recordingEnabled: false,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [newCompetency, setNewCompetency] = useState("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setValue((current) => ({ ...current, startsAt: defaultStartTime() }));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   function setField<K extends keyof RoleDraft>(key: K, next: RoleDraft[K]) {
     setValue((current) => ({ ...current, [key]: next }));

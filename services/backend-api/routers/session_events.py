@@ -66,7 +66,7 @@ async def read_session_scorecard(session_id: str) -> dict:
         session = await interviews.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Interview session not found")
-        if session.get("status") == "completed":
+        if session.get("status") in {"completed", "abandoned"}:
             stored = await scoring_service.generate_and_store_scorecard(session_id)
         if stored is None:
             raise HTTPException(status_code=404, detail="Scorecard not found")
@@ -142,7 +142,7 @@ async def update_session_status(
                 raise HTTPException(status_code=404, detail="Interview session not found")
             if stored.get("status") != req.status:
                 raise HTTPException(status_code=409, detail="Invalid session status transition")
-        if req.status == "completed":
+        if req.status in {"completed", "abandoned"}:
             try:
                 await scoring_service.generate_and_store_scorecard(session_id)
             except Exception:

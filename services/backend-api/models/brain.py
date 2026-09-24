@@ -405,8 +405,8 @@ class AnswerEvaluation(BaseModel):
     # Evidence dimensions the answer proved / merely asserted. Mirrors
     # products/interviewer/evidence.py in the voice agent; without these the
     # scorecard cannot show WHICH evidence a rating rests on.
-    slots_demonstrated: list[str] = Field(default_factory=list, max_length=12)
-    slots_claimed: list[str] = Field(default_factory=list, max_length=12)
+    slots_demonstrated: list[str] = Field(default_factory=list, max_length=20)
+    slots_claimed: list[str] = Field(default_factory=list, max_length=20)
     contradicts_earlier: bool = False
 
 
@@ -449,6 +449,9 @@ class CompetencyCoverage(BaseModel):
     covered_intents: list[str] = Field(default_factory=list, max_length=20)
     missing_intents: list[str] = Field(default_factory=list, max_length=20)
     evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    evidence_states: dict[str, Literal["missing", "claimed", "demonstrated", "confirmed"]] = Field(
+        default_factory=dict
+    )
 
 
 class InterviewBrainState(BaseModel):

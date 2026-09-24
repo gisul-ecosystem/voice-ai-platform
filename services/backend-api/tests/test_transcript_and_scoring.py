@@ -131,6 +131,110 @@ def test_scorecard_requires_evidence_citations() -> None:
     assert scored.evidence_ids
     assert scored.review_required is True
     assert scorecard.human_review_status == "pending"
+    assert scored.contradictory_evidence_ids == []
+
+
+def test_scorecard_links_contradicted_answers_as_contradictory_evidence() -> None:
+    """A false claim must stay unrated *and* be citable by the reviewer."""
+    definition = {
+        "definition_id": "idef_score_test_contra_01",
+        "competencies": [
+            {
+                "id": "problem_solving",
+                "name": "Problem solving",
+                "evidence_expected": ["context", "action", "result"],
+            }
+        ],
+    }
+    scorecard, evidence = build_scorecard_bundle(
+        session_id="ses_score_test_contra_01",
+        definition=definition,
+        questions=[
+            {
+                "question_id": "q1",
+                "competency_id": "problem_solving",
+                "text": "What problem did you solve?",
+            }
+        ],
+        answers=[
+            {
+                "answer_id": "a1",
+                "question_id": "q1",
+                "turn_ids": ["turn_candidate_1"],
+                "usable": True,
+                "final_transcript": (
+                    "I owned the billing timeout context. I implemented retries "
+                    "and the result was lower latency for checkout."
+                ),
+                "answer_evaluation": {
+                    "technical_substance": "deep",
+                    "factually_correct": False,
+                },
+            }
+        ],
+    )
+    scored = scorecard.competencies[0]
+    assert scored.contradictory_evidence_ids == scored.evidence_ids
+    assert scored.contradictory_evidence_ids
+    # The contradiction must still block a numeric rating.
+    assert scored.rating is None
+    assert scored.outcome == "insufficient_evidence"
+    flagged = {item.evidence_id for item in evidence}
+    assert set(scored.contradictory_evidence_ids) <= flagged
+
+
+def test_scorecard_coverage_does_not_count_an_asked_but_unproven_intent() -> None:
+    definition = {
+        "definition_id": "idef_score_test_coverage_01",
+        "competencies": [
+            {
+                "id": "ownership",
+                "name": "Ownership",
+                "evidence_expected": ["personal contribution"],
+                "min_assessment_intents": [
+                    "establish_context",
+                    "establish_ownership",
+                ],
+            }
+        ],
+    }
+    scorecard, _ = build_scorecard_bundle(
+        session_id="ses_score_test_coverage_01",
+        definition=definition,
+        questions=[
+            {
+                "question_id": "q_context",
+                "competency_id": "ownership",
+                "intent": "establish_context",
+                "text": "Describe the situation.",
+            },
+            {
+                "question_id": "q_ownership",
+                "competency_id": "ownership",
+                "intent": "establish_ownership",
+                "text": "What did you personally handle?",
+            },
+        ],
+        answers=[
+            {
+                "answer_id": "a_context",
+                "question_id": "q_context",
+                "turn_ids": ["turn_context"],
+                "usable": True,
+                "final_transcript": "It was a billing incident.",
+            }
+        ],
+        coverage={
+            "ownership": {
+                "status": "partial",
+                "covered_intents": ["establish_context"],
+                "missing_intents": ["establish_ownership"],
+            }
+        },
+    )
+
+    scored = scorecard.competencies[0]
+    assert scored.missing_intents == ["establish_ownership"]
 
 
 def test_heuristic_scoring_does_not_invent_low_ratings() -> None:

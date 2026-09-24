@@ -84,6 +84,19 @@ def _strength_from_evaluation(answer: Any) -> EvidenceStrength | None:
     return _SUBSTANCE_STRENGTH.get(substance)
 
 
+def _is_contradicted(answer: Any) -> bool:
+    """True when the LLM judged the answer to state something false."""
+    if not isinstance(answer, dict):
+        return False
+    evaluation = answer.get("answer_evaluation")
+    if not isinstance(evaluation, dict):
+        return False
+    if evaluation.get("factually_correct") is False:
+        return True
+    substance = str(evaluation.get("technical_substance") or "").strip().lower()
+    return substance == "incorrect"
+
+
 def _strength_for_answer(
     text: str,
     expected: list[str],
@@ -452,6 +465,7 @@ def build_scorecard_bundle(
             orphan_answers = remaining
 
         competency_evidence_ids: list[str] = []
+        contradicted_evidence_ids: list[str] = []
         best_strength: EvidenceStrength = "none"
         best_text = ""
         missing = list(expected)
@@ -529,6 +543,8 @@ def build_scorecard_bundle(
                 )
             )
             competency_evidence_ids.append(evidence_id)
+            if _is_contradicted(answer):
+                contradicted_evidence_ids.append(evidence_id)
             if len(excerpts) < 3:
                 excerpts.append(text[:240])
 
@@ -545,10 +561,16 @@ def build_scorecard_bundle(
                 for item in (coverage_row.get("covered_intents") or [])
                 if str(item).strip()
             }
+        # A published coverage ledger records demonstrated evidence, not merely
+        # which question was asked. Only use asked intents for legacy sessions
+        # that have no coverage snapshot.
+        assessed_intents = (
+            covered_intents if isinstance(coverage_row, dict) else asked_intents
+        )
         missing_intents = [
             intent
             for intent in required_intents
-            if intent not in asked_intents and intent not in covered_intents
+            if intent not in assessed_intents
         ]
 
         rating, outcome = _rating_from_bars(
@@ -565,7 +587,7 @@ def build_scorecard_bundle(
                 outcome=outcome,  # type: ignore[arg-type]
                 anchor=_anchor_for_rating(competency, rating),
                 evidence_ids=competency_evidence_ids,
-                contradictory_evidence_ids=[],
+                contradictory_evidence_ids=contradicted_evidence_ids[:50],
                 missing_evidence=missing[:20],
                 missing_intents=missing_intents[:20],
                 proven_dimensions=[

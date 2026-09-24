@@ -23,6 +23,35 @@ class FakeLlm:
         return self.replies.pop(0)
 
 
+def _technical_definition() -> dict:
+    return {
+        "definition_id": "idef_technical_quality_01",
+        "competencies": [
+            {
+                "id": "dsa",
+                "name": "Data Structures and Algorithms",
+                "definition": "Solves algorithmic problems with appropriate data structures.",
+                "max_depth": 3,
+                "max_probes": 3,
+                "min_assessment_intents": ["establish_context", "establish_ownership"],
+                "evidence_expected": ["problem", "approach", "result"],
+            }
+        ],
+        "question_ladders": [
+            {
+                "competency_id": "dsa",
+                "levels": [
+                    {
+                        "depth": 1,
+                        "intent": "establish_context",
+                        "example_question": "Can you describe a technical problem where you used data structures or algorithms?",
+                    }
+                ],
+            }
+        ],
+    }
+
+
 def _sales_definition() -> dict:
     return {
         "definition_id": "idef_sales_quality_01",
@@ -81,6 +110,49 @@ def _sales_definition() -> dict:
             }
         ],
     }
+
+
+def test_fallback_does_not_repeat_the_previous_dsa_question() -> None:
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=_technical_definition(),
+        interviewer_turns=[
+            "Can you describe a technical problem where you used data structures or algorithms?"
+        ],
+        candidate_turns=["I optimized arrays and strings."],
+        initial_phase_index=2,
+    )
+    policy = flow._current_policy_decision(pending_candidate_turn=True)
+
+    fallback = flow._fallback_spoken_question(
+        policy,
+        "I optimized arrays and strings.",
+    )
+
+    assert fallback != flow.interviewer_turns[-1]
+    assert fallback.startswith("Let's move on")
+
+
+def test_last_resort_fallback_is_not_repeated() -> None:
+    repeated = "Thank you. Could you share one specific example of work you personally handled, and what happened as a result?"
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=_technical_definition(),
+        interviewer_turns=[repeated],
+        candidate_turns=["I optimized arrays and strings."],
+        initial_phase_index=2,
+    )
+    policy = flow._current_policy_decision(pending_candidate_turn=True)
+
+    fallback = flow._fallback_spoken_question(
+        policy,
+        "I optimized arrays and strings.",
+    )
+
+    assert fallback != repeated
+    assert fallback.startswith("Let's move on")
 
 
 def _junior_backend_definition() -> dict:
@@ -153,7 +225,7 @@ async def test_sales_definition_prompt_is_not_technical_script() -> None:
     assert "senior technical interviewer" not in prompt.lower()
     assert "every listed resume project" not in prompt.lower()
     assert "api, schema, queue" not in prompt.lower()
-    assert "POLICY ENGINE" in prompt
+    assert "AGENDA" in prompt
     assert "negotiation" in prompt.lower()
     assert "api" not in question.lower()
     assert "queue" not in question.lower()
@@ -172,7 +244,6 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
         interview_definition=_junior_backend_definition(),
         interviewer_turns=["q1", "q2", "q3"],
         candidate_turns=["I am a student.", "I did a college project."],
-        initial_phase_index=2,
         initial_probe_count=0,
         candidate_profile={
             "experience_summary": {"profile_type": "final_year_student"},
@@ -185,6 +256,11 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
             ],
         },
         resume_text="Final year BCA student. Library management project in Java.",
+    )
+    flow.phase_index = next(
+        index
+        for index, phase in enumerate(flow.phases)
+        if phase.get("competency_id") == "problem_solving"
     )
     assert flow._job_target_level() == "junior"
     assert flow._profile_type() == "final_year_student"
@@ -212,6 +288,30 @@ def test_off_topic_answer_is_not_marked_usable() -> None:
     assert usability == "off_topic"
     assert quality == "off_topic"
     assert covered == []
+
+
+def test_coverage_evidence_states_progress_to_confirmed() -> None:
+    from products.interviewer.coverage import apply_coverage, empty_coverage_entry
+
+    coverage = {"ownership": empty_coverage_entry(["establish_ownership"])}
+    apply_coverage(
+        coverage,
+        competency_id="ownership",
+        covered_intents=["establish_ownership"],
+        evidence_id="ev_1",
+    )
+    assert coverage["ownership"]["evidence_states"] == {
+        "establish_ownership": "demonstrated"
+    }
+    apply_coverage(
+        coverage,
+        competency_id="ownership",
+        covered_intents=["establish_ownership"],
+        evidence_id="ev_2",
+    )
+    assert coverage["ownership"]["evidence_states"] == {
+        "establish_ownership": "confirmed"
+    }
 
 
 def test_missing_intents_force_probe_instead_of_advance() -> None:

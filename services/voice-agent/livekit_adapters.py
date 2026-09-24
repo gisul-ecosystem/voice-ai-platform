@@ -50,7 +50,8 @@ _STT_SAMPLE_RATE = 16000
 _STT_CHUNK_BYTES = _STT_SAMPLE_RATE // 20 * 2  # 50 ms of 16-bit mono
 # Brief patience after speech_end before committing to the LLM — a corrected
 # Sarvam transcript arriving just after speech_end is worth the small delay.
-_SARVAM_FINAL_GRACE_SECONDS = 0.2
+_SARVAM_FINAL_GRACE_SECONDS = 1.0
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 # Upper bound on a single TTS request so very long replies still start quickly.
 # Interview questions sit well under this, so they synthesise in one piece.
 _MAX_SYNTH_CHARS = 600
@@ -184,6 +185,9 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
         speaking = False
         closing = False
         last_text = ""
+        committed_text = ""
+        audio_bytes_sent = 0
+        realtime_events_received = 0
 
         def _emit_interim(text: str) -> None:
             self._event_ch.send_nowait(
@@ -213,13 +217,14 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
             )
 
         def _end_speech() -> None:
-            nonlocal speaking, last_text
+            nonlocal speaking, last_text, committed_text
             if speaking:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 )
                 speaking = False
             last_text = ""
+            committed_text = ""
 
         pending_final_task: asyncio.Task | None = None
 
@@ -230,14 +235,15 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
             pending_final_task = None
 
         async def _finalize_after_grace() -> None:
-            nonlocal pending_final_task
+            nonlocal pending_final_task, committed_text
             try:
                 await asyncio.sleep(_SARVAM_FINAL_GRACE_SECONDS)
             except asyncio.CancelledError:
                 return
             pending_final_task = None
             text_to_send = last_text
-            if text_to_send:
+            if text_to_send and text_to_send != committed_text:
+                committed_text = text_to_send
                 _emit_final(text_to_send)
             _end_speech()
 
@@ -255,7 +261,7 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
             Sarvam "fast" mode often emits growing transcript.final frames for one
             utterance. Commit only on speech_end or a repeated stable final.
             """
-            nonlocal speaking, last_text
+            nonlocal speaking, last_text, committed_text
             text = (text or "").strip()
             if kind == "speech_start" or (text and not speaking):
                 if not speaking:
@@ -269,20 +275,20 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                 last_text = text
                 _emit_interim(text)
                 if pending_final_task is not None:
-                    # Speech resumed before the grace window elapsed; more is coming.
                     _cancel_pending_final()
                 return
             if kind == "final" and text:
-                # Identical final twice → utterance settled; otherwise keep interim.
+                if not speaking and text == committed_text:
+                    return
                 if speaking and text == last_text:
                     _cancel_pending_final()
-                    _emit_final(text)
+                    if text != committed_text:
+                        committed_text = text
+                        _emit_final(text)
                     _end_speech()
                     return
                 last_text = text
                 _emit_interim(text)
-                # Sarvam may omit speech_end. Every final therefore gets a short
-                # debounce window so a correction can replace it before commit.
                 _schedule_final()
                 return
             if kind == "speech_end":
@@ -295,7 +301,7 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
             async with websocket_connect(url, **connect_options) as ws:
 
                 async def send_task() -> None:
-                    nonlocal closing
+                    nonlocal closing, audio_bytes_sent
                     buf = bytearray()
                     try:
                         async for ev in self._input_ch:
@@ -304,6 +310,7 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                                 while len(buf) >= _STT_CHUNK_BYTES:
                                     chunk = bytes(buf[:_STT_CHUNK_BYTES])
                                     del buf[:_STT_CHUNK_BYTES]
+                                    audio_bytes_sent += len(chunk)
                                     await ws.send(
                                         json.dumps(
                                             {
@@ -316,6 +323,7 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                                     )
                             else:
                                 if buf:
+                                    audio_bytes_sent += len(buf)
                                     await ws.send(
                                         json.dumps(
                                             {
@@ -329,6 +337,7 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                                     buf.clear()
                                 await ws.send(json.dumps({"event": "flush"}))
                         if buf:
+                            audio_bytes_sent += len(buf)
                             await ws.send(
                                 json.dumps(
                                     {
@@ -347,6 +356,7 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                             pass
 
                 async def recv_task() -> None:
+                    nonlocal realtime_events_received
                     async for raw in ws:
                         if not isinstance(raw, str):
                             continue
@@ -355,6 +365,22 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                         except json.JSONDecodeError:
                             continue
                         kind, text = parse_realtime_message(payload)
+                        realtime_events_received += 1
+                        if realtime_events_received <= 3:
+                            logger.info(
+                                "stt_realtime_event",
+                                extra={
+                                    "event": "stt_realtime_event",
+                                    "kind": kind,
+                                    "has_text": bool(text),
+                                    "payload_keys": sorted(
+                                        str(key) for key in payload.keys()
+                                    ),
+                                    "payload_event": str(
+                                        payload.get("event") or payload.get("type") or ""
+                                    ),
+                                },
+                            )
                         if kind == "other":
                             if payload.get("event") == "error":
                                 raise APIConnectionError(
@@ -383,6 +409,14 @@ class _LaptopRecognizeStream(stt.RecognizeStream):
                             task.cancel()
                     _cancel_pending_final()
                     await asyncio.gather(sender, receiver, return_exceptions=True)
+                    logger.info(
+                        "stt_realtime_summary",
+                        extra={
+                            "event": "stt_realtime_summary",
+                            "audio_bytes_sent": audio_bytes_sent,
+                            "realtime_events_received": realtime_events_received,
+                        },
+                    )
         except APIConnectionError:
             raise
         except (WebSocketException, OSError, Exception) as exc:
@@ -432,7 +466,11 @@ class LaptopTTS(tts.TTS):
 class _LaptopChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            audio_bytes = await self._tts._client.synthesize(self.input_text)
+            from clients.tts.voice_policy import synthesize_same_voice
+
+            audio_bytes = await synthesize_same_voice(
+                self._tts._client, self.input_text
+            )
         except ServiceUnavailableError as exc:
             raise _to_api_error(exc) from exc
 

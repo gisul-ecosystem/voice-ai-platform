@@ -5,7 +5,6 @@ from products.interviewer.policy import (
     ASK_BASELINE,
     CLARIFY_CURRENT_ANSWER,
     CLOSE_INTERVIEW,
-    MAP_CANDIDATE_BACKGROUND,
     MOVE_TO_NEXT_COMPETENCY,
     OPEN_INTERVIEW,
     PolicyState,
@@ -48,7 +47,7 @@ def test_outline_is_breadth_first() -> None:
     assert outline is not None
     names = [phase["name"] for phase in outline["phases"]]
     assert names[0] == "opening"
-    assert names[1] == "candidate_map"
+    assert names[1] == "Problem solving"
     assert "Problem solving" in names
     assert names[-1] == "closing"
 
@@ -67,7 +66,8 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
             phase_name="opening",
         )
     )
-    assert mapping.action == MAP_CANDIDATE_BACKGROUND
+    assert mapping.action == ASK_BASELINE
+    assert mapping.forced_flow_decision == "advance"
     assert mapping.allow_llm_decision is False
 
     after_map = decide_next_action(
@@ -107,6 +107,22 @@ def test_baseline_then_depth_caps_force_advance() -> None:
     )
     assert capped.action == MOVE_TO_NEXT_COMPETENCY
     assert capped.forced_flow_decision == "advance"
+
+
+def test_no_gain_probes_force_competency_transition() -> None:
+    decision = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=6,
+            candidate_turn_count=6,
+            phase_name="Problem solving",
+            competency_id="problem_solving",
+            consecutive_no_gain_probes=4,
+            has_uncovered_competencies=True,
+        )
+    )
+    assert decision.action == MOVE_TO_NEXT_COMPETENCY
+    assert decision.forced_flow_decision == "advance"
+    assert decision.intent == "evidence_gap_stop"
 
 
 def test_hard_time_limit_closes() -> None:
@@ -164,7 +180,7 @@ def test_repeated_unusable_answers_force_controlled_close() -> None:
             interviewer_turn_count=6,
             candidate_turn_count=6,
             phase_name="Problem solving",
-            consecutive_unusable=4,
+            consecutive_unusable=7,
             has_uncovered_competencies=True,
         )
     )

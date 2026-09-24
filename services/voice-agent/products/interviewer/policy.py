@@ -28,6 +28,11 @@ CHECK_REMAINING_GAP = "CHECK_REMAINING_GAP"
 OFFER_FINAL_ADDITION = "OFFER_FINAL_ADDITION"
 CLOSE_INTERVIEW = "CLOSE_INTERVIEW"
 
+# Intro + optional project must yield to admin competencies quickly.
+WARMUP_MAX_SECONDS = 180
+WARMUP_MAX_INTERVIEWER_TURNS = 5
+WARMUP_SECTIONS = frozenset({"opening", "candidate_map", "resume_project", "baseline"})
+
 # Probe rungs (design spec section 5). The policy picks the rung; the model
 # only supplies the wording.
 PROBE_RUNGS: dict[str, str] = {
@@ -65,7 +70,7 @@ SLOT_ACTIONS: dict[str, str] = {
 
 _DEPTH_ACTIONS = {
     1: PROBE_FOR_CONTEXT,
-    2: PROBE_FOR_OWNERSHIP,
+    2: PROBE_FOR_METHOD,
     3: PROBE_FOR_METHOD,
     4: PROBE_FOR_REASONING,
     5: PROBE_FOR_REFLECTION,
@@ -111,6 +116,7 @@ class PolicyState:
     probe_count: int = 0
     elapsed_seconds: int = 0
     consecutive_unusable: int = 0
+    consecutive_no_gain_probes: int = 0
     completed: bool = False
     phase_name: str = ""
     competency_id: str | None = None
@@ -127,7 +133,7 @@ class PolicyState:
     gap_competency_id: str | None = None
     # Consecutive probes on this competency that moved no evidence forward.
     probes_without_gain: int = 0
-    no_gain_stop_after: int = 2
+    no_gain_stop_after: int = 4
     # Weakest unproven evidence slot for the active competency, if any.
     target_slot: str | None = None
     # Set when the last answer contradicted something said earlier.
@@ -138,8 +144,8 @@ class PolicyState:
     final_addition_offered: bool = False
     clarify_after: int = 1
     rephrase_after: int = 2
-    change_topic_after: int = 3
-    close_after: int = 4
+    change_topic_after: int = 5
+    close_after: int = 7
 
 
 def outline_from_definition(
@@ -155,63 +161,91 @@ def outline_from_definition(
         return None
     time_policy = definition.get("time_policy") if isinstance(definition.get("time_policy"), dict) else {}
     duration = int(time_policy.get("duration_minutes") or 30)
-    duration = 15 if duration < 20 else 45 if duration > 40 else 30
+    # Accept 15, 20, 30, or 45. Snap to nearest allowed value.
+    # 20-minute interviews are fully supported for focused 3-4 competency sessions.
+    ALLOWED = (15, 20, 30, 45)
+    duration = min(ALLOWED, key=lambda d: abs(d - duration))
 
     phases: list[dict[str, Any]] = [
         {
             "name": "opening",
-            "duration_minutes": 2,
+            "duration_minutes": 1,
             "topics": ["introduction", "role confirmation"],
-            "source": "generic",
-        },
-        {
-            "name": "candidate_map",
-            "duration_minutes": 3,
-            "topics": ["background", "relevant experience", "ownership"],
             "source": "generic",
         },
     ]
     valid = [item for item in competencies if isinstance(item, dict)]
-    # Competencies are the assessment; the resume walkthrough only supplies
-    # concrete material to probe. Reserve competency time FIRST, then spend what
-    # is left on projects, so a long CV can never squeeze out a required skill.
-    generic_minutes = 7
-    min_per_competency = 3
+    # Keep intro+projects short so admin competencies start within ~3 minutes.
+    # Opening 1 + closing 1; at most one brief project question before JD skills.
+    generic_minutes = 2
+    # Guarantee every competency gets at least 4 minutes (1 baseline + 3 probes).
+    # With 6 competencies this gives floor of 24 min — leaves 6 min for opening/project/closing.
+    min_per_competency = 4
     competency_floor = min_per_competency * max(len(valid), 1)
-    project_pool = max(0, duration - generic_minutes - competency_floor)
+    # Project warm-up: only allow if budget permits without cutting competency floor.
+    # Hard cap: 3 minutes total for project regardless of total duration.
+    max_project_minutes = 3
+    project_pool = min(max_project_minutes, max(0, duration - generic_minutes - competency_floor))
     projects = [
         str(name).strip()
         for name in (resume_projects or [])
         if str(name).strip()
-    ][: max(0, min(2, project_pool // 2))]
-    project_budget = 2 if projects else 0
+    ][: 1 if project_pool >= 1 else 0]
     for project in projects:
         phases.append(
             {
                 "name": f"Resume project: {project}",
-                "duration_minutes": project_budget,
+                "duration_minutes": max(1, project_pool),
                 "topics": [project],
                 "source": "resume",
+                "intent": "resume_project",
                 "project_name": project,
                 "max_depth": 3,
-                # One opener plus one follow-up: enough to surface the work,
-                # not enough to eat the competency budget.
-                "max_probes": 1,
+                "max_probes": 4,  # 1 opening + 4 probes = 5 total project turns
             }
         )
 
-    reserved = generic_minutes + project_budget * len(projects)
+    reserved = generic_minutes + sum(
+        int(phase.get("duration_minutes") or 0)
+        for phase in phases
+        if phase.get("intent") == "resume_project"
+    )
     remaining = max(competency_floor, duration - reserved)
-    # Recruiter weighting decides how the competency time is split, not an even share.
+    # Distribute remaining time by recruiter weight.
+    # Uses round() so equal-weight competencies always get the same value.
+    # Rounding may produce sum != remaining by at most ±n; we correct by trimming
+    # or adding to the competency with the largest/smallest share without breaking
+    # equal-weight symmetry (equal items all round identically — only one needs trim).
     weights = [max(0.0, float(item.get("weight") or 0)) for item in valid]
     weight_total = sum(weights)
-    even = max(3, remaining // max(len(valid), 1))
-    for item, weight in zip(valid, weights, strict=True):
-        share = (
-            max(3, round(remaining * weight / weight_total))
-            if weight_total > 0
-            else even
-        )
+    n_valid = max(len(valid), 1)
+
+    if weight_total > 0:
+        raw_shares = [
+            max(min_per_competency, round(remaining * w / weight_total))
+            for w in weights
+        ]
+    else:
+        # Pure equal split: integer division so all shares identical when n divides evenly.
+        base = remaining // n_valid
+        raw_shares = [max(min_per_competency, base)] * n_valid
+
+    # Correct sum to exactly equal remaining by adjusting one item at a time,
+    # always picking the item where the adjustment is least noticeable (largest
+    # or smallest share). Equal-weight items all have the same value so this
+    # only ever adjusts one of them, preserving practical symmetry.
+    diff = remaining - sum(raw_shares)
+    if diff > 0:
+        for _ in range(diff):
+            # Add to the item with the smallest current share (most underserved)
+            raw_shares[min(range(n_valid), key=lambda i: raw_shares[i])] += 1
+    elif diff < 0:
+        for _ in range(-diff):
+            # Remove from the item with the largest current share
+            idx = max(range(n_valid), key=lambda i: raw_shares[i])
+            raw_shares[idx] = max(min_per_competency, raw_shares[idx] - 1)
+
+    for item, share in zip(valid, raw_shares, strict=True):
         name = str(item.get("name") or item.get("id") or "competency").strip()
         evidence = [
             str(x).strip()
@@ -232,7 +266,7 @@ def outline_from_definition(
     phases.append(
         {
             "name": "closing",
-            "duration_minutes": 2,
+            "duration_minutes": 1,
             "topics": ["final addition", "next steps"],
             "source": "generic",
         }
@@ -244,8 +278,8 @@ def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict
     defaults = {
         "clarify_after": 1,
         "rephrase_after": 2,
-        "change_topic_after": 3,
-        "close_after": 4,
+        "change_topic_after": 5,
+        "close_after": 7,
     }
     if not isinstance(definition, dict):
         return defaults
@@ -257,7 +291,11 @@ def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict
     clarify = max(1, int(policy.get("clarify_after") or defaults["clarify_after"]))
     rephrase = max(clarify, int(policy.get("rephrase_after") or defaults["rephrase_after"]))
     change = max(rephrase, int(policy.get("change_topic_after") or defaults["change_topic_after"]))
-    close = max(change + 1, int(policy.get("close_after") or defaults["close_after"]))
+    # Published brain schema uses confirm_continue_after; agents historically used close_after.
+    close_raw = policy.get("close_after")
+    if close_raw is None:
+        close_raw = policy.get("confirm_continue_after")
+    close = max(change + 1, int(close_raw or defaults["close_after"]))
     return {
         "clarify_after": clarify,
         "rephrase_after": rephrase,
@@ -276,7 +314,19 @@ def time_bounds_from_definition(definition: dict[str, Any] | None) -> dict[str, 
         }
     policy = definition.get("time_policy") if isinstance(definition.get("time_policy"), dict) else {}
     duration = int(policy.get("duration_minutes") or 30)
-    soft = int(policy.get("soft_end_minutes") or max(duration - 3, 1))
+    # Compute a competency-count-aware soft end so the breadth-first rush
+    # only fires after all competencies have had at least one real question.
+    # Minimum: 4 min per competency + 4 min for opening/project/closing.
+    n_competencies = len([
+        c for c in (definition.get("competencies") or [])
+        if isinstance(c, dict)
+    ])
+    min_competency_coverage_minutes = max(n_competencies * 4, 0)
+    earliest_soft = min(min_competency_coverage_minutes + 4, duration - 2)
+    soft_from_policy = int(policy.get("soft_end_minutes") or max(duration - 3, 1))
+    # Use whichever is later — never rush before all competencies are reachable.
+    soft = max(soft_from_policy, earliest_soft)
+    soft = min(soft, duration - 1)  # never exceed duration
     target = int(policy.get("target_end_minutes") or duration)
     hard = int(policy.get("hard_end_minutes") or duration + 5)
     return {
@@ -328,10 +378,44 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="closing",
         )
 
+    # Hard cap: resume/project warm-up never exceeds 3 follow-up probes.
+    # After 3 probes the engine forces advance to the first competency.
+    # This is checked BEFORE any clarify/unusable logic so a run of unclear
+    # answers during the project cannot extend it indefinitely.
+    _in_project_phase = "resume project" in (state.phase_name or "").lower()
+    if _in_project_phase and state.probe_count >= 3:
+        return PolicyDecision(
+            action=MOVE_TO_NEXT_COMPETENCY,
+            forced_flow_decision="advance",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="coverage",
+            reason="resume project 3-probe cap reached — advancing to competencies",
+            section="competency_assessment",
+        )
+
     if (
         state.consecutive_unusable >= state.clarify_after
         and state.consecutive_unusable < state.change_topic_after
     ):
+        # Inside a resume-project phase, CLARIFY fires the same full prompt and
+        # the LLM tends to produce the identical question (as seen in Q3/Q4).
+        # Instead, route to WALK_RESUME_PROJECT with a 'different angle' reason
+        # so the LLM knows to ask about mechanism/decision/challenge, not repeat.
+        if _in_project_phase:
+            return PolicyDecision(
+                action=WALK_RESUME_PROJECT,
+                forced_flow_decision="probe",
+                allow_llm_decision=False,
+                current_depth=max(1, min(state.probe_count + 1, state.max_depth)),
+                max_depth=state.max_depth,
+                competency_id=state.competency_id,
+                intent="establish_ownership",
+                reason="unclear answer in project phase — ask a different project angle (mechanism/decision/challenge, not a repeat)",
+                section="resume_project",
+            )
         intent = (
             "rephrase"
             if state.consecutive_unusable >= state.rephrase_after
@@ -376,6 +460,22 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             competency_id=state.competency_id,
             intent="recovery",
             reason="repeated unusable answers",
+            section=_section_for_phase(state.phase_name),
+        )
+    if state.consecutive_no_gain_probes >= 4:
+        return PolicyDecision(
+            action=(
+                MOVE_TO_NEXT_COMPETENCY
+                if state.has_uncovered_competencies
+                else OFFER_FINAL_ADDITION
+            ),
+            forced_flow_decision="advance" if state.has_uncovered_competencies else "close",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="evidence_gap_stop",
+            reason="two consecutive probes added no new evidence",
             section=_section_for_phase(state.phase_name),
         )
 
@@ -426,17 +526,33 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="opening",
         )
 
-    if section == "opening" and state.candidate_turn_count <= 1:
+    if section in WARMUP_SECTIONS and (
+        state.elapsed_seconds >= WARMUP_MAX_SECONDS
+        or state.interviewer_turn_count >= WARMUP_MAX_INTERVIEWER_TURNS
+    ):
         return PolicyDecision(
-            action=MAP_CANDIDATE_BACKGROUND,
-            forced_flow_decision="probe",
+            action=MOVE_TO_NEXT_COMPETENCY,
+            forced_flow_decision="advance",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=2,
-            competency_id=None,
-            intent="candidate_map",
-            reason="breadth-first mapping before deep probes",
-            section="candidate_map",
+            competency_id=state.competency_id,
+            intent="coverage",
+            reason="warmup budget done — start admin competencies",
+            section=section,
+        )
+
+    if section == "opening" and state.candidate_turn_count >= 1:
+        return PolicyDecision(
+            action=ASK_BASELINE,
+            forced_flow_decision="advance",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=2,
+            competency_id=state.competency_id,
+            intent="baseline",
+            reason="introduction complete — start the resume walkthrough or competencies",
+            section="opening",
         )
 
     if section == "candidate_map" and state.candidate_turn_count >= 1:
@@ -520,8 +636,44 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="closing",
         )
 
+    # Soft end while competencies remain: advance breadth-first — no new deep probes.
+    # Never advance if probe_count == 0 (must ask at least baseline).
+    _min_probes_for_soft_advance = 1
+    if (
+        state.elapsed_seconds >= state.soft_end_seconds
+        and not state.at_last_competency
+        and state.has_uncovered_competencies
+        and state.probe_count >= _min_probes_for_soft_advance
+    ):
+        return PolicyDecision(
+            action=MOVE_TO_NEXT_COMPETENCY,
+            forced_flow_decision="advance",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=min(2, state.max_depth),
+            competency_id=state.competency_id,
+            intent="coverage",
+            reason="soft end — advance remaining competencies without deeper probes",
+            section="competency_assessment",
+        )
+
     depth = max(1, min(state.probe_count + 1, state.max_depth))
     probes_exhausted = state.probe_count >= state.max_probes or depth >= state.max_depth
+
+    # Hard gate: if we haven't asked a single real question on this competency yet,
+    # never advance — force a baseline question regardless of other policy signals.
+    if state.probe_count == 0 and state.competency_id and section == "competency_assessment":
+        return PolicyDecision(
+            action=ASK_BASELINE,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=1,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="establish_context",
+            reason="no question asked on this competency yet — must ask at least one",
+            section="competency_assessment",
+        )
 
     # Diminishing returns: stop drilling a seam that has stopped producing evidence.
     if (
@@ -615,7 +767,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
 
     # Early competency turns: never allow multi-level jumps; LLM may only probe.
     if depth <= 2:
-        action = ASK_BASELINE if depth == 1 else PROBE_FOR_OWNERSHIP
+        action = ASK_BASELINE if depth == 1 else PROBE_FOR_METHOD
         intent = state.missing_intents[0] if state.missing_intents else _DEPTH_INTENTS.get(
             depth, "establish_context"
         )
@@ -627,7 +779,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=state.max_depth,
             competency_id=state.competency_id,
             intent=intent,
-            reason="progressive depth — establish context/ownership first",
+            reason="progressive depth — baseline concept followed by applied method",
             section="competency_assessment",
         )
 
@@ -646,17 +798,12 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
 
 def policy_prompt_block(decision: PolicyDecision) -> str:
     return (
-        "POLICY ENGINE (authoritative — do not override):\n"
-        f"- Required next action: {decision.action}\n"
-        f"- Intent: {decision.intent}\n"
+        "AGENDA (section and timing only — invent the spoken question yourself):\n"
         f"- Section: {decision.section}\n"
-        f"- Allowed depth now: {decision.current_depth} of {decision.max_depth}\n"
-        f"- Flow decision must be: {decision.forced_flow_decision}\n"
+        f"- Current competency id: {decision.competency_id or '(none)'}\n"
+        f"- Stay or move: {decision.forced_flow_decision}\n"
         f"- Reason: {decision.reason}\n"
-        "- Do not jump multiple depth levels.\n"
         "- Do not ask protected-class or prohibited questions.\n"
-        "- Prefer applied work examples over trivia.\n"
-        "- Keep the same domain-neutral interviewer voice for any role.\n"
     )
 
 

@@ -127,7 +127,7 @@ function itemTexts(items: unknown): string[] {
     .map((item) => {
       if (typeof item === "string") return item.trim();
       if (item && typeof item === "object" && "text" in item) {
-        return String((item as { text?: unknown }).text || "").trim();
+        return String((item as {  text?: unknown }).text || "").trim();
       }
       return "";
     })
@@ -236,35 +236,49 @@ export function SetupForm({
   const [startsAt, setStartsAt] = useState(
     initialValue?.startsAt
       ? new Date(initialValue.startsAt).toISOString().slice(0, 16)
-      : defaultStartTime(),
+      : "",
   );
+  const [timezone, setTimezone] = useState(initialValue?.timezone ?? "UTC");
   const [ingestBusy, setIngestBusy] = useState<"jd" | "resume" | null>(null);
   const [ingestError, setIngestError] = useState("");
   const [jdSummary, setJdSummary] = useState<IngestSummary | null>(null);
   const [resumeSummary, setResumeSummary] = useState<IngestSummary | null>(null);
   const [jdReviewed, setJdReviewed] = useState(false);
   const [resumeReviewed, setResumeReviewed] = useState(false);
-  const timezone =
-    initialValue?.timezone ??
-    Intl.DateTimeFormat().resolvedOptions().timeZone ??
-    "UTC";
+  const [candidateProfile, setCandidateProfile] = useState<
+    Record<string, unknown> | undefined
+  >(
+    initialValue?.candidateProfile &&
+      typeof initialValue.candidateProfile === "object"
+      ? initialValue.candidateProfile
+      : undefined,
+  );
 
   useEffect(() => {
     if (initialValue) return;
     const timer = window.setTimeout(() => {
       try {
+        setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
         const saved = sessionStorage.getItem(DRAFT_KEY);
-        if (!saved) return;
+        if (!saved) {
+          setStartsAt(defaultStartTime());
+          return;
+        }
         const draft = JSON.parse(saved) as PublicSessionRequest;
         const setup = draft.interviewSetup;
         setParticipantName(draft.participantName || "");
         setCandidateEmail(draft.candidateEmail || "");
         setJobDescription(draft.jobDescription || "");
         setResumeText(draft.resumeText || "");
+        if (draft.candidateProfile && typeof draft.candidateProfile === "object") {
+          setCandidateProfile(draft.candidateProfile);
+        }
         if (draft.startsAt) {
           const date = new Date(draft.startsAt);
           const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
           setStartsAt(ensureFutureStart(local.toISOString().slice(0, 16)));
+        } else {
+          setStartsAt(defaultStartTime());
         }
         if (setup) {
           setTitle(setup.title);
@@ -299,6 +313,7 @@ export function SetupForm({
         timezone,
         jobDescription,
         resumeText,
+        candidateProfile,
         interviewSetup: {
           title,
           role,
@@ -330,6 +345,7 @@ export function SetupForm({
     product.id,
     recordingEnabled,
     resumeText,
+    candidateProfile,
     role,
     seniority,
     startsAt,
@@ -345,6 +361,7 @@ export function SetupForm({
       participantName: participantName.trim(),
       jobDescription: jobDescription.trim() || undefined,
       resumeText: resumeText.trim() || undefined,
+      candidateProfile: candidateProfile,
       candidateEmail: candidateEmail.trim() || undefined,
       startsAt: safeStartsAt ? new Date(safeStartsAt).toISOString() : undefined,
       timezone,
@@ -427,6 +444,16 @@ export function SetupForm({
         setResumeText(payload.text);
         setResumeSummary(summary);
         setResumeReviewed(false);
+        if (
+          payload.candidateProfile &&
+          typeof payload.candidateProfile === "object"
+        ) {
+          setCandidateProfile(
+            payload.candidateProfile as Record<string, unknown>,
+          );
+        } else {
+          setCandidateProfile(undefined);
+        }
       }
     } catch (error) {
       setIngestError(
