@@ -310,6 +310,41 @@ async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:
     assert "this role" in question.lower() or "introduce yourself" in question.lower()
 
 
+def test_partial_prompt_names_one_evidence_topic_and_locks_shape() -> None:
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=_definition(),
+        interviewer_turns=["q1", "q2"],
+        candidate_turns=["intro", "background"],
+        initial_phase_index=2,
+    )
+    flow.probe_count = 1
+    flow.last_answer_quality = "partial"
+    flow.last_question_intent = "establish_ownership"
+    flow.last_hook_fact = "billing API"
+    flow.coverage["problem_solving"]["missing_intents"] = [
+        "establish_context",
+        "establish_ownership",
+        "applied_understanding",
+    ]
+    flow.coverage["problem_solving"]["covered_intents"] = []
+    decision = flow._current_policy_decision()
+    prompt, _ = flow._structured_system_prompt(
+        "I helped the team on the billing API a bit.",
+        decision,
+    )
+    assert decision.evidence_topic == "ownership"
+    assert decision.probe_shape == "why"
+    assert "Ask only about this evidence topic: ownership" in prompt
+    assert "Do not ask these other bullets on this turn: context, result" in prompt
+    assert "ask a technical question the policy did not select" in prompt
+    assert "deepen gradually" not in prompt
+    assert "Required probe_shape for this turn" in prompt
+    assert "set probe_shape to this value; do not repeat the last angle): why" in prompt
+    assert "metric" not in decision.probe_shape
+
+
 def test_ownership_prompt_uses_ownership_phrasing_not_method() -> None:
     from products.interviewer.policy import PolicyDecision
 

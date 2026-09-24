@@ -45,6 +45,7 @@ TURN_INSTRUCTIONS_V2 = """POLICY ENGINE (authoritative — do not override):
 - Prefer applied work examples over trivia; never ask puzzle, riddle, or brain-teaser trivia unrelated to real work.
 
 {action_phrasing}
+Apply that style only to the evidence topic above. If the style names a different subject, ask the evidence topic instead.
 
 Interview length: about {target_minutes} minutes. Elapsed: {elapsed_minutes} min. Remaining: {remaining_minutes} min.
 
@@ -52,8 +53,10 @@ Current competency: {competency_name} ({competency_id})
 Competency definition: {competency_definition}
 Competency priority: {priority_guidance}
 Ladder objective: {ladder_objective}
-Missing required intents: {missing_intents}
-Evidence still needed: {evidence_expected}
+Missing required intents (internal — never say these words aloud): {missing_intents}
+Ask only about this evidence topic: {evidence_topic}
+Because (internal): {basis}
+Do not ask these other bullets on this turn: {other_evidence}
 Allowed probe intents: {allowed_probes}
 
 Facts already established for this competency — do not re-ask these, build on them instead:
@@ -95,15 +98,13 @@ Answer analysis supplied by the runtime (already applied to coverage — do not 
 - Quality: {answer_quality}
 - Adaptation: {answer_adaptation}
 - Previous-turn evaluation: {previous_evaluation}
-- Treat these as internal guidance. Never speak labels, scores, or policy decisions aloud.
-- A short but technically correct answer may be sufficient; do not judge by length alone.
-- For partial or unclear answers, ask for the missing evidence naturally.
-- For off-topic or unsupported answers, remain in the same competency and use an easier adjacent topic.
-- For a strong answer, deepen gradually by at most one level.
-- Once candidate mapping is complete, ask a technical question for the active competency.
-- Do not ask about internships, general background, or motivation during a competency phase unless the policy explicitly requires context.
+- Treat these as internal guidance. Never speak labels, scores, gap names, or policy decisions aloud.
+- The evidence topic above is the whole question. Do not switch to another bullet, deepen on your own, or ask a technical question the policy did not select.
+- If the evidence topic is "(none)", follow the required action only and do not invent a new competency.
+- Do not mention time, minutes left, or wrapping up unless the required action is OFFER_FINAL_ADDITION or CLOSE_INTERVIEW.
+- Do not ask about internships, general background, or motivation during a competency phase unless the required action is context or candidate mapping.
 
-When a hook stem is supplied above, the spoken question must include that stem. Do not ask a generic "tell me more" question, and do not ask about a fact already listed as established.
+When a hook stem is supplied above, mention that stem only as a reference to what they just said, then ask the evidence topic. Do not ask a generic "tell me more" question, and do not ask about a fact already listed as established.
 
 Tag the question you write: set depth_tag to "concept" for definition/context questions, "applied" for hands-on method questions, or "trade_off" for reasoning/reflection/what-would-you-change questions. Set probe_shape to the required probe_shape above.
 
@@ -220,11 +221,8 @@ ACTION_PHRASING: dict[str, str] = {
         "versus the team. Do not ask for a metric or a hypothetical first."
     ),
     "PROBE_FOR_METHOD": (
-        "This is a method follow-up. Ask for the steps or mechanism they used "
-        "on the hook fact. Do not ask why they chose it until the method is clear. "
-        "If they already named a technique, do not re-ask for 'the steps' in the "
-        "same frame — acknowledge the technique and ask for one decision, failure "
-        "mode, or measurement gap."
+        "This is a method follow-up. Ask how they carried out the evidence topic. "
+        "Do not add a second question about why, a failure mode, or a metric."
     ),
     "PROBE_FOR_REASONING": (
         "This is a reasoning follow-up. Ask what constraint forced that choice, "

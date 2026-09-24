@@ -20,6 +20,8 @@ from products.interviewer.coverage import (
     mark_missing_intents_insufficient,
     quality_from_evaluation,
     required_intents_for,
+    unmet_evidence_items,
+    extract_evidence_facts,
 )
 from products.interviewer.policy import (
     classify_answer_usability,
@@ -717,6 +719,8 @@ class InterviewFlow:
         self.last_validator_ok: bool | None = None
         self.last_validator_reasons: list[str] = []
         self.last_hook_fact: str = ""
+        self.last_factually_incorrect = False
+        self._dry_scored_answer = ""
         bounds = time_bounds_from_definition(self.interview_definition)
         non_answer = non_answer_bounds_from_definition(self.interview_definition)
         self.clarify_after = non_answer["clarify_after"]
@@ -920,6 +924,14 @@ class InterviewFlow:
             intent_repair_available=self._intent_repair_available(
                 competency_id, missing
             ),
+            answer_quality=self.last_answer_quality,
+            asked_intent=self.last_question_intent,
+            unmet_evidence=self._unmet_evidence(competency_id),
+            off_topic=self.last_answer_quality == "off_topic"
+            or self.last_answer_usability == "off_topic",
+            hook_fact=self.last_hook_fact,
+            factually_incorrect=self.last_factually_incorrect,
+            last_probe_shape=self.last_probe_shape.get(competency_id or "", ""),
         )
 
     def _intent_repair_key(self, competency_id: str | None, intent: str | None) -> str:
@@ -1311,6 +1323,12 @@ class InterviewFlow:
         # An LLM substance verdict outranks the keyword heuristic when available.
         llm_quality = quality_from_evaluation(answer_eval) if answer_eval else None
         self.last_answer_quality = llm_quality or quality
+        if answer_eval is not None:
+            self.last_factually_incorrect = (
+                getattr(answer_eval, "factually_correct", True) is False
+            )
+        else:
+            self.last_factually_incorrect = False
         covered = evidenced_intents(
             required_intents=required,
             evidence_expected=list(competency.get("evidence_expected") or []),
@@ -1318,8 +1336,14 @@ class InterviewFlow:
             asked_intent=self.last_question_intent,
             answer_text=last_candidate_turn,
         )
-        if answer_eval is not None:
-            self._remember_known_facts(competency_id, answer_eval)
+        self.last_hook_fact = self._hook_fact(
+            last_candidate_turn, competency_id, self.last_question_intent
+        )
+        self._remember_known_facts(
+            competency_id,
+            answer_eval,
+            answer_text=last_candidate_turn,
+        )
         logger.info(
             "answer_quality_evaluated",
             extra={
@@ -1355,10 +1379,29 @@ class InterviewFlow:
                 answer_eval=answer_eval,
             )
 
-    def _remember_known_facts(self, competency_id: str | None, answer_eval: Any) -> None:
+    def _unmet_evidence(self, competency_id: str | None) -> list[str]:
+        competency = competency_by_id(self.interview_definition, competency_id)
+        facts = list(self.known_facts.get(competency_id or "", []))
+        return unmet_evidence_items(
+            list(competency.get("evidence_expected") or []),
+            facts,
+        )
+
+    def _remember_known_facts(
+        self,
+        competency_id: str | None,
+        answer_eval: Any,
+        answer_text: str = "",
+    ) -> None:
         if not competency_id:
             return
-        facts = getattr(answer_eval, "key_facts_stated", None) or []
+        deterministic = extract_evidence_facts(answer_text or "")
+        llm_facts = [
+            str(fact).strip()
+            for fact in (getattr(answer_eval, "key_facts_stated", None) or [])
+            if str(fact).strip()
+        ]
+        facts = list(dict.fromkeys([*deterministic, *llm_facts]))
         bucket = self.known_facts.setdefault(competency_id, [])
         added = 0
         for fact in facts:
@@ -1369,11 +1412,17 @@ class InterviewFlow:
         if len(bucket) > 8:
             del bucket[:-8]
         # Follow-ups that add no new facts count toward the dry-probe stop rule.
+        # Deterministic facts are authoritative; LLM key_facts only supplement them.
+        # The same answer is scored once so the later evaluation pass cannot double-count.
+        fingerprint = (answer_text or "").strip()
+        already = bool(fingerprint) and fingerprint == self._dry_scored_answer
         if self.probe_count > 0 and self.policy_mode:
             if added:
                 self.consecutive_dry_probes = 0
-            else:
+                self._dry_scored_answer = fingerprint
+            elif not already:
                 self.consecutive_dry_probes += 1
+                self._dry_scored_answer = fingerprint
                 logger.info(
                     "dry_followup",
                     extra={
@@ -1650,6 +1699,15 @@ class InterviewFlow:
         probes = self.interview_definition.get("allowed_probes") or []
         return [str(item).strip() for item in probes if str(item).strip()]
 
+    def _other_evidence_brief(self, competency: dict[str, Any], topic: str) -> str:
+        bullets = [
+            str(item).strip()
+            for item in (competency.get("evidence_expected") or [])
+            if str(item).strip()
+        ][:6]
+        others = [item for item in bullets if item.lower() != (topic or "").strip().lower()]
+        return ", ".join(others) or "(none)"
+
     def _priority_guidance(self, competency: dict[str, Any]) -> str:
         importance = str(competency.get("importance") or "high").strip().lower()
         if importance == "high":
@@ -1718,15 +1776,25 @@ class InterviewFlow:
             "priority_guidance": self._priority_guidance(competency),
             "ladder_objective": objective or "Ask one job-related question.",
             "missing_intents": ", ".join(missing) or "(none)",
+            "evidence_topic": (decision.evidence_topic if decision else "") or "(none)",
+            "basis": (decision.basis if decision else "") or "(none)",
+            "gap_kind": (decision.gap_kind if decision else "") or "(none)",
             "evidence_expected": ", ".join(
                 str(item) for item in (competency.get("evidence_expected") or [])[:6]
             )
             or "(use the last answer)",
+            "other_evidence": self._other_evidence_brief(
+                competency, (decision.evidence_topic if decision else "") or ""
+            ),
             "allowed_probes": "; ".join(self._allowed_probes()) or "(STAR probes)",
             "known_facts": self._known_facts_brief(competency_id),
             "hook_fact": self._hook_fact(last_candidate_turn, competency_id, intent)
             or "(none)",
-            "required_probe_shape": self._next_probe_shape(competency_id, intent)
+            "required_probe_shape": (
+                decision.probe_shape
+                if decision and decision.probe_shape
+                else self._next_probe_shape(competency_id, intent)
+            )
             or "(none)",
             "last_probe_shape": self._probe_shape_guidance(competency_id),
             "action_phrasing": action_phrasing_note(decision.action if decision else None),
@@ -1904,7 +1972,11 @@ class InterviewFlow:
         competency_id = policy.competency_id if policy else None
         hook_fact = self._hook_fact(last_candidate_turn, competency_id, policy_intent)
         self.last_hook_fact = hook_fact
-        required_shape = self._next_probe_shape(competency_id, policy_intent)
+        required_shape = (
+            policy.probe_shape
+            if policy and policy.probe_shape
+            else self._next_probe_shape(competency_id, policy_intent)
+        )
         result = validate_generated_question(
             parsed,
             definition=self.interview_definition,

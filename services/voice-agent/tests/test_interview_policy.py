@@ -222,6 +222,109 @@ def test_non_answer_policy_thresholds_are_honored() -> None:
     assert moved.action == MOVE_TO_NEXT_COMPETENCY
 
 
+def _competency_state(**overrides) -> PolicyState:
+    state = PolicyState(
+        interviewer_turn_count=4,
+        candidate_turn_count=4,
+        phase_name="Problem solving",
+        competency_id="problem_solving",
+        probe_count=1,
+        max_depth=4,
+        max_probes=3,
+        missing_intents=[
+            "establish_ownership",
+            "applied_understanding",
+        ],
+        unmet_evidence=["personal contribution", "measured outcome"],
+        asked_intent="establish_ownership",
+    )
+    for key, value in overrides.items():
+        setattr(state, key, value)
+    return state
+
+
+def test_partial_answer_stays_on_same_intent_and_names_one_bullet() -> None:
+    decision = decide_next_action(
+        _competency_state(answer_quality="partial", hook_fact="billing API")
+    )
+    assert decision.action == "PROBE_FOR_OWNERSHIP"
+    assert decision.intent == "establish_ownership"
+    assert decision.evidence_topic == "personal contribution"
+    assert decision.gap_kind == "partial"
+    assert decision.probe_shape == "why"
+    assert "billing API" in decision.basis
+    assert decision.probe_shape != "metric"
+
+
+def test_sufficient_answer_moves_to_the_next_missing_intent_topic() -> None:
+    decision = decide_next_action(
+        _competency_state(
+            answer_quality="sufficient",
+            asked_intent="establish_context",
+            missing_intents=["establish_ownership", "applied_understanding"],
+        )
+    )
+    assert decision.intent == "establish_ownership"
+    assert decision.evidence_topic == "personal contribution"
+    assert decision.gap_kind == "not_asked"
+
+
+def test_full_coverage_advances() -> None:
+    decision = decide_next_action(
+        _competency_state(
+            answer_quality="sufficient",
+            missing_intents=[],
+            coverage_complete=True,
+            has_uncovered_competencies=True,
+        )
+    )
+    assert decision.action == MOVE_TO_NEXT_COMPETENCY
+    assert decision.forced_flow_decision == "advance"
+
+
+def test_off_topic_answer_clarifies_on_the_open_evidence_topic() -> None:
+    decision = decide_next_action(
+        _competency_state(off_topic=True, answer_quality="off_topic", consecutive_unusable=0)
+    )
+    assert decision.action == CLARIFY_CURRENT_ANSWER
+    assert decision.evidence_topic == "personal contribution"
+    assert decision.gap_kind == "off_topic"
+    assert "open evidence" in decision.reason
+
+
+def test_contradiction_probes_the_same_topic_before_advancing() -> None:
+    decision = decide_next_action(
+        _competency_state(
+            factually_incorrect=True,
+            answer_quality="sufficient",
+            missing_intents=[],
+            coverage_complete=True,
+            has_uncovered_competencies=True,
+            asked_intent="establish_ownership",
+        )
+    )
+    assert decision.forced_flow_decision == "probe"
+    assert decision.intent == "establish_ownership"
+    assert decision.gap_kind == "contradictory"
+    assert decision.evidence_topic == "personal contribution"
+
+
+def test_early_closing_phase_does_not_pretend_time_is_up() -> None:
+    decision = decide_next_action(
+        PolicyState(
+            interviewer_turn_count=6,
+            candidate_turn_count=6,
+            phase_name="closing",
+            elapsed_seconds=4 * 60,
+            soft_end_seconds=27 * 60,
+            target_end_seconds=30 * 60,
+        )
+    )
+    assert decision.action == "OFFER_FINAL_ADDITION"
+    assert "soft end" not in decision.reason
+    assert "clock" in decision.reason
+
+
 def test_repeated_unusable_answers_force_controlled_close() -> None:
     closed = decide_next_action(
         PolicyState(

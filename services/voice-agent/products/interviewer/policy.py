@@ -73,6 +73,22 @@ class PolicyDecision:
     intent: str
     reason: str
     section: str
+    evidence_topic: str = ""
+    gap_kind: str = ""
+    basis: str = ""
+    probe_shape: str = ""
+
+
+@dataclass
+class FollowUpTarget:
+    """Deterministic when / why / topic for one follow-up."""
+
+    competency_id: str | None
+    intent: str
+    evidence_topic: str
+    gap_kind: str
+    basis: str
+    probe_shape: str
 
 
 @dataclass
@@ -105,6 +121,13 @@ class PolicyState:
     close_after: int = 4
     # One reframed attempt allowed per competency+intent before abandoning.
     intent_repair_available: bool = False
+    answer_quality: str = ""
+    asked_intent: str | None = None
+    unmet_evidence: list[str] = field(default_factory=list)
+    off_topic: bool = False
+    hook_fact: str = ""
+    factually_incorrect: bool = False
+    last_probe_shape: str = ""
 
 
 def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -227,8 +250,126 @@ def _section_for_phase(name: str) -> str:
     return "competency_assessment"
 
 
+_PROBE_SHAPE_ROTATION = ("why", "failure_mode", "metric", "trade_off")
+_INTENT_PROBE_SHAPE = {
+    "establish_context": "why",
+    "establish_ownership": "why",
+    "applied_understanding": "failure_mode",
+    "problem_or_complexity": "metric",
+    "tradeoff_or_transfer": "trade_off",
+}
+_TARGETED_ACTIONS = {
+    ASK_BASELINE,
+    CLARIFY_CURRENT_ANSWER,
+    PROBE_FOR_CONTEXT,
+    PROBE_FOR_OWNERSHIP,
+    PROBE_FOR_METHOD,
+    PROBE_FOR_REASONING,
+    PROBE_FOR_RESULT,
+    PROBE_FOR_REFLECTION,
+    CHECK_REMAINING_GAP,
+}
+
+
+def _shape_for_intent(intent: str, state: PolicyState) -> str:
+    locked = _INTENT_PROBE_SHAPE.get(intent, "why")
+    # Rotate only when the same intent was partially answered. Unclear or thin
+    # re-asks stay on the intent's shape so a context probe does not become a metric.
+    same_intent = (
+        bool(state.asked_intent)
+        and state.asked_intent == intent
+        and state.probe_count > 0
+        and state.answer_quality == "partial"
+    )
+    last = (state.last_probe_shape or "").strip()
+    if same_intent and last in _PROBE_SHAPE_ROTATION:
+        index = _PROBE_SHAPE_ROTATION.index(last)
+        return _PROBE_SHAPE_ROTATION[(index + 1) % len(_PROBE_SHAPE_ROTATION)]
+    return locked
+
+
+def select_followup_target(state: PolicyState, *, intent: str) -> FollowUpTarget:
+    """Name the single evidence topic and the gap that justify this probe."""
+    from products.interviewer.coverage import classify_gap_kind, topic_for_intent
+
+    topic = topic_for_intent(intent, state.unmet_evidence) or intent.replace("_", " ")
+    thin = state.consecutive_dry_probes > 0
+    gap = classify_gap_kind(
+        answer_quality=state.answer_quality,
+        off_topic=state.off_topic,
+        contradictory=state.factually_incorrect,
+        asked_intent=state.asked_intent,
+        intent=intent,
+        thin=thin,
+    )
+    hook = (state.hook_fact or "").strip()
+    if gap == "partial" and hook:
+        basis = f"They mentioned {hook}, but {topic} is still missing."
+    elif gap == "off_topic":
+        basis = f"The last answer left the competency. Ask only about {topic}."
+    elif gap == "contradictory":
+        basis = f"The last answer contradicted an earlier claim about {topic}."
+    elif gap == "unclear":
+        basis = f"The last answer did not establish {topic}."
+    elif gap == "thin":
+        basis = f"The last follow-up added no new facts. Narrow to {topic}."
+    elif hook:
+        basis = f"Build on {hook}. Still missing {topic}."
+    else:
+        basis = f"Required evidence is still missing: {topic}."
+    return FollowUpTarget(
+        competency_id=state.competency_id,
+        intent=intent,
+        evidence_topic=topic,
+        gap_kind=gap,
+        basis=basis,
+        probe_shape=_shape_for_intent(intent, state),
+    )
+
+
+def _attach_followup_target(decision: PolicyDecision, state: PolicyState) -> PolicyDecision:
+    if decision.action not in _TARGETED_ACTIONS:
+        if not decision.basis:
+            decision.basis = decision.reason
+        return decision
+    intent = decision.intent
+    if intent in {"clarify", "rephrase", "gap_check"}:
+        intent = state.asked_intent or (
+            state.missing_intents[0] if state.missing_intents else intent
+        )
+    target = select_followup_target(state, intent=intent)
+    decision.evidence_topic = decision.evidence_topic or target.evidence_topic
+    decision.gap_kind = decision.gap_kind or target.gap_kind
+    decision.basis = decision.basis or target.basis
+    decision.probe_shape = decision.probe_shape or target.probe_shape
+    if decision.evidence_topic and decision.evidence_topic not in decision.reason:
+        decision.reason = f"{decision.reason} — topic: {decision.evidence_topic}"
+    return decision
+
+
+def _probe_intent(state: PolicyState, fallback: str) -> str:
+    """Stay on a partial or contradicted intent; otherwise take the first gap."""
+    if (
+        state.factually_incorrect
+        and state.asked_intent
+    ):
+        return state.asked_intent
+    if (
+        state.answer_quality == "partial"
+        and state.asked_intent
+        and state.asked_intent in state.missing_intents
+        and state.consecutive_dry_probes < max(1, state.dry_probe_limit)
+    ):
+        return state.asked_intent
+    return fallback
+
+
 def decide_next_action(state: PolicyState) -> PolicyDecision:
     """Return the authoritative next action for the live turn."""
+    return _attach_followup_target(_decide_next_action(state), state)
+
+
+def _decide_next_action(state: PolicyState) -> PolicyDecision:
     if state.completed:
         return PolicyDecision(
             action=CLOSE_INTERVIEW,
@@ -255,14 +396,19 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="closing",
         )
 
-    if (
-        state.consecutive_unusable >= state.clarify_after
-        and state.consecutive_unusable < state.change_topic_after
-    ):
+    needs_clarify = (
+        state.off_topic or state.consecutive_unusable >= state.clarify_after
+    ) and state.consecutive_unusable < state.change_topic_after
+    if needs_clarify:
         intent = (
             "rephrase"
             if state.consecutive_unusable >= state.rephrase_after
             else "clarify"
+        )
+        reason = (
+            "off-topic answer — return to the open evidence topic"
+            if state.off_topic
+            else "unusable answer requires clarification"
         )
         return PolicyDecision(
             action=CLARIFY_CURRENT_ANSWER,
@@ -272,7 +418,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=state.max_depth,
             competency_id=state.competency_id,
             intent=intent,
-            reason="unusable answer requires clarification",
+            reason=reason,
             section=_section_for_phase(state.phase_name),
         )
 
@@ -390,6 +536,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
                 reason="target end reached",
                 section="closing",
             )
+        timed_out = state.elapsed_seconds >= state.soft_end_seconds
         return PolicyDecision(
             action=OFFER_FINAL_ADDITION,
             forced_flow_decision="probe",
@@ -398,7 +545,11 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=1,
             competency_id=state.competency_id,
             intent="final_addition",
-            reason="soft end — offer final addition",
+            reason=(
+                "soft end — offer final addition"
+                if timed_out
+                else "required competencies are covered — invite one final addition and do not mention the clock"
+            ),
             section="closing",
         )
 
@@ -427,8 +578,26 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         or depth >= state.max_depth
         or dry_exhausted
     )
+    if (
+        state.factually_incorrect
+        and state.asked_intent
+        and not probes_exhausted
+    ):
+        next_intent = state.asked_intent
+        action = _INTENT_ACTIONS.get(next_intent, PROBE_FOR_METHOD)
+        return PolicyDecision(
+            action=action,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=max(1, min(depth, state.max_depth)),
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent=next_intent,
+            reason="contradicted claim — probe the same topic before advancing",
+            section="competency_assessment",
+        )
     if state.missing_intents and probes_exhausted and state.intent_repair_available:
-        next_intent = state.missing_intents[0]
+        next_intent = _probe_intent(state, state.missing_intents[0])
         action = _INTENT_ACTIONS.get(next_intent, PROBE_FOR_METHOD)
         return PolicyDecision(
             action=action,
@@ -445,8 +614,8 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="competency_assessment",
         )
     if state.missing_intents and not probes_exhausted:
-        # Always chase the first (weakest / earliest) unmet assessment intent.
-        next_intent = state.missing_intents[0]
+        # Chase the first unmet intent, unless the answer just given was only partial.
+        next_intent = _probe_intent(state, state.missing_intents[0])
         intent_depth = min(state.max_depth, max(depth, 1))
         action = _INTENT_ACTIONS.get(next_intent, _DEPTH_ACTIONS.get(depth, PROBE_FOR_CONTEXT))
         reason = "required assessment intent still missing"

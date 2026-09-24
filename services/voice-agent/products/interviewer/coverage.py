@@ -511,6 +511,114 @@ def _fact_maps_to_evidence(fact: str, evidence_expected: list[str]) -> bool:
     return False
 
 
+_BULLET_INTENT_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("context", "situation", "background", "when", "where"),
+        "establish_context",
+    ),
+    (
+        ("ownership", "personally", "contribution", "owned", "responsible"),
+        "establish_ownership",
+    ),
+    (
+        ("method", "approach", "steps", "action", "implementation", "mechanism"),
+        "applied_understanding",
+    ),
+    (
+        ("result", "metric", "outcome", "impact", "measured"),
+        "problem_or_complexity",
+    ),
+    (
+        ("tradeoff", "trade-off", "reflection", "alternative", "change"),
+        "tradeoff_or_transfer",
+    ),
+)
+
+CANONICAL_EVIDENCE_ASKS = {
+    "establish_context": "when, where, or for whom the work happened",
+    "establish_ownership": "what you personally did",
+    "applied_understanding": "the steps or mechanism you used",
+    "problem_or_complexity": "what you measured and what changed",
+    "tradeoff_or_transfer": "what you would change given the result",
+}
+
+
+def intent_for_evidence_bullet(bullet: str) -> str:
+    """Map one free-text evidence bullet onto the closest assessment intent."""
+    lowered = f" {(bullet or '').lower()} "
+    for cues, intent in (
+        (_CONTEXT_CUES, "establish_context"),
+        (_STRONG_OWNERSHIP_CUES, "establish_ownership"),
+        (_OWNERSHIP_CUES, "establish_ownership"),
+        (_METHOD_CUES, "applied_understanding"),
+        (_PROBLEM_CUES, "problem_or_complexity"),
+        (_TRADEOFF_CUES, "tradeoff_or_transfer"),
+    ):
+        if any(cue.strip() and cue in lowered for cue in cues):
+            return intent
+    for words, intent in _BULLET_INTENT_HINTS:
+        if any(re.search(rf"\b{re.escape(word)}\b", lowered) for word in words):
+            return intent
+    return ""
+
+
+def unmet_evidence_items(
+    evidence_expected: list[str] | None,
+    facts: list[str] | None,
+) -> list[str]:
+    """Evidence bullets with no token overlap against accumulated facts."""
+    expected = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
+    known = [item.strip() for item in (facts or []) if item and item.strip()]
+    unmet: list[str] = []
+    for bullet in expected:
+        if any(_fact_maps_to_evidence(fact, [bullet]) for fact in known):
+            continue
+        if known and _fact_maps_to_evidence(bullet, known):
+            continue
+        unmet.append(bullet)
+    return unmet
+
+
+def topic_for_intent(
+    intent: str,
+    unmet: list[str] | None,
+    evidence_expected: list[str] | None = None,
+) -> str:
+    """One unmet bullet for this intent, or the intent's canonical ask."""
+    open_items = [item for item in (unmet or []) if item]
+    for bullet in open_items:
+        if intent_for_evidence_bullet(bullet) == intent:
+            return bullet
+    # A published bullet is a better question than a generic canonical sentence.
+    if open_items:
+        return open_items[0]
+    return CANONICAL_EVIDENCE_ASKS.get(intent, "")
+
+
+def classify_gap_kind(
+    *,
+    answer_quality: str = "",
+    off_topic: bool = False,
+    contradictory: bool = False,
+    asked_intent: str | None = None,
+    intent: str = "",
+    thin: bool = False,
+) -> str:
+    """Why this follow-up is being asked."""
+    quality = (answer_quality or "").strip().lower()
+    if off_topic or quality == "off_topic":
+        return "off_topic"
+    if contradictory:
+        return "contradictory"
+    if quality in {"unclear", "unusable", "unsupported"}:
+        return "unclear"
+    if thin:
+        return "thin"
+    if quality == "partial" and asked_intent and asked_intent == intent:
+        return "partial"
+    return "not_asked"
+
+
 def _intent_has_concrete_evidence(intent: str, text: str, facts: list[str]) -> bool:
     lowered = f" {(text or '').lower()} "
     if intent == "establish_ownership":
