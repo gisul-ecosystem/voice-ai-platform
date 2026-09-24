@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useSyncExternalStore } from "react";
 
 import {
-  AdminProgress,
+  CreateProgress,
   LandingNav,
 } from "@/components/interviewer/LandingNav";
 import {
@@ -160,9 +160,9 @@ export default function DesignRolePage() {
         ariaLabel="Admin navigation"
         badge="01 Design role"
       />
-      <AdminProgress current="design" />
+      <CreateProgress current="design" />
       <section className="demo-intro">
-        <p className="eyebrow">Create an interview</p>
+        <p className="eyebrow">New template</p>
         <h1>Start with the role</h1>
         <p>
           Define the assessment boundary first. The alignment and candidate
@@ -215,14 +215,6 @@ export default function DesignRolePage() {
               <option value="30">30 minutes</option>
               <option value="45">45 minutes</option>
             </select>
-          </label>
-          <label>
-            Planned start
-            <input
-              type="datetime-local"
-              value={form.startsAt}
-              onChange={(e) => setField("startsAt", e.target.value)}
-            />
           </label>
           <label className="admin-field-wide">
             Job description <span className="field-required">Required</span>

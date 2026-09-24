@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import re
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -18,37 +16,6 @@ logger = logging.getLogger("voice-agent.interviewer")
 CLARIFY_TURN = (
     "Sorry, I did not catch that. Please say a bit more, in a full sentence."
 )
-
-# ---------------------------------------------------------------------------
-# Guardrail config flags (default ON)
-# ---------------------------------------------------------------------------
-
-def _flag(name: str, default: bool = True) -> bool:
-    val = os.getenv(name, "").strip().lower()
-    if not val:
-        return default
-    return val not in {"0", "false", "off", "no"}
-
-
-GUARDRAIL_REPEAT_REQUEST: bool = _flag("GUARDRAIL_REPEAT_REQUEST")
-GUARDRAIL_PAUSE_REQUEST: bool = _flag("GUARDRAIL_PAUSE_REQUEST")
-
-# Patterns that should trigger a repeat of the last question.
-_REPEAT_PATTERNS = re.compile(
-    r"\b(repeat\s+that|say\s+it\s+again|can\s+you\s+repeat|please\s+repeat|"
-    r"what\s+did\s+you\s+say|pardon|come\s+again|i\s+didn[''`]?t\s+(hear|catch)|"
-    r"say\s+that\s+again)\b",
-    re.IGNORECASE,
-)
-# Patterns that should trigger a brief pause acknowledgement.
-_PAUSE_PATTERNS = re.compile(
-    r"\b(give\s+me\s+a\s+(moment|second|minute)|just\s+a\s+(moment|second|minute)|"
-    r"one\s+(moment|second|minute)|let\s+me\s+think|hold\s+on|wait\s+a\s+(moment|second)|"
-    r"need\s+a\s+(moment|second|minute))\b",
-    re.IGNORECASE,
-)
-
-_PAUSE_REPLY = "Of course, take your time."
 
 
 class AaptorAgent(Agent):
@@ -71,8 +38,6 @@ class AaptorAgent(Agent):
         brain_bridge: BrainSessionBridge | None = None,
         interview_definition: dict | None = None,
         candidate_profile: dict | None = None,
-        difficulty: str | None = None,
-        language: str | None = None,
     ) -> None:
         super().__init__(
             instructions=(
@@ -99,8 +64,6 @@ class AaptorAgent(Agent):
             flow_kwargs["interview_definition"] = interview_definition
         if candidate_profile is not None:
             flow_kwargs["candidate_profile"] = candidate_profile
-        if language:
-            flow_kwargs["language"] = language
         restored_state = dict(initial_state or {})
         self._sequence_number = int(restored_state.pop("initial_sequence_number", 0))
         # Brain metadata is not InterviewFlow constructor input.
@@ -113,12 +76,22 @@ class AaptorAgent(Agent):
         self._status_sink = status_sink
         self._brain = brain_bridge
         self._completion_reported = False
-        self._last_candidate_turn: dict | None = None
-        # Mid-session restore: any prior turn means opening already happened.
-        self._opened = bool(self.flow.candidate_turns or self.flow.interviewer_turns)
+        # Mid-session restore: any prior interviewer turn means greeting already happened.
+        # Candidate-only turns must NOT skip the greeting (STT can fire before TTS).
+        self._greeting_done = bool(self.flow.interviewer_turns)
+        self._greeting_in_progress = False
         self._last_agent_text = (
             self.flow.interviewer_turns[-1] if self.flow.interviewer_turns else ""
         )
+
+    @property
+    def _opened(self) -> bool:
+        """Back-compat for tests: greeting finished (or mid-session restore)."""
+        return self._greeting_done
+
+    @_opened.setter
+    def _opened(self, value: bool) -> None:
+        self._greeting_done = bool(value)
 
     async def _record(self, speaker: str, text: str) -> str | None:
         if not text.strip():
@@ -126,33 +99,14 @@ class AaptorAgent(Agent):
         turn_id = f"turn_{uuid.uuid4().hex}"
         if self._turn_sink:
             self._sequence_number += 1
-            payload = {
-                "turn_id": turn_id,
-                "speaker": speaker,
-                "text": text.strip(),
-                "phase_index": self.phase_index,
-                "sequence_number": self._sequence_number,
-            }
-            if speaker == "candidate":
-                self._last_candidate_turn = payload
-            await self._turn_sink(**payload)
+            await self._turn_sink(
+                turn_id=turn_id,
+                speaker=speaker,
+                text=text.strip(),
+                phase_index=self.phase_index,
+                sequence_number=self._sequence_number,
+            )
         return turn_id
-
-    async def _attach_answer_evaluation(self, turn_id: str | None) -> None:
-        """Re-post the candidate turn once the verdict for it exists.
-
-        The verdict is produced by the same LLM call that writes the next
-        question, so it is not known when the turn is first persisted.
-        """
-        payload = self._last_candidate_turn
-        if not self._turn_sink or not turn_id or not payload:
-            return
-        if payload.get("turn_id") != turn_id:
-            return
-        evaluation = getattr(self.flow, "last_answer_evaluation", None)
-        if not evaluation:
-            return
-        await self._turn_sink(**payload, answer_evaluation=evaluation)
 
     async def _persist_brain_after_exchange(
         self,
@@ -226,38 +180,44 @@ class AaptorAgent(Agent):
         return await self.flow.generate_next_question(last_candidate_turn)
 
     async def on_enter(self) -> None:
-        if self._opened:
-            # Rejoin/restore: do not re-speak the opening or double-write brain.
+        if self._greeting_done or self._greeting_in_progress:
+            # Rejoin/restore or concurrent enter: do not re-speak the opening.
             return
-        # Claim the opening before any await so a concurrent llm_node cannot
-        # also stream/speak the greeting (candidate hears TTS twice).
-        self._opened = True
+        # Block llm_node until greeting audio is committed — otherwise early STT
+        # steals the turn with CLARIFY ("Sorry, I did not catch that") and the
+        # UI stays on "Starting the interview" with no greeting.
+        self._greeting_in_progress = True
         parts: list[str] = []
         try:
-            async for chunk in self.flow.generate_next_question_stream(None):
-                parts.append(chunk)
-        except Exception:
-            logger.exception(
-                "opening_stream_failed",
-                extra={"event": "opening_stream_failed"},
-            )
-        opening = "".join(parts).strip() or self.flow._fallback_opening()
-        try:
-            await self.session.say(opening, allow_interruptions=False)
-        except Exception:
-            logger.exception(
-                "opening_say_failed",
-                extra={"event": "opening_say_failed", "opening_len": len(opening)},
-            )
+            try:
+                async for chunk in self.flow.generate_next_question_stream(None):
+                    parts.append(chunk)
+            except Exception:
+                logger.exception(
+                    "opening_stream_failed",
+                    extra={"event": "opening_stream_failed"},
+                )
+            opening = "".join(parts).strip() or self.flow._fallback_opening()
+            opening = self.flow._ensure_opening_cites_context(opening)
+            try:
+                await self.session.say(opening, allow_interruptions=True)
+            except Exception:
+                logger.exception(
+                    "opening_say_failed",
+                    extra={"event": "opening_say_failed", "opening_len": len(opening)},
+                )
+                self._last_agent_text = opening
+                raise
             self._last_agent_text = opening
-            raise
-        self._last_agent_text = opening
-        turn_id = await self._record("agent", opening)
-        await self._persist_brain_after_exchange(
-            speaker="agent",
-            text=opening,
-            turn_id=turn_id,
-        )
+            self._greeting_done = True
+            turn_id = await self._record("agent", opening)
+            await self._persist_brain_after_exchange(
+                speaker="agent",
+                text=opening,
+                turn_id=turn_id,
+            )
+        finally:
+            self._greeting_in_progress = False
 
     async def llm_node(
         self,
@@ -268,7 +228,7 @@ class AaptorAgent(Agent):
         candidate_turn = last_text(chat_ctx)
         # Opening TTS is owned exclusively by on_enter — never stream a greeting
         # from llm_node (that produced a second voice when both paths raced).
-        if not self._opened:
+        if self._greeting_in_progress or not self._greeting_done:
             return
         candidate_brain_turn_id = None
         if not is_usable_candidate_turn(
@@ -284,48 +244,6 @@ class AaptorAgent(Agent):
             await self._persist_brain_after_exchange(
                 speaker="agent",
                 text=CLARIFY_TURN,
-                turn_id=turn_id,
-            )
-            return
-
-        # ------------------------------------------------------------------
-        # Guardrail: repeat-request — re-speak the last question without
-        # advancing the interview or counting the turn as an answer.
-        # ------------------------------------------------------------------
-        if GUARDRAIL_REPEAT_REQUEST and candidate_turn and _REPEAT_PATTERNS.search(candidate_turn):
-            last_q = self._last_agent_text or CLARIFY_TURN
-            logger.info(
-                "guardrail_repeat_request",
-                extra={
-                    "event": "guardrail_repeat_request",
-                    "guardrail": "GUARDRAIL_REPEAT_REQUEST",
-                    "reason": "candidate_requested_repeat",
-                    "action": "re_speak_last_question",
-                },
-            )
-            yield last_q
-            # Do NOT advance state, do NOT record as answer, do NOT persist.
-            return
-
-        # ------------------------------------------------------------------
-        # Guardrail: pause-request — acknowledge and yield without advancing.
-        # ------------------------------------------------------------------
-        if GUARDRAIL_PAUSE_REQUEST and candidate_turn and _PAUSE_PATTERNS.search(candidate_turn):
-            logger.info(
-                "guardrail_pause_request",
-                extra={
-                    "event": "guardrail_pause_request",
-                    "guardrail": "GUARDRAIL_PAUSE_REQUEST",
-                    "reason": "candidate_requested_pause",
-                    "action": "acknowledge_and_wait",
-                },
-            )
-            yield _PAUSE_REPLY
-            self._last_agent_text = _PAUSE_REPLY
-            turn_id = await self._record("agent", _PAUSE_REPLY)
-            await self._persist_brain_after_exchange(
-                speaker="agent",
-                text=_PAUSE_REPLY,
                 turn_id=turn_id,
             )
             return
@@ -362,7 +280,6 @@ class AaptorAgent(Agent):
             )
             yield question
         if candidate_turn and candidate_brain_turn_id:
-            await self._attach_answer_evaluation(candidate_brain_turn_id)
             await self._persist_brain_after_exchange(
                 speaker="candidate",
                 text=candidate_turn,

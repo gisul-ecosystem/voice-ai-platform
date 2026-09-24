@@ -16,6 +16,8 @@ from models.schemas import (
     InvitationPreviewRequest,
     InvitationPreviewResponse,
     RecordConsentRequest,
+    ScheduledInterviewListItem,
+    ScheduledInterviewListResponse,
 )
 from security.auth import require_bff_service
 from security.invitations import issue_invitation, verify_invitation
@@ -125,6 +127,7 @@ async def create_scheduled_interview(
         "context_id": context["context_id"],
         "definition_id": published.definition_id,
         "invitation_id": invitation["jti"],
+        "invitation_token": token,
         "starts_at": starts_at,
         "timezone": req.timezone,
         "join_not_before": starts_at - timedelta(minutes=req.join_early_minutes),
@@ -165,6 +168,53 @@ async def create_scheduled_interview(
         starts_at=starts_at,
         definition_id=published.definition_id,
     )
+
+
+@router.get(
+    "/interviews",
+    response_model=ScheduledInterviewListResponse,
+    dependencies=[Depends(require_bff_service)],
+)
+async def list_scheduled_interviews(
+    definition_id: str,
+    limit: int = 50,
+) -> ScheduledInterviewListResponse:
+    definition_id = (definition_id or "").strip()
+    if len(definition_id) < 8:
+        raise HTTPException(status_code=422, detail="definition_id is required")
+    rows = await interviews.list_scheduled_interviews_by_definition(
+        definition_id,
+        limit=limit,
+    )
+    items: list[ScheduledInterviewListItem] = []
+    for row in rows:
+        token = row.get("invitation_token")
+        token_str = token.strip() if isinstance(token, str) else None
+        if token_str == "":
+            token_str = None
+        path = (
+            f"/interview/invite/{token_str}"
+            if token_str
+            else None
+        )
+        items.append(
+            ScheduledInterviewListItem(
+                interview_id=str(row.get("_id") or ""),
+                definition_id=row.get("definition_id"),
+                candidate_name=str(row.get("candidate_name") or ""),
+                candidate_email=str(row.get("candidate_email") or ""),
+                status=str(row.get("status") or "scheduled"),
+                starts_at=interviews.as_utc(row["starts_at"]),
+                invitation_token=token_str,
+                candidate_path=path,
+                created_at=(
+                    interviews.as_utc(row["created_at"])
+                    if row.get("created_at") is not None
+                    else None
+                ),
+            )
+        )
+    return ScheduledInterviewListResponse(items=items)
 
 
 async def _preview(token: str) -> tuple[dict, dict]:
