@@ -53,6 +53,43 @@ def test_outline_is_breadth_first() -> None:
     assert names[-1] == "closing"
 
 
+def test_outline_skips_jd_duty_fragment_competencies() -> None:
+    outline = outline_from_definition(
+        {
+            "time_policy": {"duration_minutes": 30},
+            "competencies": [
+                {"id": "design", "name": "Design", "evidence_expected": []},
+                {"id": "develop", "name": "develop", "evidence_expected": []},
+                {
+                    "id": "maintain",
+                    "name": "and maintain applications using Python.",
+                    "evidence_expected": [],
+                },
+                {
+                    "id": "python",
+                    "name": "Python backend",
+                    "evidence_expected": ["apis"],
+                },
+                {
+                    "id": "debug",
+                    "name": "Debugging",
+                    "evidence_expected": ["incidents"],
+                },
+            ],
+        }
+    )
+    assert outline is not None
+    names = [phase["name"] for phase in outline["phases"]]
+    assert "Design" not in names
+    assert "develop" not in names
+    assert "and maintain applications using Python." not in names
+    assert "Python backend" in names
+    assert "Debugging" in names
+    assert names[0] == "opening"
+    assert names[1] == "candidate_map"
+    assert names[-1] == "closing"
+
+
 def test_opening_and_map_are_forced_before_deep_dive() -> None:
     opening = decide_next_action(
         PolicyState(interviewer_turn_count=0, candidate_turn_count=0)

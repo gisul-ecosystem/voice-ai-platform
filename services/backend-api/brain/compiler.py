@@ -19,7 +19,7 @@ from brain.defaults import (
     default_question_ladder,
     default_time_policy_for_duration,
 )
-from brain.safety import contains_prohibited_content, contains_prompt_injection, validate_competency_label
+from brain.safety import contains_prohibited_content, contains_prompt_injection
 from models.brain import (
     CompetencyDefinition,
     DurationMinutes,
@@ -137,57 +137,88 @@ def _role_rubric(
     ]
 
 
-# JD boilerplate that gets extracted along with the actual skill name.
-_LABEL_PREFIXES = re.compile(
-    r"^(?:required|requirements?|must[- ]have|nice[- ]to[- ]have|preferred|essential|"
-    r"desired|responsibilities|responsibility|skills?|experience(?:\s+(?:in|with))?|"
-    r"strong|proven|solid|deep|hands[- ]on|excellent|good|expert(?:ise)?(?:\s+in)?|"
-    r"knowledge\s+of|familiarity\s+with|proficiency\s+(?:in|with)|ability\s+to)"
-    r"\s*[:\-–]?\s+",
-    re.IGNORECASE,
-)
-
-
 def normalize_skill_label(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", (value or "")).strip(" -•:")
     if not cleaned:
         return cleaned
-    # Strip stacked prefixes: "Required: strong data structures" -> "data structures".
-    for _ in range(3):
-        stripped = _LABEL_PREFIXES.sub("", cleaned, count=1).strip(" -•:")
-        if stripped == cleaned or not stripped:
-            break
-        cleaned = stripped
     alias = _SKILL_ALIASES.get(cleaned.lower())
     if alias:
         return alias
-    # A label that is now a bare fragment is worse than the original.
-    if len(cleaned) < 2:
-        return re.sub(r"\s+", " ", (value or "")).strip(" -•:")
-    return cleaned[:1].upper() + cleaned[1:]
+    return cleaned
+
+
+# Bare verbs / duty fragments from comma-splitting JD responsibility lines.
+# These are not interviewable competency titles.
+_BARE_DUTY_TOKENS = frozenset(
+    {
+        "design",
+        "designs",
+        "designing",
+        "develop",
+        "develops",
+        "developing",
+        "test",
+        "tests",
+        "testing",
+        "build",
+        "builds",
+        "building",
+        "maintain",
+        "maintains",
+        "maintaining",
+        "create",
+        "implement",
+        "manage",
+        "support",
+        "analyze",
+        "optimize",
+        "deploy",
+        "write",
+        "code",
+    }
+)
+
+
+def is_interviewable_competency_label(value: str) -> bool:
+    """Reject JD duty fragments that should never become interview phases.
+
+    Blocks bare verbs (Design/develop/test), leading ``and …`` scraps, and
+    long comma-heavy responsibility sentences pasted as competency names.
+    Real skill titles like ``Python``, ``Negotiation``, ``Role expertise`` pass.
+    """
+    cleaned = normalize_skill_label(value)
+    if len(cleaned) < 3:
+        return False
+    words = [w for w in re.split(r"\s+", cleaned) if w]
+    if not words:
+        return False
+    first = words[0].lower().strip(".,;:")
+    if first in {"and", "or", "the", "a", "an", "to", "of", "for", "with"}:
+        return False
+    if len(words) == 1 and first in _BARE_DUTY_TOKENS:
+        return False
+    # Comma-split duty residue: "and maintain applications using Python."
+    if cleaned.lower().startswith("and "):
+        return False
+    # Full responsibility sentence used as a label (too long + clause-like).
+    if len(cleaned) > 72 and ("," in cleaned or cleaned.count(" ") >= 8):
+        return False
+    return True
 
 
 def _evidence_for(name: str, jd_hints: list[str]) -> list[str]:
-    """Technical evidence dimensions, not a STAR story template.
-
-    These are what the answer must contain for the competency to count as proven.
-    The interviewer writes its own wording; these only set the bar.
-    """
-    topic = (name or "this area").strip().lower()
     base = [
-        f"what they personally decided or built in {topic}",
-        f"the specific method, algorithm, pattern or tool used for {topic}, named",
-        "how that approach works internally, step by step",
-        "its cost characteristics: time/space complexity, latency, throughput or spend",
-        "why that option over a named alternative, and what it cost them",
-        "where the approach breaks: edge cases, failure modes, behaviour at scale",
-        "how they would optimise it further, and the trade-off that would introduce",
-        "a measured outcome stated as from-value to to-value",
+        "context of the work",
+        "personal contribution",
+        "approach or method",
+        "result or impact",
     ]
     for hint in jd_hints[:2]:
         clipped = hint.strip()
         if clipped and clipped.lower() not in {item.lower() for item in base}:
-            base.append(f"concrete evidence of {clipped[:100]}")
+            base.append(clipped[:120])
+    if name.lower() not in " ".join(base).lower():
+        base.append(f"example demonstrating {name.lower()}")
     return base[:12]
 
 
@@ -218,45 +249,54 @@ def _candidate_competency_seeds(
     seeds: list[tuple[str, str, list[str], bool]] = []
     seen_names: set[str] = set()
 
-    def add(name: str, hints: list[str], *, required: bool, source: str = "jd") -> None:
+    def add(name: str, hints: list[str], *, required: bool) -> None:
         cleaned = normalize_skill_label(name)
-        if len(cleaned) < 2:
+        if not is_interviewable_competency_label(cleaned):
             return
         if contains_prohibited_content(cleaned) or contains_prompt_injection(cleaned):
-            return
-        # Guardrail: reject entries that look like seniority/education/YOE not skills
-        label_ok, label_reason = validate_competency_label(cleaned)
-        if not label_ok:
-            import logging as _logging
-            _logging.getLogger("backend-api.brain.compiler").warning(
-                "guardrail_competency_label_rejected",
-                extra={
-                    "event": "guardrail_competency_label_rejected",
-                    "guardrail": "GUARDRAIL_COMPETENCY_LABEL_VALIDATION",
-                    "label": cleaned,
-                    "reason": label_reason,
-                },
-            )
             return
         key = cleaned.lower()
         if key in seen_names:
             return
         seen_names.add(key)
         seeds.append(
-            (
-                _slugify(cleaned, fallback="competency"),
-                cleaned[:120],
-                hints,
-                required,
-                source,
-            )
+            (_slugify(cleaned, fallback="competency"), cleaned[:120], hints, required)
         )
 
     for name in creator_competencies or []:
-        add(name, [], required=True, source="creator")
+        add(name, [], required=True)
 
-    # We no longer fall back to raw JD sentences. The LLM extraction
-    # or explicit creator guidance must own the interview plan.
+    # Creator-provided chips own the plan. Never invent phases from JD duty lines.
+    skip_jd_pad = creator_exclusive or len(seeds) >= _MIN_COMPETENCIES
+
+    def _usable(item: ExtractedItem, *, max_len: int = 96) -> bool:
+        text = item.text.strip()
+        # Do not take the first comma segment of a duty line ("Design, develop…").
+        # Only accept compact skill labels without clause punctuation.
+        if "," in text or ";" in text:
+            return False
+        if len(text) < 3 or len(text) > max_len:
+            return False
+        if not is_interviewable_competency_label(text):
+            return False
+        if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
+            return False
+        return True
+
+    if not skip_jd_pad:
+        for item in job.skills + job.mandatory_requirements:
+            if _usable(item):
+                add(item.text.strip(), [item.text], required=True)
+
+        # Responsibilities are duties, not competency titles — never seed phases
+        # from them (that produced Design/develop/test fragments).
+
+        preferred_pool = (
+            list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
+        )
+        for item in preferred_pool:
+            if _usable(item, max_len=72):
+                add(item.text.strip(), [item.text], required=False)
 
     required_seeds = [seed for seed in seeds if seed[3]]
     preferred_seeds = [seed for seed in seeds if not seed[3]]
@@ -265,7 +305,7 @@ def _candidate_competency_seeds(
     if len(combined) < _MIN_COMPETENCIES:
         for competency_id, name, _definition in _CORE_FALLBACKS:
             if name.lower() not in seen_names:
-                combined.append((competency_id, name, [], True, "fallback"))
+                combined.append((competency_id, name, [], True))
                 seen_names.add(name.lower())
             if len(combined) >= _MIN_COMPETENCIES:
                 break
@@ -283,7 +323,6 @@ def _build_competency(
     required: bool = True,
     definition: str | None = None,
     evidence_expected: list[str] | None = None,
-    source: str = "jd",
 ) -> CompetencyDefinition:
     evidence = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
     if not evidence:
@@ -306,7 +345,6 @@ def _build_competency(
         max_probes=3 if level in {"intern", "junior"} else 4,
         rubric=_role_rubric(name, level, hints),
         weight=round(weight, 2),
-        source=source,  # type: ignore[arg-type]
     )
 
 
@@ -446,7 +484,7 @@ def compile_blueprint(
     competencies: list[CompetencyDefinition] = []
 
     core_defs = {item[0]: item[2] for item in _CORE_FALLBACKS}
-    for (id_base, name, hints, required, source), weight in zip(seeds, weights, strict=True):
+    for (id_base, name, hints, required), weight in zip(seeds, weights, strict=True):
         competency_id = _unique_id(id_base, used_ids)
         enriched = (
             enrichment.get(name.lower())
@@ -472,7 +510,6 @@ def compile_blueprint(
                 required=required,
                 definition=llm_definition or core_defs.get(id_base),
                 evidence_expected=evidence_list,
-                source=source,
             )
         )
 

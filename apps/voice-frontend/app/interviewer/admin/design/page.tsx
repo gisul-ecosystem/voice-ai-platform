@@ -75,14 +75,36 @@ export default function DesignRolePage() {
   }
 
   function competencyList(): string[] {
-    return form.competencies
+    const raw = form.competencies || "";
+    // Prefer newline-separated chips so duty lines with commas stay one label.
+    if (raw.includes("\n")) {
+      return raw
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    const parts = raw
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
+    // Legacy CSV: only split when every segment looks like a short chip.
+    // A pasted duty line ("Design, develop, test, and maintain…") stays one item.
+    if (
+      parts.length > 1 &&
+      parts.every(
+        (part) =>
+          part.length <= 40 &&
+          !/^and\b/i.test(part) &&
+          !/^(design|develop|test|build|maintain)$/i.test(part),
+      )
+    ) {
+      return parts;
+    }
+    return raw.trim() ? [raw.trim()] : [];
   }
 
   function setCompetencyList(items: string[]) {
-    setField("competencies", items.join(", "));
+    setField("competencies", items.join("\n"));
   }
 
   function addCompetency() {
@@ -103,10 +125,7 @@ export default function DesignRolePage() {
     setBusy(true);
     setError("");
     try {
-      const competenciesPayload = form.competencies
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
+      const competenciesPayload = competencyList();
       const response = await fetch("/api/admin/blueprint", {
         method: "POST",
         headers: { "content-type": "application/json" },
