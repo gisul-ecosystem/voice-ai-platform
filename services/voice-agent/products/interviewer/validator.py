@@ -62,25 +62,6 @@ HOOK_STOPWORDS = frozenset(
 )
 
 # Hard-block reasons cause a full LLM retry (never a template string).
-# Soft reasons are logged but the question is still spoken — a real answer-grounded
-# question beats any canned phrase even when it has minor framing issues.
-HARD_BLOCK_REASONS: frozenset[str] = frozenset(
-    (
-        "empty_question",
-        "protected_topic",
-        "duplicate_question",
-        "project_in_competency_question",
-        "generic_parrot_question",
-        # Wrong competency or wrong section — must retry, never speak a template
-        "competency_mismatch",
-        "section_violation",
-    )
-)
-
-
-def is_speakable(reasons: list[str]) -> bool:
-    """True when the question may be spoken despite failing validation."""
-    return not any(reason in HARD_BLOCK_REASONS for reason in reasons)
 
 
 SKIP_HOOK_INTENTS = frozenset(
@@ -147,6 +128,8 @@ HARD_BLOCK_REASONS: frozenset[str] = frozenset(
         "project_in_competency_question",
         "generic_parrot_question",
         "generic_learning_question",
+        "competency_mismatch",
+        "section_violation",
     )
 )
 
