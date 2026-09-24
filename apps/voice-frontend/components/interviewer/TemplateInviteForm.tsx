@@ -59,10 +59,30 @@ export function TemplateInviteForm({
             .filter(Boolean)
         : [];
     if (fromDraft.length > 0) return fromDraft;
-    return String(draft.competencies || "")
+    const raw = String(draft.competencies || "").trim();
+    if (!raw) return [];
+    if (raw.includes("\n")) {
+      return raw
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    const parts = raw
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
+    if (
+      parts.length > 1 &&
+      parts.every(
+        (part) =>
+          part.length <= 40 &&
+          !/^and\b/i.test(part) &&
+          !/^(design|develop|test|build|maintain)$/i.test(part),
+      )
+    ) {
+      return parts;
+    }
+    return [raw];
   }
 
   function update(index: number, patch: Partial<Candidate>) {

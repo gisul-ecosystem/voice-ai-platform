@@ -100,7 +100,7 @@ export function roleDraftFromSavedDefinition(
     seniority: item.seniority || "mid",
     durationMinutes: String(item.duration_minutes || 30),
     jobDescription: item.job_description || "",
-    competencies: (item.competencies || []).join(", "),
+    competencies: (item.competencies || []).join("\n"),
     startsAt,
     draft: {
       title: item.title,

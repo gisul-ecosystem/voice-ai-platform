@@ -695,7 +695,7 @@ def ladder_fallback_question(
             "To get started, please introduce yourself — a short overview of your "
             "background, and the work that is most relevant to this role."
         ),
-        "clarify": "Sorry, I did not catch that. Please say a bit more, in a full sentence.",
+        "clarify": "Please continue — tell me a bit more about that.",
         "final_addition": "Before we close, is there one example you would still like to add?",
     }
     return defaults.get(
@@ -879,6 +879,35 @@ def _looks_like_non_job_trivia(question: str, *, corpus: str) -> bool:
     return False
 
 
+def speaks_competency_label(question: str, competency_name: str | None) -> bool:
+    """True when the spoken question leaks a rubric/competency title.
+
+    Multi-word labels (e.g. "Role expertise") must never appear. Single-word
+    labels are blocked only in rubric-y frames like "used Design" / "the Design
+    solution" so natural phrases like "system design" still pass.
+    """
+    name = (competency_name or "").strip()
+    q = (question or "").strip().lower()
+    if not name or not q:
+        return False
+    name_l = name.lower()
+    if " " in name_l:
+        return name_l in q
+    # Single-token labels: only reject clear rubric leakage patterns.
+    escaped = re.escape(name_l)
+    patterns = (
+        rf"\bthe {escaped} solution\b",
+        rf"\bthe {escaped} competency\b",
+        rf"\bthe {escaped} skill\b",
+        rf"\bused {escaped}\b",
+        rf"\busing {escaped}\b",
+        rf"\bpart of the {escaped}\b",
+        rf"\bwhere you used {escaped}\b",
+        rf"\b{escaped} solution\b",
+    )
+    return any(re.search(pattern, q) for pattern in patterns)
+
+
 def validate_generated_question(
     generated: GeneratedQuestion,
     *,
@@ -937,6 +966,10 @@ def validate_generated_question(
     expected_competency = policy_competency_id
     if expected_competency and generated.competency_id not in {None, "", expected_competency}:
         reasons.append("competency_mismatch")
+    competency = competency_by_id(definition, expected_competency)
+    competency_name = str(competency.get("name") or "").strip()
+    if speaks_competency_label(question, competency_name):
+        reasons.append("competency_label_spoken")
     # JSON intent is metadata only. Normalized output overwrites it to policy_intent.
     # Failing the turn for a label mismatch discarded hooked follow-ups.
     if generated.depth > max(1, int(max_depth)):
