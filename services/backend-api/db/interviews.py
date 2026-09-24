@@ -128,6 +128,9 @@ async def ensure_indexes() -> None:
     await db.scheduled_interviews.create_index(
         [("starts_at", 1), ("status", 1)]
     )
+    await db.scheduled_interviews.create_index(
+        [("definition_id", 1), ("created_at", -1)]
+    )
     from db.brain import ensure_brain_indexes
     from db.definitions import ensure_definition_indexes
     from db.scorecards import ensure_scorecard_indexes
@@ -280,6 +283,21 @@ async def get_scheduled_interview_by_invitation(
     return await get_db().scheduled_interviews.find_one(
         {"invitation_id": invitation_id}
     )
+
+
+async def list_scheduled_interviews_by_definition(
+    definition_id: str,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    capped = max(1, min(int(limit), 100))
+    cursor = (
+        get_db()
+        .scheduled_interviews.find({"definition_id": definition_id})
+        .sort("created_at", -1)
+        .limit(capped)
+    )
+    return await cursor.to_list(length=capped)
 
 
 async def record_candidate_consent(

@@ -97,6 +97,33 @@ def test_restored_agent_skips_opening_marker() -> None:
     assert agent._last_agent_text == "Tell me about a project."
 
 
+def test_candidate_only_restore_still_needs_greeting() -> None:
+    """Early STT before greeting must not mark the session as already opened."""
+    agent = aaptor_agent.AaptorAgent(
+        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": []}]},
+        FakeLlm(),
+        initial_state={"candidate_turns": ["Hello Hello"]},
+    )
+    assert agent._opened is False
+    assert agent._greeting_done is False
+
+
+@pytest.mark.asyncio
+async def test_llm_node_silent_while_greeting_in_progress(monkeypatch) -> None:
+    from livekit.agents import llm
+    from livekit.agents.voice.agent import ModelSettings
+
+    agent = aaptor_agent.AaptorAgent(
+        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": []}]},
+        FakeLlm(),
+    )
+    agent._greeting_in_progress = True
+    streamed: list[str] = []
+    async for chunk in agent.llm_node(llm.ChatContext(), [], ModelSettings()):
+        streamed.append(chunk)
+    assert streamed == []
+
+
 @pytest.mark.asyncio
 async def test_restored_agent_on_enter_does_not_respeak() -> None:
     agent = aaptor_agent.AaptorAgent(

@@ -21,8 +21,8 @@ from livekit_adapters import LaptopLLM, LaptopSTT, LaptopTTS
 # WorkerOptions.prewarm_fnc (or lazily here) so room join does not block the
 # asyncio loop and trip LiveKit's "job executor is unresponsive" watchdog.
 _VAD: Any | None = None
-_VAD_MIN_SPEECH = 0.4
-_VAD_MIN_SILENCE = 0.4
+_VAD_MIN_SPEECH = 0.3
+_VAD_MIN_SILENCE = 0.3
 
 
 @dataclass(frozen=True)
@@ -96,15 +96,16 @@ def build_agent_session(
         tts=LaptopTTS(client=clients.tts),
         # Publish agent speech text so the live transcript can show interviewer lines.
         use_tts_aligned_transcript=True,
-        # Allow real barge-in, but ignore laptop-speaker echo while the agent talks.
-        # Echo of a full opening question is long; require sustained speech + words.
+        # Allow barge-in, but require a bit of sustained speech so laptop echo of
+        # the agent voice does not steal the turn.
         allow_interruptions=True,
-        min_interruption_duration=2.5,
-        min_interruption_words=6,
-        min_endpointing_delay=0.35,
-        max_endpointing_delay=1.6,
+        min_interruption_duration=0.8,
+        min_interruption_words=2,
+        # Wait just long enough for Sarvam finals without feeling sluggish.
+        min_endpointing_delay=0.5,
+        max_endpointing_delay=1.8,
         resume_false_interruption=True,
-        false_interruption_timeout=2.0,
+        false_interruption_timeout=1.2,
         # Preemptive drafting made the agent commit to replying on partial/paused
         # speech before the candidate finished their sentence — disabled so the
         # full final utterance reaches the LLM before a reply is generated.

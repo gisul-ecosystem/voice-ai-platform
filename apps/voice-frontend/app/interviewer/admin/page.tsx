@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-/** Canonical recruiter create path starts at design. */
+/** Admin entry goes to the template library. */
 export default function AdminInterviewPage() {
-  redirect("/interviewer/admin/design");
+  redirect("/interviewer");
 }

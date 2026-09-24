@@ -92,6 +92,8 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
             candidate_email="priya@example.com",
             starts_at=now + timedelta(minutes=10),
             timezone="Asia/Kolkata",
+            join_early_minutes=15,
+            late_grace_minutes=120,
             job_description="Build backend services",
             resume_text="Five years of Python",
             interview_setup=_setup(),
@@ -101,6 +103,7 @@ async def test_schedule_creates_previewable_invitation(monkeypatch) -> None:
     assert created.definition_id == "idef_scheduled_test01"
     assert captured["definition_id"] == "idef_scheduled_test01"
     assert captured["candidate_email"] == "priya@example.com"
+    assert captured["invitation_token"] == created.invitation_token
     assert captured["external_interview_id"].startswith("ext_")
     assert captured["join_not_before"] <= now
 
@@ -306,3 +309,55 @@ async def test_duplicate_external_id_returns_conflict_and_rolls_back(
     assert raised.value.status_code == 409
     assert rolled_back["context_id"] == "ctx_1234567890123456"
     assert rolled_back["invitation_id"].startswith("inv_")
+
+
+@pytest.mark.asyncio
+async def test_list_interviews_by_definition_id(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+
+    async def list_rows(definition_id: str, *, limit: int = 50):
+        assert definition_id == "idef_list_hub_01"
+        assert limit == 50
+        return [
+            {
+                "_id": "int_newest",
+                "definition_id": definition_id,
+                "candidate_name": "Asha",
+                "candidate_email": "asha@example.com",
+                "status": "scheduled",
+                "starts_at": now,
+                "invitation_token": "tok.newest",
+                "created_at": now,
+            },
+            {
+                "_id": "int_old",
+                "definition_id": definition_id,
+                "candidate_name": "Ravi",
+                "candidate_email": "ravi@example.com",
+                "status": "scheduled",
+                "starts_at": now - timedelta(days=1),
+                "invitation_token": None,
+                "created_at": now - timedelta(days=1),
+            },
+        ]
+
+    monkeypatch.setattr(
+        scheduled_interviews.interviews,
+        "list_scheduled_interviews_by_definition",
+        list_rows,
+    )
+    listed = await scheduled_interviews.list_scheduled_interviews(
+        definition_id="idef_list_hub_01"
+    )
+    assert len(listed.items) == 2
+    assert listed.items[0].interview_id == "int_newest"
+    assert listed.items[0].candidate_path == "/interview/invite/tok.newest"
+    assert listed.items[1].candidate_path is None
+    assert listed.items[1].invitation_token is None
+
+
+@pytest.mark.asyncio
+async def test_list_interviews_requires_definition_id() -> None:
+    with pytest.raises(HTTPException) as raised:
+        await scheduled_interviews.list_scheduled_interviews(definition_id="short")
+    assert raised.value.status_code == 422

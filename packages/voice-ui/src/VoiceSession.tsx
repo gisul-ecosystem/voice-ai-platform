@@ -392,8 +392,24 @@ export function isLikelyEchoFragment(text: string): boolean {
     .split(" ")
     .filter(Boolean);
   if (words.length === 0) return true;
-  if (words.length <= 5) return true;
-  if (words.length >= 6 && new Set(words).size <= 3) return true;
+  // Do not drop short real answers (e.g. "I am Ujwal") — only clear filler/loops.
+  const fillers = new Set([
+    "uh",
+    "um",
+    "hmm",
+    "hm",
+    "ah",
+    "er",
+    "okay",
+    "ok",
+    "yes",
+    "yeah",
+    "yep",
+    "no",
+    "nope",
+  ]);
+  if (words.length <= 2 && words.every((w) => fillers.has(w))) return true;
+  if (words.length >= 4 && new Set(words).size <= 2) return true;
   // Repeated starter phrases from bad STT on TTS playback.
   const joined = words.join(" ");
   if (/^(there are (the |many )?)+/.test(joined) && words.length <= 12) {
@@ -455,8 +471,8 @@ export function coalesceTranscriptLines(
     .map((line) => line.text);
   return result.filter((line) => {
     if (line.who !== "candidate") return true;
+    // Drop only true echoes of agent speech — short real answers must stay visible.
     if (isEchoOfAgentSpeech(line.text, agentTexts)) return false;
-    if (agentTexts.length > 0 && isLikelyEchoFragment(line.text)) return false;
     return true;
   });
 }

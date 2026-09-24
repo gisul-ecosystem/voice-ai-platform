@@ -76,11 +76,22 @@ class AaptorAgent(Agent):
         self._status_sink = status_sink
         self._brain = brain_bridge
         self._completion_reported = False
-        # Mid-session restore: any prior turn means opening already happened.
-        self._opened = bool(self.flow.candidate_turns or self.flow.interviewer_turns)
+        # Mid-session restore: any prior interviewer turn means greeting already happened.
+        # Candidate-only turns must NOT skip the greeting (STT can fire before TTS).
+        self._greeting_done = bool(self.flow.interviewer_turns)
+        self._greeting_in_progress = False
         self._last_agent_text = (
             self.flow.interviewer_turns[-1] if self.flow.interviewer_turns else ""
         )
+
+    @property
+    def _opened(self) -> bool:
+        """Back-compat for tests: greeting finished (or mid-session restore)."""
+        return self._greeting_done
+
+    @_opened.setter
+    def _opened(self, value: bool) -> None:
+        self._greeting_done = bool(value)
 
     async def _record(self, speaker: str, text: str) -> str | None:
         if not text.strip():
@@ -169,38 +180,44 @@ class AaptorAgent(Agent):
         return await self.flow.generate_next_question(last_candidate_turn)
 
     async def on_enter(self) -> None:
-        if self._opened:
-            # Rejoin/restore: do not re-speak the opening or double-write brain.
+        if self._greeting_done or self._greeting_in_progress:
+            # Rejoin/restore or concurrent enter: do not re-speak the opening.
             return
-        # Claim the opening before any await so a concurrent llm_node cannot
-        # also stream/speak the greeting (candidate hears TTS twice).
-        self._opened = True
+        # Block llm_node until greeting audio is committed — otherwise early STT
+        # steals the turn with CLARIFY ("Sorry, I did not catch that") and the
+        # UI stays on "Starting the interview" with no greeting.
+        self._greeting_in_progress = True
         parts: list[str] = []
         try:
-            async for chunk in self.flow.generate_next_question_stream(None):
-                parts.append(chunk)
-        except Exception:
-            logger.exception(
-                "opening_stream_failed",
-                extra={"event": "opening_stream_failed"},
-            )
-        opening = "".join(parts).strip() or self.flow._fallback_opening()
-        try:
-            await self.session.say(opening, allow_interruptions=False)
-        except Exception:
-            logger.exception(
-                "opening_say_failed",
-                extra={"event": "opening_say_failed", "opening_len": len(opening)},
-            )
+            try:
+                async for chunk in self.flow.generate_next_question_stream(None):
+                    parts.append(chunk)
+            except Exception:
+                logger.exception(
+                    "opening_stream_failed",
+                    extra={"event": "opening_stream_failed"},
+                )
+            opening = "".join(parts).strip() or self.flow._fallback_opening()
+            opening = self.flow._ensure_opening_cites_context(opening)
+            try:
+                await self.session.say(opening, allow_interruptions=True)
+            except Exception:
+                logger.exception(
+                    "opening_say_failed",
+                    extra={"event": "opening_say_failed", "opening_len": len(opening)},
+                )
+                self._last_agent_text = opening
+                raise
             self._last_agent_text = opening
-            raise
-        self._last_agent_text = opening
-        turn_id = await self._record("agent", opening)
-        await self._persist_brain_after_exchange(
-            speaker="agent",
-            text=opening,
-            turn_id=turn_id,
-        )
+            self._greeting_done = True
+            turn_id = await self._record("agent", opening)
+            await self._persist_brain_after_exchange(
+                speaker="agent",
+                text=opening,
+                turn_id=turn_id,
+            )
+        finally:
+            self._greeting_in_progress = False
 
     async def llm_node(
         self,
@@ -211,7 +228,7 @@ class AaptorAgent(Agent):
         candidate_turn = last_text(chat_ctx)
         # Opening TTS is owned exclusively by on_enter — never stream a greeting
         # from llm_node (that produced a second voice when both paths raced).
-        if not self._opened:
+        if self._greeting_in_progress or not self._greeting_done:
             return
         candidate_brain_turn_id = None
         if not is_usable_candidate_turn(

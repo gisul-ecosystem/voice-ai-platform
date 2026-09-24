@@ -44,6 +44,7 @@ from products.interviewer.validator import (
     GeneratedQuestion,
     extract_hook_fact,
     ladder_fallback_question,
+    looks_like_compound_question,
     next_probe_shape,
     parse_generated_question,
     validate_generated_question,
@@ -1499,6 +1500,21 @@ class InterviewFlow:
         return ""
 
 
+    def _cap_opening_speech(self, question: str, *, max_words: int = 45) -> str:
+        """Keep greetings short so TTS finishes quickly and barge-in works."""
+        text = " ".join((question or "").split()).strip()
+        if not text:
+            return self._fallback_opening()
+        words = text.split()
+        if len(words) <= max_words:
+            return text
+        clipped = " ".join(words[:max_words])
+        # Prefer ending on a sentence boundary inside the budget.
+        match = re.search(r"^(.*?[.!?])(?:\s|$)", clipped)
+        if match and len(match.group(1).split()) >= 8:
+            return match.group(1).strip()
+        return clipped.rstrip(",;:—-") + "."
+
     def _ensure_opening_cites_context(self, question: str) -> str:
         """Keep LLM wording; soft-weave only a real resume claim (never JD titles).
 
@@ -1509,11 +1525,14 @@ class InterviewFlow:
         cleaned = (question or "").strip()
         if not cleaned:
             return self._fallback_opening()
+        # Reject long compound openings before weave/TTS.
+        if len(cleaned.split()) > 55 or looks_like_compound_question(cleaned):
+            cleaned = self._fallback_opening()
         signal = self._opening_claim_signal()
         if not signal:
-            return cleaned
+            return self._cap_opening_speech(cleaned)
         if self._opening_cites_context(cleaned, signal=signal):
-            return cleaned
+            return self._cap_opening_speech(cleaned)
         logger.info(
             "opening_soft_weave_signal",
             extra={
@@ -1521,7 +1540,7 @@ class InterviewFlow:
                 "signal": signal[:80],
             },
         )
-        return self._weave_opening_signal(cleaned, signal)
+        return self._cap_opening_speech(self._weave_opening_signal(cleaned, signal))
 
     def _opening_cites_context(self, question: str, signal: str | None = None) -> bool:
         """True when spoken opening mentions the chosen claim signal (PBI-B1)."""
@@ -1545,9 +1564,13 @@ class InterviewFlow:
 
     def _weave_opening_signal(self, question: str, signal: str) -> str:
         """Append a short resume cite without discarding the model's greeting."""
-        cite = f"I saw you noted {signal}"
+        short = signal if len(signal) <= 60 else signal[:57].rstrip() + "..."
+        cite = f"I saw you noted {short}"
         text = question.strip()
-        if signal.lower() in text.lower():
+        if short.lower() in text.lower() or signal.lower() in text.lower():
+            return text
+        # Prefer keeping a short LLM greeting; avoid doubling into a long monologue.
+        if len(text.split()) > 40:
             return text
         lower = text.lower()
         for marker in (
@@ -1614,27 +1637,23 @@ class InterviewFlow:
         signal = self._opening_signal()
         if role and signal:
             return (
-                f"Thanks for joining. I'm your interviewer for the {role} conversation. "
-                f"I saw you noted {signal} — to get started, please introduce "
-                "yourself and share the work most relevant to this role."
+                f"Hi — I'll be interviewing you for the {role} role. "
+                f"I saw you noted {signal}; please introduce yourself briefly."
             )
         if role:
             return (
-                f"Thanks for joining. I'm your interviewer for the {role} conversation. "
-                "To get started, please introduce yourself — a short overview of your "
-                "background, and the work that is most relevant to this role."
+                f"Hi — I'll be interviewing you for the {role} role. "
+                "Please introduce yourself briefly."
             )
         if signal:
             return (
-                "Thanks for joining. I'll be interviewing you for this role today. "
-                f"I noticed {signal} on your materials — please introduce yourself and "
-                "share the work from your background that is most relevant to this job."
+                "Hi — thanks for joining. "
+                f"I noticed {signal} on your materials; please introduce yourself briefly."
             )
         if (self.job_description or "").strip():
             return (
-                "Thanks for joining. I'll be interviewing you for this role today. "
-                "Please introduce yourself and share the work from your background "
-                "that is most relevant to this job."
+                "Hi — thanks for joining. "
+                "Please introduce yourself briefly for this role."
             )
         return FALLBACK_OPENING
 
@@ -1764,7 +1783,10 @@ class InterviewFlow:
         if self.last_answer_quality in {"off_topic", "unsupported"}:
             return "stay in the same competency, acknowledge briefly, and ask an easier adjacent question"
         if self.last_answer_quality in {"unclear", "partial"}:
-            return "ask for the specific missing evidence before changing topic"
+            return (
+                "treat thin or garbled STT as a weak answer: ask one concrete next "
+                "question from the required intent; never say cut off or ask for a full repeat"
+            )
         if self.last_answer_quality == "sufficient":
             return "increase depth by at most one level or move to the next uncovered topic"
         return "continue with the policy-required intent"
@@ -2709,8 +2731,7 @@ class InterviewFlow:
                 yield question
             return
         if last_candidate_turn is None and spoken_any and question != (spoken or ""):
-            # Soft-replaced opening after stream — speak corrected claim-aware line once.
-            yield question
+            # Already streamed opening text into say(); do not append a second greeting.
             return
         if not spoken_any and question:
             yield question

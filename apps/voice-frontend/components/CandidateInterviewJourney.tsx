@@ -128,33 +128,12 @@ function parsePreview(data: Record<string, unknown>): Preview | undefined {
   };
 }
 
-function formatDateTime(value: string, timezone: string): string {
-  const zone = timezone === "Asia/Calcutta" ? "Asia/Kolkata" : timezone;
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone: zone,
-      timeZoneName: "short",
-    }).format(new Date(value));
-  } catch {
-    try {
-      return new Date(value).toLocaleString();
-    } catch {
-      return value;
-    }
-  }
-}
-
 function invitationStatusMessage(preview: Preview): string | undefined {
   if (preview.status === "upcoming") {
-    return `This interview opens ${formatDateTime(preview.join_not_before, preview.timezone)}.`;
+    return "This invitation is not open yet. Try again in a moment.";
   }
   if (preview.status === "expired") {
-    return "The joining window has closed. Contact the inviting organization for assistance.";
+    return "This invitation has expired. Ask for a new invite link.";
   }
   if (preview.status === "completed") {
     return "This interview has already been completed.";
@@ -430,7 +409,7 @@ function CandidateInterviewJourneyInner({
           {statusMessage ? (
             <div className="invitation-status" role="status">
               <strong>
-                {preview.status === "upcoming" ? "Scheduled" : "Unavailable"}
+                {preview.status === "upcoming" ? "Not ready" : "Unavailable"}
               </strong>
               <p>{statusMessage}</p>
             </div>
@@ -448,18 +427,6 @@ function CandidateInterviewJourneyInner({
               <div>
                 <dt>Duration</dt>
                 <dd>{preview.duration_minutes} minutes</dd>
-              </div>
-              <div>
-                <dt>Scheduled</dt>
-                <dd>{formatDateTime(preview.starts_at, preview.timezone)}</dd>
-              </div>
-              <div>
-                <dt>Join window</dt>
-                <dd>
-                  {formatDateTime(preview.join_not_before, preview.timezone)}
-                  {" – "}
-                  {formatDateTime(preview.join_closes_at, preview.timezone)}
-                </dd>
               </div>
             </dl>
             <div>

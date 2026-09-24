@@ -110,6 +110,56 @@ export function roleDraftFromSavedDefinition(
       definition_id: definitionId,
       title: item.title,
       status: "published",
+      competencies: (item.competencies || []).map((name) => ({ name })),
     },
+  };
+}
+
+/** Map a full published definition document (GET by id) into a list summary. */
+export function summaryFromDefinitionDetail(
+  data: Record<string, unknown>,
+): SavedDefinitionSummary | null {
+  const definitionId = String(data.definition_id || "").trim();
+  if (definitionId.length < 8) return null;
+  const job =
+    data.job_intelligence && typeof data.job_intelligence === "object"
+      ? (data.job_intelligence as Record<string, unknown>)
+      : {};
+  const roleSummary =
+    job.role && typeof job.role === "object"
+      ? (job.role as Record<string, unknown>)
+      : {};
+  const timePolicy =
+    data.time_policy && typeof data.time_policy === "object"
+      ? (data.time_policy as Record<string, unknown>)
+      : {};
+  const competenciesRaw = Array.isArray(data.competencies)
+    ? data.competencies
+    : [];
+  const competencies = competenciesRaw
+    .map((item) =>
+      item && typeof item === "object"
+        ? String((item as { name?: unknown }).name || "").trim()
+        : "",
+    )
+    .filter(Boolean);
+  const duration = Number(timePolicy.duration_minutes || 30);
+  const publishedAt = data.published_at;
+  return {
+    definition_id: definitionId,
+    title: String(data.title || roleSummary.title || "Interview"),
+    role: String(roleSummary.title || data.title || "Role"),
+    seniority: String(roleSummary.target_level || "mid"),
+    duration_minutes: Number.isFinite(duration) ? duration : 30,
+    timezone: String(data.timezone || "UTC"),
+    competencies,
+    job_description: String(job.raw_job_description || ""),
+    published_at:
+      typeof publishedAt === "string"
+        ? publishedAt
+        : publishedAt
+          ? String(publishedAt)
+          : null,
+    published_by: data.published_by ? String(data.published_by) : null,
   };
 }
