@@ -118,7 +118,7 @@ def test_no_gain_stop_rule_transitions_off_a_dead_seam() -> None:
     assert still_producing.forced_flow_decision == "probe"
 
     exhausted = decide_next_action(
-        _competency_state(probes_without_gain=2, has_uncovered_competencies=True)
+        _competency_state(probes_without_gain=4, has_uncovered_competencies=True)
     )
     assert exhausted.action == MOVE_TO_NEXT_COMPETENCY
     assert exhausted.forced_flow_decision == "advance"

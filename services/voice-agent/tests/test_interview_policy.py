@@ -109,14 +109,14 @@ def test_baseline_then_depth_caps_force_advance() -> None:
     assert capped.forced_flow_decision == "advance"
 
 
-def test_two_no_gain_probes_force_competency_transition() -> None:
+def test_no_gain_probes_force_competency_transition() -> None:
     decision = decide_next_action(
         PolicyState(
             interviewer_turn_count=6,
             candidate_turn_count=6,
             phase_name="Problem solving",
             competency_id="problem_solving",
-            consecutive_no_gain_probes=2,
+            consecutive_no_gain_probes=4,
             has_uncovered_competencies=True,
         )
     )
@@ -180,7 +180,7 @@ def test_repeated_unusable_answers_force_controlled_close() -> None:
             interviewer_turn_count=6,
             candidate_turn_count=6,
             phase_name="Problem solving",
-            consecutive_unusable=4,
+            consecutive_unusable=7,
             has_uncovered_competencies=True,
         )
     )

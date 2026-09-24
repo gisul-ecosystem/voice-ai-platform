@@ -1011,7 +1011,7 @@ class InterviewFlow:
         # Named-but-unproven evidence must not close a competency; probe caps and
         # the time guard remain the only other way out.
         evidence_satisfied = ledger_entry is None or ledger_entry.is_satisfied()
-        min_probes = min(2, self._phase_probe_limit())
+        min_probes = min(3, self._phase_probe_limit())
         coverage_complete = (
             bool(required)
             and not missing
@@ -1339,7 +1339,7 @@ class InterviewFlow:
             # Hard gate: never leave a competency phase with zero real turns.
             if self.probe_count == 0:
                 return False
-            min_probes = min(2, self._phase_probe_limit())
+            min_probes = min(3, self._phase_probe_limit())
             phase_elapsed = time.monotonic() - self.phase_started_at
             time_remaining_for_phase = phase_elapsed < self._phase_minutes() * 60
             if self.probe_count < min_probes and time_remaining_for_phase and not self._time_up():

@@ -21,6 +21,8 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
             api_key="mock-key-123",
             voice_id="JBFqnCBsd6RMkjVDRZzb",
             model_id="eleven_flash_v2_5",
+            stability=0.45,
+            similarity_boost=0.80,
         )
 
         mock_pcm = b"\x00\x00" * 2400  # 0.1s of silence in 16-bit 24kHz PCM

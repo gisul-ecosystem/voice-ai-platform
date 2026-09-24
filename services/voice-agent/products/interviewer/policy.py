@@ -133,7 +133,7 @@ class PolicyState:
     gap_competency_id: str | None = None
     # Consecutive probes on this competency that moved no evidence forward.
     probes_without_gain: int = 0
-    no_gain_stop_after: int = 2
+    no_gain_stop_after: int = 4
     # Weakest unproven evidence slot for the active competency, if any.
     target_slot: str | None = None
     # Set when the last answer contradicted something said earlier.
@@ -144,8 +144,8 @@ class PolicyState:
     final_addition_offered: bool = False
     clarify_after: int = 1
     rephrase_after: int = 2
-    change_topic_after: int = 3
-    close_after: int = 4
+    change_topic_after: int = 5
+    close_after: int = 7
 
 
 def outline_from_definition(
@@ -278,8 +278,8 @@ def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict
     defaults = {
         "clarify_after": 1,
         "rephrase_after": 2,
-        "change_topic_after": 3,
-        "close_after": 4,
+        "change_topic_after": 5,
+        "close_after": 7,
     }
     if not isinstance(definition, dict):
         return defaults
@@ -462,7 +462,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             reason="repeated unusable answers",
             section=_section_for_phase(state.phase_name),
         )
-    if state.consecutive_no_gain_probes >= 2:
+    if state.consecutive_no_gain_probes >= 4:
         return PolicyDecision(
             action=(
                 MOVE_TO_NEXT_COMPETENCY
@@ -637,10 +637,13 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         )
 
     # Soft end while competencies remain: advance breadth-first — no new deep probes.
+    # Never advance if probe_count == 0 (must ask at least baseline).
+    _min_probes_for_soft_advance = 1
     if (
         state.elapsed_seconds >= state.soft_end_seconds
         and not state.at_last_competency
         and state.has_uncovered_competencies
+        and state.probe_count >= _min_probes_for_soft_advance
     ):
         return PolicyDecision(
             action=MOVE_TO_NEXT_COMPETENCY,
