@@ -538,3 +538,44 @@ def test_project_walkthrough_does_not_ask_ownership() -> None:
     assert "Do NOT ask about personal ownership, responsibility" in TURN_INSTRUCTIONS_V2
 
 
+def test_competency_assessment_active_focus_and_turn_isolation() -> None:
+    flow = InterviewFlow(
+        {"phases": []},
+        FakeLlm(),
+        interview_definition=_definition(),
+        candidate_turns=["In MoleCheck I used TensorFlow and Keras to train MobileNet."],
+        interviewer_turns=["Walk me through MoleCheck."],
+    )
+    # Simulate being in resume_project phase with MoleCheck as focus
+    flow.focus_item = "MoleCheck"
+    comp_idx = next(
+        idx for idx, p in enumerate(flow.phases)
+        if p.get("competency_id")
+    )
+    flow.phase_index = comp_idx
+    flow.probe_count = 0
+
+    prompt, _ = flow._structured_system_prompt(
+        "In MoleCheck I used TensorFlow and Keras to train MobileNet.",
+        flow._current_policy_decision(pending_candidate_turn=True),
+    )
+
+    # Active focus in competency must NOT be MoleCheck
+    competency_name = flow.current_phase().get("name")
+    assert "Active focus:\nMoleCheck" not in prompt
+    assert f"Active focus:\n{competency_name}" in prompt
+    assert f"Standalone competency for this turn: {competency_name}" in prompt
+    assert "MoleCheck" not in prompt.split("Recent candidate turns:")[1].split("Questions already asked:")[0]
+    assert "previous phase was project discussion" in prompt
+
+
+def test_framing_notes_do_not_encourage_project_anchoring() -> None:
+    from products.interviewer.prompts import FRAMING_NOTES
+
+    for key, note in FRAMING_NOTES.items():
+        assert "frame questions around" not in note.lower() or "judgment" in note.lower() or "system design" in note.lower()
+        assert "academic work, internships, or projects" not in note
+        assert "internships, projects, or early-career work" not in note
+        assert "internships, coursework, or projects" not in note
+
+

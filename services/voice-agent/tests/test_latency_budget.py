@@ -74,6 +74,7 @@ def test_turn_prompt_stays_under_budget_with_fat_definition() -> None:
         for index, phase in enumerate(flow.phases)
         if phase.get("competency_id") == "problem_solving"
     )
+    flow.probe_count = 1
     prompt, _ = flow._structured_system_prompt(
         "I built a machine learning classifier in Python.",
         flow._current_policy_decision(pending_candidate_turn=True),

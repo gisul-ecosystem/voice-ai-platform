@@ -224,35 +224,34 @@ Return one short spoken opening. Output a single JSON object with:
 
 FRAMING_NOTES = {
     "final_year_student": (
-        "Frame questions around academic work, internships, or projects. "
-        "Keep the same required intents. Do not lower the job bar."
+        "Use accessible language suitable for a student with project and academic experience. "
+        "Keep the same required technical intents. Do not lower the job bar."
     ),
     "recent_graduate": (
-        "Frame questions around internships, projects, or early-career work. "
-        "Keep the same required intents. Do not lower the job bar."
+        "Ask at a practical entry-level depth. "
+        "Keep the same required technical intents. Do not lower the job bar."
     ),
     "intern": (
-        "Frame questions around internships, coursework, or projects. "
-        "Keep the same required intents. Do not lower the job bar."
+        "Use practical, concrete language. Ask at an entry-level depth. "
+        "Keep the same required technical intents. Do not lower the job bar."
     ),
     "junior": (
-        "Ask about a named project or a named skill in plain language. "
-        "Keep the same required intents."
+        "Ask in plain language with practical focus. Keep the same required intents."
     ),
     "mid": (
-        "Frame questions around applied work they personally handled. "
+        "Ask at a mid-level applied depth about trade-offs and mechanisms. "
         "Keep the same required intents."
     ),
     "senior": (
-        "Frame questions around judgment, constraints, and outcomes in their work. "
-        "Keep the same required intents. Do not skip baseline context or ownership."
+        "Frame questions at judgment, constraints, and outcome level. "
+        "Keep the same required intents. Do not skip baseline context."
     ),
     "lead": (
-        "Frame questions around judgment, trade-offs, and outcomes. "
-        "Keep the same required intents. Do not skip baseline context or ownership."
+        "Frame questions around system design, trade-offs, and outcomes. "
+        "Keep the same required intents. Do not skip baseline context."
     ),
     "unknown": (
-        "Frame questions around a specific example from the supplied claims or last answer. "
+        "Ask a clear, standalone question about the current competency. "
         "Keep the same required intents."
     ),
 }

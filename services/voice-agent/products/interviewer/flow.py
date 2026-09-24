@@ -1848,13 +1848,13 @@ class InterviewFlow:
     def _resume_project_context(self) -> str:
         return resume_project_excerpt(self.resume_text, self.focus_item)
 
-    def _active_focus_context(self) -> str:
+    def _active_focus_context(self, active_focus: str | None = None) -> str:
         if self._phase_intent() == "resume_project":
             excerpt = self._resume_project_context()
             if excerpt:
                 return f"Resume project excerpt for {self.focus_item}:\n{excerpt}"
             return f"Resume project: {self.focus_item or 'this project'}"
-        focus = self.focus_item or "this competency"
+        focus = active_focus or "this competency"
         return (
             "Standalone competency for this turn: "
             f"{focus}. Use only its definition, evidence, and seniority guidance. "
@@ -1929,8 +1929,11 @@ class InterviewFlow:
             intelligence = self.interview_definition.get("job_intelligence")
             if isinstance(intelligence, dict):
                 role = intelligence.get("role") or {}
-        active_focus = self.focus_item or str(competency.get("name") or "this requirement")
         section = decision.section if decision else self._phase_intent()
+        if section == "competency_assessment":
+            active_focus = str(competency.get("name") or "this competency")
+        else:
+            active_focus = self.focus_item or str(competency.get("name") or "this requirement")
         is_resume_project = bool(project_name) or section == "resume_project"
         include_resume_materials = is_resume_project or section in {
             "opening",
@@ -1942,6 +1945,11 @@ class InterviewFlow:
             infer_phase_intent(self.phases[self.phase_index - 1])
             if self.phase_index > 0
             else ""
+        )
+        _is_first_competency_probe = (
+            section == "competency_assessment"
+            and self.probe_count == 0
+            and prev_phase_intent in {"resume_project", "intro"}
         )
         if section == "resume_project":
             if self.probe_count == 0:
@@ -1989,7 +1997,7 @@ class InterviewFlow:
             "competency_id": competency_id or "",
             "competency_definition": str(competency.get("definition") or "job-related work"),
             "active_focus": active_focus,
-            "active_focus_context": self._active_focus_context(),
+            "active_focus_context": self._active_focus_context(active_focus),
             "priority_guidance": self._priority_guidance(competency),
             "ladder_objective": objective or "Ask one job-related question.",
             "missing_intents": ", ".join(missing) or "(none)",
@@ -2024,8 +2032,11 @@ class InterviewFlow:
             else "(resume omitted — ask a standalone competency question)",
             "transition_context": transition_context,
             "jd_excerpt": clip_source_text(self.job_description, 2_000),
-            "recent_turns": "\n".join(f"- {turn}" for turn in self.candidate_turns[-2:])
-            or "(none yet)",
+            "recent_turns": (
+                "(previous phase was project discussion — do NOT reference it. Ask a fresh standalone competency question.)"
+                if _is_first_competency_probe
+                else "\n".join(f"- {turn}" for turn in self.candidate_turns[-2:]) or "(none yet)"
+            ),
             "recent_questions": "\n".join(f"- {q}" for q in self.interviewer_turns[-8:])
             or "(none yet)",
             "last_turn": last_candidate_turn or "(interview opening)",
