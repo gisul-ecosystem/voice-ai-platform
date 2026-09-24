@@ -35,8 +35,14 @@ async def get_brain_state(session_id: str) -> dict:
             status_code=503,
             detail="Interview brain state is temporarily unavailable",
         ) from exc
-    if bundle["state"] is None and not bundle["questions"]:
-        raise HTTPException(status_code=404, detail="Interview brain state not found")
+    if (bundle["state"] is None and not bundle["questions"]):
+        # First join — empty memory is normal; agent creates state after opening.
+        return {
+            "state": None,
+            "questions": [],
+            "answers": [],
+            "evidence": [],
+        }
     return bundle
 
 

@@ -116,8 +116,9 @@ class CreateScheduledInterviewRequest(BaseModel):
     candidate_id: str | None = Field(default=None, min_length=3, max_length=128)
     starts_at: datetime
     timezone: str = Field(min_length=1, max_length=64)
-    join_early_minutes: int = Field(default=15, ge=0, le=120)
-    late_grace_minutes: int = Field(default=15, ge=0, le=120)
+    join_early_minutes: int = Field(default=0, ge=0, le=120)
+    # Open invite links for up to 30 days after creation (anytime join).
+    late_grace_minutes: int = Field(default=43_200, ge=0, le=43_200)
     job_description: str = Field(min_length=1, max_length=100_000)
     resume_text: str | None = Field(default=None, max_length=100_000)
     interview_setup: InterviewSetupConfig
@@ -131,6 +132,22 @@ class CreateScheduledInterviewResponse(BaseModel):
     status: Literal["scheduled"]
     starts_at: datetime
     definition_id: str | None = None
+
+
+class ScheduledInterviewListItem(BaseModel):
+    interview_id: str
+    definition_id: str | None = None
+    candidate_name: str
+    candidate_email: str
+    status: str
+    starts_at: datetime
+    invitation_token: str | None = None
+    candidate_path: str | None = None
+    created_at: datetime | None = None
+
+
+class ScheduledInterviewListResponse(BaseModel):
+    items: list[ScheduledInterviewListItem]
 
 
 class InvitationPreviewRequest(BaseModel):

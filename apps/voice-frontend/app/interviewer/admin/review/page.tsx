@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useSyncExternalStore } from "react";
 
 import {
-  AdminProgress,
+  CreateProgress,
   LandingNav,
 } from "@/components/interviewer/LandingNav";
 import {
@@ -224,7 +224,18 @@ export default function ReviewAlignmentPage() {
         published: data,
       };
       setState(publishedState);
-      router.push("/interviewer/admin/invite");
+      const publishedId = String(
+        (data as { definition_id?: string }).definition_id ||
+          definitionId ||
+          "",
+      ).trim();
+      if (publishedId.length >= 8) {
+        router.push(
+          `/interviewer/templates/${encodeURIComponent(publishedId)}`,
+        );
+      } else {
+        router.push("/interviewer");
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Publish failed.");
     } finally {
@@ -261,7 +272,7 @@ export default function ReviewAlignmentPage() {
   return (
     <main className="interviewer-home admin-builder-page">
       <LandingNav ariaLabel="Admin navigation" badge="02 Align assessment plan" />
-      <AdminProgress current="review" />
+      <CreateProgress current="review" />
       <section className="demo-intro">
         <p className="eyebrow">Align before publish</p>
         <h1>Confirm what the interview will assess</h1>

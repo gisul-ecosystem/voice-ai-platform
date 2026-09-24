@@ -335,8 +335,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         )
 
     if section == "opening" and state.candidate_turn_count <= 1:
-        # Intro received while still on opening — advance into candidate_map so the
-        # spoken map question lands on the map phase (flow multi-hops warmups).
+        # Intro received — hop warmups so the spoken turn is already a competency ask.
         return PolicyDecision(
             action=MAP_CANDIDATE_BACKGROUND,
             forced_flow_decision="advance",
@@ -345,21 +344,22 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=2,
             competency_id=None,
             intent="candidate_map",
-            reason="breadth-first mapping before deep probes",
+            reason="intro received — advance toward competency baseline",
             section="candidate_map",
         )
 
     if section == "candidate_map" and state.candidate_turn_count <= 1:
+        # Skip a second "tell me your background" turn after the opening intro.
         return PolicyDecision(
-            action=MAP_CANDIDATE_BACKGROUND,
-            forced_flow_decision="probe",
+            action=ASK_BASELINE,
+            forced_flow_decision="advance",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=2,
-            competency_id=None,
-            intent="candidate_map",
-            reason="ask for relevant background before competency probes",
-            section="candidate_map",
+            competency_id=state.competency_id or state.gap_competency_id,
+            intent="establish_context",
+            reason="intro complete — begin first competency question",
+            section="baseline",
         )
 
     if section in {"opening", "candidate_map"}:

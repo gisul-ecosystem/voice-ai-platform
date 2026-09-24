@@ -83,8 +83,8 @@ def build_realtime_ws_url(
             # Sarvam's own server-side endpointing — independent of the LiveKit VAD.
             # Kept short for responsiveness; the LiveKit-side grace-period commit
             # (see livekit_adapters.py) absorbs late corrections without this delay.
-            "silence_duration_ms": "500",
-            "min_speech_duration_ms": "250",
+            "silence_duration_ms": "400",
+            "min_speech_duration_ms": "200",
         }
     )
     return f"{ws}?{query}"

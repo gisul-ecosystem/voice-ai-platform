@@ -165,7 +165,9 @@ describe("scheduled candidate journey", () => {
 
     render(<CandidateInterviewJourney invitationToken="future-token" />);
 
-    expect(await screen.findByText(/This interview opens/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/This invitation is not open yet/i),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Joining unavailable" }),
     ).toBeDisabled();

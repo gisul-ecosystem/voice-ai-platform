@@ -76,10 +76,12 @@ def test_opening_and_map_are_forced_before_deep_dive() -> None:
             interviewer_turn_count=1,
             candidate_turn_count=1,
             phase_name="candidate_map",
+            gap_competency_id="problem_solving",
         )
     )
-    assert map_question.action == MAP_CANDIDATE_BACKGROUND
-    assert map_question.forced_flow_decision == "probe"
+    assert map_question.action == ASK_BASELINE
+    assert map_question.forced_flow_decision == "advance"
+    assert map_question.intent == "establish_context"
 
     after_map = decide_next_action(
         PolicyState(

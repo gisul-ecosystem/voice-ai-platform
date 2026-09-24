@@ -151,6 +151,8 @@ describe("shared voice UI primitives", () => {
       "Thanks for joining. I'm your interviewer for this conversation. To get started, please introduce yourself.";
     expect(isEchoOfAgentSpeech(agent, [agent])).toBe(true);
     expect(isLikelyEchoFragment("There are many services")).toBe(true);
+    expect(isLikelyEchoFragment("I am Ujwal")).toBe(false);
+    expect(isLikelyEchoFragment("uh um")).toBe(true);
     const lines = coalesceTranscriptLines([
       { id: "a", who: "agent", text: agent, final: true, at: 1 },
       { id: "c", who: "candidate", text: agent, final: true, at: 2 },
@@ -162,6 +164,13 @@ describe("shared voice UI primitives", () => {
         at: 2.5,
       },
       {
+        id: "c-short",
+        who: "candidate",
+        text: "I am Ujwal",
+        final: true,
+        at: 2.7,
+      },
+      {
         id: "c2",
         who: "candidate",
         text: "I built APIs at my last company",
@@ -169,8 +178,15 @@ describe("shared voice UI primitives", () => {
         at: 3,
       },
     ]);
-    expect(lines.map((line) => line.who)).toEqual(["agent", "candidate"]);
-    expect(lines[1]?.text).toContain("built APIs");
+    expect(lines.map((line) => line.who)).toEqual([
+      "agent",
+      "candidate",
+      "candidate",
+      "candidate",
+    ]);
+    expect(lines[1]?.text).toContain("There are the factories");
+    expect(lines[2]?.text).toBe("I am Ujwal");
+    expect(lines[3]?.text).toContain("built APIs");
   });
 
   it("keeps chronological order and hides echo duplicates in the panel", async () => {

@@ -1,13 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import {
-  roleDraftFromSavedDefinition,
-  writeRoleDraft,
-  type SavedDefinitionSummary,
-} from "@/lib/interviewer/role-draft";
+import type { SavedDefinitionSummary } from "@/lib/interviewer/role-draft";
 
 type LoadState =
   | { status: "loading" }
@@ -31,13 +28,11 @@ export function SavedInterviewers() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/admin/definitions?limit=20")
+    fetch("/api/admin/definitions?limit=50")
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(
-            String(data.error || "Could not load saved interviews."),
-          );
+          throw new Error(String(data.error || "Could not load templates."));
         }
         const items = Array.isArray(data.items)
           ? (data.items as SavedDefinitionSummary[])
@@ -51,7 +46,7 @@ export function SavedInterviewers() {
             message:
               reason instanceof Error
                 ? reason.message
-                : "Could not load saved interviews.",
+                : "Could not load templates.",
           });
         }
       });
@@ -60,63 +55,76 @@ export function SavedInterviewers() {
     };
   }, []);
 
-  function reuse(item: SavedDefinitionSummary) {
+  function openTemplate(item: SavedDefinitionSummary) {
     setBusyId(item.definition_id);
-    writeRoleDraft(roleDraftFromSavedDefinition(item));
-    router.push("/interviewer/admin/invite");
+    router.push(
+      `/interviewer/templates/${encodeURIComponent(item.definition_id)}`,
+    );
   }
 
   return (
-    <section className="saved-interviewers" aria-label="Saved interviews">
-      <div className="saved-interviewers-head">
-        <p className="eyebrow">Already published</p>
-        <h2>Saved interviews</h2>
-        <p>
-          Reuse a published definition to invite more candidates — no redesign
-          required.
-        </p>
-      </div>
-
+    <section className="template-library" aria-label="Interview templates">
       {load.status === "loading" ? (
-        <p className="saved-interviewers-muted">Loading saved interviews…</p>
+        <div className="template-library-status" role="status">
+          Loading templates…
+        </div>
       ) : null}
 
       {load.status === "error" ? (
-        <p className="saved-interviewers-muted" role="alert">
+        <div className="template-library-status" role="alert">
           {load.message}
-        </p>
+        </div>
       ) : null}
 
       {load.status === "ready" && load.items.length === 0 ? (
-        <p className="saved-interviewers-muted">
-          No published interviews yet. Create one to get started.
-        </p>
+        <div className="template-empty">
+          <p className="eyebrow">Get started</p>
+          <h2>No templates yet</h2>
+          <p>
+            Design a role, align competencies, and publish once. Then invite as
+            many candidates as you need from the same template.
+          </p>
+          <Link className="button primary" href="/interviewer/admin/design">
+            Create your first template
+          </Link>
+        </div>
       ) : null}
 
       {load.status === "ready" && load.items.length > 0 ? (
-        <ul className="saved-interviewer-list">
-          {load.items.map((item) => (
-            <li key={item.definition_id}>
-              <div>
-                <strong>{item.title}</strong>
-                <p>
-                  {item.role} · {item.seniority} · {item.duration_minutes} min
-                  {formatPublishedAt(item.published_at)
-                    ? ` · ${formatPublishedAt(item.published_at)}`
-                    : ""}
-                </p>
-                <span className="saved-definition-id">{item.definition_id}</span>
-              </div>
-              <button
-                type="button"
-                className="button primary"
-                disabled={busyId === item.definition_id}
-                onClick={() => reuse(item)}
-              >
-                {busyId === item.definition_id ? "Opening…" : "Invite candidates"}
-              </button>
-            </li>
-          ))}
+        <ul className="template-list">
+          {load.items.map((item) => {
+            const busy = busyId === item.definition_id;
+            return (
+              <li key={item.definition_id}>
+                <button
+                  type="button"
+                  className="template-row"
+                  disabled={busy}
+                  onClick={() => openTemplate(item)}
+                >
+                  <div className="template-row-main">
+                    <strong>{item.title}</strong>
+                    <p>
+                      <span>{item.role}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{item.seniority}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{item.duration_minutes} min</span>
+                      {formatPublishedAt(item.published_at) ? (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{formatPublishedAt(item.published_at)}</span>
+                        </>
+                      ) : null}
+                    </p>
+                  </div>
+                  <span className="template-row-action">
+                    {busy ? "Opening…" : "Open"}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </section>

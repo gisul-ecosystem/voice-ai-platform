@@ -1,12 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
-import { LandingNav } from "@/components/interviewer/LandingNav";
-
-export default function ScorecardLookupPage() {
+export function TemplateResultsLookup() {
   const router = useRouter();
   const [sessionId, setSessionId] = useState("");
   const [error, setError] = useState("");
@@ -22,26 +19,19 @@ export default function ScorecardLookupPage() {
   }
 
   return (
-    <main className="interviewer-home admin-builder-page">
-      <LandingNav
-        ariaLabel="Reviewer navigation"
-        trailing={<Link href="/interviewer">Templates</Link>}
-      />
-      <section className="demo-intro">
-        <p className="eyebrow">Human review</p>
-        <h1>Open a completed scorecard</h1>
-        <p>
-          Coverage, excerpts, and missing intents stay advisory until a person
-          accepts or overrides the result. Prefer opening Results from a
-          template when you know which interview it belongs to.
-        </p>
-      </section>
-      <section className="demo-card admin-section">
-        {error ? (
-          <div className="alert" role="alert">
-            {error}
-          </div>
-        ) : null}
+    <section className="template-hub-section" aria-label="Results">
+      <div className="template-hub-panel-intro">
+        <div>
+          <h2>Results</h2>
+          <p>Paste a session id from a completed interview for this template.</p>
+        </div>
+      </div>
+      {error ? (
+        <div className="alert" role="alert">
+          {error}
+        </div>
+      ) : null}
+      <div className="template-results-form">
         <label>
           Session id
           <input
@@ -70,7 +60,7 @@ export default function ScorecardLookupPage() {
             Open scorecard
           </button>
         </div>
-      </section>
-    </main>
+      </div>
+    </section>
   );
 }

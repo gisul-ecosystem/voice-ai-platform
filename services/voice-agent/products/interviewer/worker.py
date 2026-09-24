@@ -665,8 +665,11 @@ async def entrypoint(ctx: JobContext) -> None:
         if isinstance(interview_definition, dict)
         else None
     )
+    # Align published voice_policy with session TTS provider (room metadata).
+    session_tts = str(metadata.get("tts_provider") or "").strip() or None
     voice_policy = resolve_voice_policy(
-        voice_raw if isinstance(voice_raw, dict) else None
+        voice_raw if isinstance(voice_raw, dict) else None,
+        provider_override=session_tts,
     )
     clients = load_inference_clients(ctx, logger, voice_policy=voice_policy)
     try:

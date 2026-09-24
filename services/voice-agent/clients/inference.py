@@ -67,13 +67,28 @@ def clients_from_overrides(
     voice_policy: ResolvedVoicePolicy | dict[str, Any] | None = None,
 ) -> tuple[OpenAICompatLlm, SttClient, TtsClient]:
     """Build LLM/STT/TTS clients. Raises ProviderConfigError before the first turn."""
-    policy = (
-        voice_policy
-        if isinstance(voice_policy, ResolvedVoicePolicy)
-        else resolve_voice_policy(
-            voice_policy if isinstance(voice_policy, dict) else None,
-            provider_override=overrides.tts_provider,
-        )
+    raw_policy: dict[str, Any] | None
+    if isinstance(voice_policy, ResolvedVoicePolicy):
+        raw_policy = {
+            "provider": voice_policy.provider,
+            "voice_id": voice_policy.voice_id,
+            "model_id": voice_policy.model_id,
+            "stability": voice_policy.stability,
+            "speed": voice_policy.speed,
+            "fallback_policy": voice_policy.fallback_policy,
+            "preflight_required": voice_policy.preflight_required,
+        }
+    elif isinstance(voice_policy, dict):
+        raw_policy = voice_policy
+    else:
+        raw_policy = None
+
+    # Session tts_provider override must re-resolve model/voice defaults.
+    # Otherwise an elevenlabs-published model_id (e.g. eleven_turbo_v2_5) is
+    # sent to OpenAI /audio/speech and returns 404.
+    policy = resolve_voice_policy(
+        raw_policy,
+        provider_override=overrides.tts_provider,
     )
     llm = get_llm_client(overrides.llm_provider)
     stt = get_stt_client(overrides.stt_provider)
@@ -86,7 +101,9 @@ def clients_from_overrides(
         extra={
             "event": "inference_overrides_applied",
             **overrides.log_safe(),
+            "tts_provider_resolved": policy.provider,
             "tts_voice_id": policy.voice_id,
+            "tts_model_id": policy.model_id,
             "tts_fallback_policy": policy.fallback_policy,
         },
     )
