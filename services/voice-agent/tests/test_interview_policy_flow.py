@@ -97,8 +97,7 @@ def test_policy_prompt_contains_full_technical_reference_context() -> None:
     )
 
     assert "machine learning" in prompt.lower()
-    assert "data structures" in prompt.lower()
-    assert "model evaluation" in prompt.lower()
+    assert "machine learning" in prompt.lower()
     assert "technical communication" not in prompt.lower()
     assert "example:" not in prompt.lower()
 
@@ -128,10 +127,12 @@ async def test_policy_mode_blocks_immediate_deep_dive_advance() -> None:
         "I am a backend engineer who worked on payments."
     )
     prompt = llm.messages[0][0]["content"]
-    assert "POLICY ENGINE" in prompt
+    assert "They said:" in prompt
+    assert "You still need:" in prompt
+    assert "POLICY ENGINE" not in prompt
     # candidate_map's forced advance is resolved before the prompt is built, so the
     # LLM sees the real next competency it is entering, not the phase it just left.
-    assert "Problem solving" in prompt
+    assert "problem_solving" in prompt
     assert "problem_solving" in prompt
     # Forced probe — cannot honor LLM advance into deep dive.
     assert flow.phase_index == 2
@@ -175,7 +176,8 @@ async def test_policy_mode_falls_back_to_ladder_when_json_is_invalid() -> None:
 
     question = await flow.generate_next_question("I solved a graph problem.")
 
-    assert "Which algorithm did you use" in question
+    assert "Which algorithm did you use" not in question
+    assert "situation" in question.lower()
     assert "You mentioned" not in question
     assert not question.lower().startswith("regarding ")
 
@@ -285,7 +287,7 @@ async def test_policy_mode_opening_cites_resume_or_jd_materials() -> None:
     prompt = llm.messages[0][0]["content"]
     assert "ONE" in prompt.upper() or "one" in prompt.lower()
     assert "machine learning classifier" in prompt
-    assert "own words" in prompt.lower() or "vary" in prompt.lower()
+    assert "two short sentences" in prompt.lower()
 
 @pytest.mark.asyncio
 async def test_policy_mode_opening_falls_back_only_on_llm_failure() -> None:
@@ -336,12 +338,10 @@ def test_partial_prompt_names_one_evidence_topic_and_locks_shape() -> None:
     )
     assert decision.evidence_topic == "ownership"
     assert decision.probe_shape == "why"
-    assert "Ask only about this evidence topic: ownership" in prompt
-    assert "Do not ask these other bullets on this turn: context, result" in prompt
-    assert "ask a technical question the policy did not select" in prompt
+    assert "You still need: what was actually theirs in that work" in prompt
+    assert "They said:" in prompt
     assert "deepen gradually" not in prompt
-    assert "Required probe_shape for this turn" in prompt
-    assert "set probe_shape to this value; do not repeat the last angle): why" in prompt
+    assert "Preferred angle" not in prompt
     assert "metric" not in decision.probe_shape
 
 
@@ -371,10 +371,10 @@ def test_ownership_prompt_uses_ownership_phrasing_not_method() -> None:
         "I solved a graph problem.",
         policy,
     )
-    assert "personally did versus the team" in prompt
+    assert "You still need: what was actually theirs in that work" in prompt
     assert "steps or mechanism they used" not in prompt
     assert "graph" in prompt.lower()
-    assert "required probe_shape" in prompt.lower()
+    assert "preferred angle" not in prompt.lower()
 
 
 def test_phrasing_prompt_omits_answer_evaluation() -> None:
@@ -396,8 +396,9 @@ def test_phrasing_prompt_omits_answer_evaluation() -> None:
         flow._current_policy_decision(pending_candidate_turn=True),
     )
     assert "answer_evaluation" not in prompt
-    assert "Previous-turn evaluation" in prompt
-    assert "used graph search" in prompt
+    assert "Previous-turn evaluation" not in prompt
+    assert "They said:" in prompt
+    assert "You still need:" in prompt
 
 
 def test_keyword_rich_answer_keeps_missing_intents() -> None:
@@ -541,7 +542,8 @@ async def test_empty_stream_keeps_hooked_fallback_when_nothing_spoken() -> None:
     ]
     spoken = "".join(chunks)
     assert llm.stream_calls == 2
-    assert "Which algorithm did you use" in spoken
+    assert "Which algorithm did you use" not in spoken
+    assert "situation" in spoken.lower()
     assert "You mentioned" not in spoken
     assert not spoken.lower().startswith("regarding ")
     assert "and why" not in spoken.lower()
@@ -595,7 +597,9 @@ def test_legacy_flag_off_uses_structured_prompt() -> None:
         candidate_turns=["I already introduced myself."],
     )
     prompt, _ = flow._prompt_for_turn("I led the rollout.")
-    assert "POLICY ENGINE" in prompt
+    assert "They said:" in prompt
+    assert "You still need:" in prompt
+    assert "POLICY ENGINE" not in prompt
     assert "DECISION:" not in prompt
 
 

@@ -442,6 +442,7 @@ class GeneratedQuestion:
     answer_evaluation: AnswerEvaluation | None = None
     depth_tag: str | None = None
     probe_shape: str | None = None
+    memory_note: str = ""
 
 
 @dataclass
@@ -668,6 +669,7 @@ def parse_generated_question(raw: str) -> GeneratedQuestion | None:
         answer_evaluation=parse_answer_evaluation(payload.get("answer_evaluation")),
         depth_tag=depth_tag,
         probe_shape=probe_shape,
+        memory_note=str(payload.get("memory_note") or "").strip()[:400],
     )
 
 
@@ -677,11 +679,6 @@ def ladder_fallback_question(
     competency_id: str | None,
     intent: str,
 ) -> str:
-    for step in ladder_steps(definition, competency_id):
-        if str(step.get("intent") or "").strip() == intent:
-            example = str(step.get("example_question") or "").strip()
-            if example:
-                return example
     defaults = {
         "establish_context": "Can you briefly describe the situation?",
         "establish_ownership": "What part of that did you personally handle?",

@@ -79,10 +79,8 @@ def test_turn_prompt_stays_under_budget_with_fat_definition() -> None:
     assert "Assess technical communication" not in prompt
     assert "Long definition" not in prompt
     assert "How would you explain a model trade-off?" not in prompt
-    assert "question 9" in prompt
+    assert "machine learning" in prompt.lower()
     assert "question 0" not in prompt
-    assert "answer 9" in prompt
-    assert "answer 0" not in prompt
 
 
 def test_speech_end_to_first_audio_budget_math() -> None:

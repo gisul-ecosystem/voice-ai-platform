@@ -41,10 +41,12 @@ class AaptorAgent(Agent):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are a professional structured interviewer. A policy engine "
-                "already chose the evidence and depth for this turn. Phrase exactly "
-                "one spoken question. Do not invent employers, projects, or skills. "
-                "Do not mention phases, probes, or scores."
+                "You are a professional interviewer. A policy engine already "
+                "chose the type of question for this turn: the competency, the "
+                "intent, and the depth. Write one original spoken question of "
+                "that type. Do not recite a sample or template. Do not invent "
+                "employers, projects, or skills. Do not mention phases, probes, "
+                "or scores."
             )
         )
         flow_kwargs: dict = {}
@@ -219,16 +221,16 @@ class AaptorAgent(Agent):
             self._last_agent_text,
             min_words=1 if not self.flow.candidate_turns else 3,
         ):
-            # Echo / noise / too-short STT must not pollute durable transcript or scoring.
-            # Still ask for a clearer answer so the live session recovers.
-            yield CLARIFY_TURN
-            self._last_agent_text = CLARIFY_TURN
-            turn_id = await self._record("agent", CLARIFY_TURN)
-            await self._persist_brain_after_exchange(
-                speaker="agent",
-                text=CLARIFY_TURN,
-                turn_id=turn_id,
-            )
+            # Empty audio and echoes of the question we just asked are not answers.
+            # Speaking "I did not catch that" on those turns stacks a second
+            # question and makes the interview feel stalled.
+            stripped = (candidate_turn or "").strip()
+            if not stripped or not is_usable_candidate_turn(
+                stripped, self._last_agent_text, min_words=1
+            ):
+                return
+            # A one- or two-word blip is not a finished answer. Stay quiet so the
+            # candidate can keep talking instead of hearing a second question.
             return
         if candidate_turn:
             turn_id = await self._record("candidate", candidate_turn)

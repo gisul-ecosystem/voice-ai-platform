@@ -94,7 +94,8 @@ _FIRST_PERSON = re.compile(
     r"\b(?:i|we)\s+(handled|led|built|owned|implemented|designed|wrote|ran|"
     r"managed|reduced|set|rewrote|chose|moved|used|added|configured|"
     r"introduced|measured|rate[- ]?limited|migrated|shipped|launched|scaled|"
-    r"rewrote|refactored)\s+([^.,;]+)",
+    r"rewrote|refactored|sold|closed|negotiated|pitched|coached|presented|"
+    r"hired|taught|partnered)\s+([^.,;]+)",
     re.IGNORECASE,
 )
 _OWNERSHIP_CUES = (
@@ -110,6 +111,13 @@ _OWNERSHIP_CUES = (
     "i reduced",
     "i set",
     "i rewrote",
+    "i sold",
+    "i closed",
+    "i negotiated",
+    "i pitched",
+    "i coached",
+    "i presented",
+    "i hired",
 )
 # Thin first-person actions ("I set TTL…") can proxy for a context ask, but must
 # not also seal ownership — that still needs a dedicated ownership probe.
@@ -126,6 +134,9 @@ _STRONG_OWNERSHIP_CUES = (
     "i was responsible",
     "my responsibility",
     "personally",
+    "i sold",
+    "i closed",
+    "i negotiated",
 )
 # Avoid bare " when " / " at " — those match hobby answers ("when it rains").
 _CONTEXT_CUES = (
@@ -203,6 +214,14 @@ _WORKPLACE_CUES = (
     " incident ",
     " customer ",
     " client ",
+    " account ",
+    " deal ",
+    " quota ",
+    " prospect ",
+    " objection ",
+    " pipeline ",
+    " stakeholder ",
+    " candidate ",
     " monolith ",
     " microservice ",
     " migrated ",

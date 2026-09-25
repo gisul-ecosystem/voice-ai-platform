@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from products.interviewer.agent import CLARIFY_TURN, AaptorAgent
+from products.interviewer.agent import AaptorAgent
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +59,5 @@ async def test_echo_stt_is_not_persisted_as_candidate_turn() -> None:
     async for chunk in agent.llm_node(chat_ctx, [], None):  # type: ignore[arg-type]
         chunks.append(chunk)
 
-    assert "".join(chunks) == CLARIFY_TURN
-    assert [item["speaker"] for item in recorded] == ["agent"]
-    assert recorded[0]["text"] == CLARIFY_TURN
+    assert chunks == []
+    assert recorded == []

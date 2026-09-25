@@ -22,7 +22,7 @@ def test_sample_interview_followups_name_one_evidence_bullet() -> None:
         assert topic, row
         assert "," not in topic
         assert "when, where, or for whom" not in topic
-        assert row["topic_line"] == f"Ask only about this evidence topic: {topic}"
+        assert row["topic_line"].endswith(topic)
         assert topic in row["basis"]
 
     ownership = [row for row in probes if row["phase"] == "Service ownership"]

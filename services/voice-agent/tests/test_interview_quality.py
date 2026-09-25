@@ -153,8 +153,10 @@ async def test_sales_definition_prompt_is_not_technical_script() -> None:
     assert "senior technical interviewer" not in prompt.lower()
     assert "every listed resume project" not in prompt.lower()
     assert "api, schema, queue" not in prompt.lower()
-    assert "POLICY ENGINE" in prompt
-    assert "negotiation" in prompt.lower()
+    assert "They said:" in prompt
+    assert "You still need:" in prompt
+    assert "POLICY ENGINE" not in prompt
+    assert "sales" in prompt.lower()
     assert "api" not in question.lower()
     assert "queue" not in question.lower()
 
@@ -192,7 +194,7 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
         "We used Java and it mostly worked."
     )
     prompt = llm.messages[0][0]["content"]
-    assert "do not lower" in prompt.lower() or "never drop required intents" in prompt.lower()
+    assert "one question" in prompt.lower()
     required = flow.coverage["problem_solving"]["required_intents"]
     assert "establish_ownership" in required
     assert "applied_understanding" in required
@@ -225,6 +227,18 @@ def test_jailbreak_answer_is_off_topic() -> None:
     assert usability == "off_topic"
     assert quality == "off_topic"
     assert covered == []
+
+
+def test_sales_answer_is_not_off_topic() -> None:
+    from products.interviewer.coverage import classify_live_answer
+
+    usability, quality, _covered = classify_live_answer(
+        "I closed a renewal with a retail account after the buyer objected on price.",
+        required_intents=["establish_context", "establish_ownership"],
+        evidence_expected=["customer negotiation", "personal contribution"],
+    )
+    assert usability == "usable"
+    assert quality != "off_topic"
 
 
 def test_work_migration_answer_is_not_off_topic() -> None:

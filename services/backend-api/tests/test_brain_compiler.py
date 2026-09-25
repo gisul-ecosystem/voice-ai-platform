@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from brain.compiler import compile_blueprint
 from brain.extractors import extract_job_intelligence
 from brain.publish import publish_definition, validate_for_publication
-from models.brain import JobIntelligence, JobRoleSummary
+from models.brain import ExtractedItem, JobIntelligence, JobRoleSummary, SourceReference
 
 
 def _approved_job() -> JobIntelligence:
@@ -38,6 +38,31 @@ def _approved_job() -> JobIntelligence:
             ),
         }
     )
+
+
+def test_short_work_scenario_remote_does_not_fail_compile() -> None:
+    job = _approved_job().model_copy(
+        update={
+            "work_scenarios": [
+                ExtractedItem(
+                    id="jd_scen_remote",
+                    text="Remote",
+                    provenance=SourceReference(
+                        source="jd",
+                        source_span="Remote",
+                        confidence=0.5,
+                    ),
+                )
+            ]
+        }
+    )
+    draft = compile_blueprint(
+        job_intelligence=job,
+        creator_competencies=["Discovery quality"],
+    )
+    assert draft.scenario_bank
+    assert all(len(scenario.scenario) >= 8 for scenario in draft.scenario_bank)
+    assert draft.scenario_bank[0].scenario != "Remote"
 
 
 def test_compiler_builds_domain_neutral_blueprint() -> None:

@@ -348,14 +348,17 @@ def _scenario_bank(
     primary = competencies[0]
     scenarios: list[ScenarioDefinition] = []
     for index, item in enumerate(job.work_scenarios[:2], start=1):
-        if contains_prohibited_content(item.text) or contains_prompt_injection(item.text):
+        text = " ".join(item.text.split())
+        if len(text) < 8:
+            continue
+        if contains_prohibited_content(text) or contains_prompt_injection(text):
             continue
         scenarios.append(
             ScenarioDefinition(
                 id=f"scen_{index}_{primary.id}"[:64],
                 competency_id=primary.id,
                 level=job.role.target_level,
-                scenario=item.text[:2000],
+                scenario=text[:2000],
                 expected_evidence=primary.evidence_expected[:4],
                 source="ai_generated",
                 approved=False,

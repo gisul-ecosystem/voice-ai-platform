@@ -77,6 +77,8 @@ class PolicyDecision:
     gap_kind: str = ""
     basis: str = ""
     probe_shape: str = ""
+    delivery: str = ""
+    move: str = ""
 
 
 @dataclass
@@ -128,6 +130,7 @@ class PolicyState:
     hook_fact: str = ""
     factually_incorrect: bool = False
     last_probe_shape: str = ""
+    previous_competency_id: str | None = None
 
 
 def outline_from_definition(definition: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -271,6 +274,24 @@ _TARGETED_ACTIONS = {
 }
 
 
+_INTENT_MOVE = {
+    "establish_ownership": "their_part",
+    "establish_context": "their_part",
+    "applied_understanding": "the_decision",
+    "problem_or_complexity": "what_changed",
+    "tradeoff_or_transfer": "the_decision",
+}
+
+
+def interviewer_move(*, gap_kind: str, intent: str) -> str:
+    """One pressure change. The subject stays the required evidence."""
+    if (gap_kind or "").strip().lower() == "off_topic":
+        return "cut_back"
+    if (intent or "").strip() in {"final_addition", "closing"}:
+        return "wrap"
+    return _INTENT_MOVE.get((intent or "").strip(), "their_part")
+
+
 def _shape_for_intent(intent: str, state: PolicyState) -> str:
     locked = _INTENT_PROBE_SHAPE.get(intent, "why")
     # Rotate only when the same intent was partially answered. Unclear or thin
@@ -306,7 +327,7 @@ def select_followup_target(state: PolicyState, *, intent: str) -> FollowUpTarget
     if gap == "partial" and hook:
         basis = f"They mentioned {hook}, but {topic} is still missing."
     elif gap == "off_topic":
-        basis = f"The last answer left the competency. Ask only about {topic}."
+        basis = f"The last answer left the competency. Bring the question back toward {topic}."
     elif gap == "contradictory":
         basis = f"The last answer contradicted an earlier claim about {topic}."
     elif gap == "unclear":
@@ -331,6 +352,8 @@ def _attach_followup_target(decision: PolicyDecision, state: PolicyState) -> Pol
     if decision.action not in _TARGETED_ACTIONS:
         if not decision.basis:
             decision.basis = decision.reason
+        decision.delivery = _delivery_mode(decision, state)
+        decision.move = interviewer_move(gap_kind=decision.gap_kind, intent=decision.intent)
         return decision
     intent = decision.intent
     if intent in {"clarify", "rephrase", "gap_check"}:
@@ -344,7 +367,30 @@ def _attach_followup_target(decision: PolicyDecision, state: PolicyState) -> Pol
     decision.probe_shape = decision.probe_shape or target.probe_shape
     if decision.evidence_topic and decision.evidence_topic not in decision.reason:
         decision.reason = f"{decision.reason} — topic: {decision.evidence_topic}"
+    decision.delivery = _delivery_mode(decision, state)
+    decision.move = interviewer_move(
+        gap_kind=decision.gap_kind, intent=intent or decision.intent
+    )
     return decision
+
+
+def _delivery_mode(decision: PolicyDecision, state: PolicyState) -> str:
+    """How a hiring interviewer asks. Not the words they say."""
+    if decision.section in {"opening", "candidate_map", "closing"} or decision.intent in {
+        "opening",
+        "await_introduction",
+        "candidate_map",
+        "closing",
+        "final_addition",
+    }:
+        return "open"
+    previous = state.previous_competency_id
+    current = decision.competency_id
+    if previous and current and previous != current:
+        return "bridge"
+    if decision.gap_kind in {"thin", "unclear", "off_topic", "partial", "contradictory"}:
+        return "press"
+    return "deepen"
 
 
 def _probe_intent(state: PolicyState, fallback: str) -> str:
@@ -517,7 +563,7 @@ def _decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=2,
             competency_id=state.competency_id or state.gap_competency_id,
             intent="establish_context",
-            reason="candidate map complete — move into technical competency baseline",
+            reason="candidate map complete — move into the first competency",
             section="baseline",
         )
 

@@ -81,7 +81,7 @@ def default_question_ladder(
     competency_id: str,
     competency_name: str | None = None,
 ) -> CompetencyLadder:
-    """Technical depth ladder used when no custom ladder is supplied."""
+    """Depth ladder of what to find out. No sample questions — the interviewer writes those."""
     topic = (competency_name or competency_id or "this competency").strip()
     return CompetencyLadder(
         competency_id=competency_id,
@@ -89,32 +89,27 @@ def default_question_ladder(
             QuestionLadderStep(
                 depth=1,
                 intent="establish_context",
-                objective=f"Identify a concrete technical example involving {topic}",
-                example_question=f"Can you describe a technical problem where you used {topic}?",
+                objective=f"A specific situation where they used {topic} in this kind of job",
             ),
             QuestionLadderStep(
                 depth=2,
                 intent="establish_ownership",
-                objective=f"Clarify the candidate's hands-on ownership of {topic}",
-                example_question=f"What part of the {topic} solution did you personally implement?",
+                objective=f"What they personally did on {topic}, apart from other people",
             ),
             QuestionLadderStep(
                 depth=3,
                 intent="applied_understanding",
-                objective=f"Assess the implementation approach for {topic}",
-                example_question=f"How did you implement the {topic} solution, and why did you choose that approach?",
+                objective=f"How they carried out {topic} and why they chose that approach",
             ),
             QuestionLadderStep(
                 depth=4,
                 intent="problem_or_complexity",
-                objective=f"Explore a technical difficulty or constraint in {topic}",
-                example_question=f"What was the hardest technical part of the {topic} solution, and how did you handle it?",
+                objective=f"What was difficult about {topic} and how they handled it",
             ),
             QuestionLadderStep(
                 depth=5,
                 intent="tradeoff_or_transfer",
-                objective=f"Explore trade-offs and alternative designs for {topic}",
-                example_question=f"What trade-off did you make in the {topic} solution, and what would you change now?",
+                objective=f"The trade-off they made on {topic} and what they would do differently",
             ),
         ],
     )

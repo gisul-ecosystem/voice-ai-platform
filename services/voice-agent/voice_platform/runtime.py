@@ -22,7 +22,8 @@ from livekit_adapters import LaptopLLM, LaptopSTT, LaptopTTS
 # asyncio loop and trip LiveKit's "job executor is unresponsive" watchdog.
 _VAD: Any | None = None
 _VAD_MIN_SPEECH = 0.4
-_VAD_MIN_SILENCE = 0.4
+# A breath is not the end of an answer. Commit only after a clear pause.
+_VAD_MIN_SILENCE = 0.65
 
 
 @dataclass(frozen=True)
@@ -101,8 +102,9 @@ def build_agent_session(
         allow_interruptions=True,
         min_interruption_duration=2.5,
         min_interruption_words=6,
-        min_endpointing_delay=0.35,
-        max_endpointing_delay=1.6,
+        # Wait through a mid-answer pause, then reply soon after speech actually stops.
+        min_endpointing_delay=0.25,
+        max_endpointing_delay=0.9,
         resume_false_interruption=True,
         false_interruption_timeout=2.0,
         # Preemptive drafting made the agent commit to replying on partial/paused

@@ -40,7 +40,7 @@ def walk() -> list[dict]:
             (
                 line
                 for line in prompt.splitlines()
-                if line.startswith("Ask only about")
+                if line.startswith("Evidence still missing")
             ),
             "",
         )

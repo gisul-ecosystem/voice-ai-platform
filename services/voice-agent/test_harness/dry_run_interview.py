@@ -259,6 +259,9 @@ def _print_turn(index: int, *, candidate: str | None, agent: str, flow: Intervie
             "section": decision.section,
             "reason": decision.reason,
             "competency_id": decision.competency_id,
+            "evidence_topic": decision.evidence_topic,
+            "gap": decision.gap_kind,
+            "probe_shape": decision.probe_shape,
         },
     )
     print(

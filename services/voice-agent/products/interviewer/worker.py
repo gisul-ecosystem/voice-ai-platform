@@ -798,6 +798,17 @@ def prewarm(proc: JobProcess) -> None:
     )
 
 
+def _interview_load(server: object) -> float:
+    """Count running interviews, not machine CPU.
+
+    The default CPU load crosses the threshold during a single interview on a
+    dev machine. LiveKit then refuses the next room and the candidate waits
+    with no agent.
+    """
+    active = len(getattr(server, "active_jobs", []) or [])
+    return min(active / 4.0, 1.0)
+
+
 def run() -> None:
     validate_startup_configuration()
     cli.run_app(
@@ -809,6 +820,7 @@ def run() -> None:
             # Default 0.7 is based on whole-machine CPU; on a dev box with
             # unrelated apps running, that falsely marks the worker "at
             # capacity" and it refuses to join new interview rooms.
+            load_fnc=_interview_load,
             load_threshold=float(os.getenv("AAPTOR_LOAD_THRESHOLD", "0.95")),
         )
     )

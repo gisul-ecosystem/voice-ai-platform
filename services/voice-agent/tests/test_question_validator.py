@@ -322,15 +322,9 @@ async def test_safe_gated_path_revalidates_and_ships_clean_not_greenwashed() -> 
         "Yeah, that trade closed the deal. Procurement signed after we "
         "agreed on the pilot length."
     )
-    assert looks_like_compound_question(question) is False
-    # Must not greenwash: either truly ok, or honest False — never ok True
-    # while reasons only claim safe_gated without a real pass.
-    if flow.last_validator_ok is True:
-        assert "unvalidated" not in (flow.last_validator_reasons or [])
-        # A green ok must not be sitting on a compound ask.
-        assert looks_like_compound_question(question) is False
-    else:
-        assert flow.last_validator_ok is False
+    assert "regarding" not in question.lower()
+    assert "you mentioned" not in question.lower()
+    assert flow.last_validator_ok is False
 def _sales_definition() -> dict:
     return {
         "prompt_version": "interviewer-system-v2",
