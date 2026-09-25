@@ -327,6 +327,35 @@ def _json_safe_docs(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return safe
 
 
+def build_slate(scorecards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Same competency anchors across candidates for one role. Ratings sit side by side."""
+    columns: dict[str, dict[str, Any]] = {}
+    for card in scorecards:
+        if not isinstance(card, dict):
+            continue
+        session_id = str(card.get("session_id") or "")
+        for item in card.get("competencies") or []:
+            if not isinstance(item, dict):
+                continue
+            competency_id = str(item.get("competency_id") or "")
+            if not competency_id:
+                continue
+            row = columns.setdefault(
+                competency_id,
+                {"competency_id": competency_id, "anchor": item.get("anchor"), "candidates": []},
+            )
+            if item.get("anchor") and not row.get("anchor"):
+                row["anchor"] = item.get("anchor")
+            row["candidates"].append(
+                {
+                    "session_id": session_id,
+                    "rating": item.get("rating"),
+                    "outcome": item.get("outcome"),
+                }
+            )
+    return list(columns.values())
+
+
 def build_transcript_document(
     *,
     session_id: str,
@@ -529,7 +558,17 @@ def build_scorecard_bundle(
             )
             competency_evidence_ids.append(evidence_id)
             if len(excerpts) < 3:
-                excerpts.append(text[:240])
+                stamp = ""
+                for turn in turns or []:
+                    if (
+                        isinstance(turn, dict)
+                        and str(turn.get("turn_id") or "") in turn_ids
+                        and turn.get("created_at")
+                    ):
+                        stamp = str(turn.get("created_at"))
+                        break
+                prefix = f"[{stamp}] " if stamp else ""
+                excerpts.append(f"{prefix}{text[:240]}")
 
         asked_intents = {
             str(item.get("intent") or "").strip()

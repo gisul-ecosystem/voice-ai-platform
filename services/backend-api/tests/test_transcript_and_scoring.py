@@ -487,3 +487,27 @@ async def test_scorecard_review_override_requires_reason() -> None:
         "answer_count",
     }
     assert all(isinstance(value, (int, float)) for value in metrics.values())
+
+
+def test_slate_lines_candidates_up_on_the_same_competency() -> None:
+    from brain.scoring import build_slate
+
+    rows = build_slate(
+        [
+            {
+                "session_id": "ses_one",
+                "competencies": [
+                    {"competency_id": "ownership", "rating": 4, "anchor": "Owned the service", "outcome": "scored"}
+                ],
+            },
+            {
+                "session_id": "ses_two",
+                "competencies": [
+                    {"competency_id": "ownership", "rating": 2, "anchor": "Owned the service", "outcome": "scored"}
+                ],
+            },
+        ]
+    )
+    assert rows[0]["competency_id"] == "ownership"
+    assert [item["session_id"] for item in rows[0]["candidates"]] == ["ses_one", "ses_two"]
+    assert rows[0]["anchor"] == "Owned the service"

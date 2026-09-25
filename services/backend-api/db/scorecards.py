@@ -36,6 +36,20 @@ async def save_scorecard(scorecard: InterviewScorecard) -> str:
     return "created"
 
 
+async def list_scorecards_for_definition(definition_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    definition_id = (definition_id or "").strip()
+    if not definition_id:
+        return []
+    cursor = get_db().interview_scorecards.find({"definition_id": definition_id})
+    rows = await cursor.sort("created_at", -1).to_list(max(1, min(limit, 100)))
+    cleaned: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item.pop("_id", None)
+        cleaned.append(item)
+    return cleaned
+
+
 async def get_scorecard(session_id: str) -> dict[str, Any] | None:
     session_id = (session_id or "").strip()
     if not session_id:

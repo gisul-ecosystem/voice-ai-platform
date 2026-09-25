@@ -1,6 +1,7 @@
 """Provider-neutral interview question flow."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -734,6 +735,8 @@ _BOT_PHRASES = (
     "what parts of",
     "how did you determine",
     "can you describe",
+    "most challenging",
+    "highlight of",
 )
 _RUBRIC_LABELS = frozenset(
     {
@@ -752,6 +755,21 @@ _MOVE_CUES = {
     "the_decision": ("decid", "instead", "chose", "choice", "option", "turned down", "why"),
     "what_changed": ("chang", "result", "outcome", "impact", "because of"),
 }
+
+
+def plain_spoken(noun: str, move: str) -> str:
+    """One spoken sentence when the model will not say the work. Not a rubric line."""
+    work = (noun or "").strip()
+    if not work or work == "the work they described":
+        work = "that work"
+    lines = {
+        "their_part": f"On {work}, what did you own?",
+        "the_decision": f"On {work}, why that choice?",
+        "what_changed": f"On {work}, what came of it?",
+        "cut_back": f"Let's stay on {work}.",
+        "wrap": f"One last thing on {work}.",
+    }
+    return lines.get((move or "").strip(), lines["their_part"])
 
 
 def _script_question(question: str) -> bool:
@@ -1643,21 +1661,83 @@ class InterviewFlow:
         entry = self.coverage.get(self.last_question_competency_id or "") or {}
         return bool(entry.get("missing_intents"))
 
-    def _locked_work_noun(self, hook: str, *, evidence_topic: str) -> str:
+    def _locked_work_noun(self, hook: str, *, evidence_topic: str, answer: str = "") -> str:
         """Keep the work they named until that evidence is in. Rubric labels are not the noun."""
         held = (getattr(self, "work_noun", "") or "").strip()
+        if held and not _has_work_signal(held):
+            held = ""
+        named = self._work_phrase(answer)
+        if named and named.lower() not in held.lower():
+            held = ""
         if held and (self._work_still_open() or not self.last_question_competency_id):
             return held
-        candidate = (hook or "").strip()
+        candidate = named or (hook or "").strip()
         rubric = (evidence_topic or "").strip().lower()
+        if named:
+            self.work_noun = named
+            return named
         if (
             candidate
+            and _has_work_signal(candidate)
             and candidate.lower() not in _RUBRIC_LABELS
             and rubric not in candidate.lower()
         ):
             self.work_noun = candidate
             return candidate
-        return held or "the work they described"
+        if held:
+            return held
+        resume_noun = self._resume_work_noun()
+        if resume_noun:
+            self.work_noun = resume_noun
+            return resume_noun
+        return "the work they described"
+
+    def _work_phrase(self, text: str) -> str:
+        lowered = f" {(text or '').lower()} "
+        for cue in (
+            "payments",
+            "payment",
+            "billing",
+            "redis",
+            "negotiation",
+            "price",
+            "buyer",
+            "api",
+            "service",
+            "services",
+            "sales",
+        ):
+            if f" {cue} " in lowered or f" {cue}." in lowered or f" {cue}," in lowered:
+                return cue
+        hook = extract_hook_fact(text or "")
+        if hook and _has_work_signal(hook):
+            return hook
+        return ""
+
+    def _due_work_sample(self) -> str:
+        """The published scenario, asked once, the same words for every candidate."""
+        if getattr(self, "work_sample_asked", False):
+            return ""
+        if not self.current_phase().get("competency_id"):
+            return ""
+        definition = self.interview_definition if isinstance(self.interview_definition, dict) else {}
+        for item in definition.get("scenario_bank") or []:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("scenario") or "").strip()
+            if len(text) < 8:
+                continue
+            self.work_sample_asked = True
+            self.work_sample_text = text
+            return text
+        return ""
+
+    def _resume_work_noun(self) -> str:
+        for source in (self.resume_text, self.job_description):
+            hook = extract_hook_fact(source or "")
+            if hook and _has_work_signal(hook):
+                return hook
+        return ""
 
     def _work_in_play(
         self,
@@ -2062,6 +2142,7 @@ class InterviewFlow:
         work_noun = self._locked_work_noun(
             hook,
             evidence_topic=(decision.evidence_topic if decision else "") or "",
+            answer=last_candidate_turn or "",
         )
         self.last_move = spoken_move
         self.last_work_in_play = work_in_play
@@ -2156,7 +2237,8 @@ class InterviewFlow:
         }
         system = prompt_pack(self._prompt_version())
         if last_candidate_turn:
-            return SPEECH_SYSTEM + "\n\n" + TURN_INSTRUCTIONS_V2.format_map(briefing), last_candidate_turn
+            self.last_speak_prompt = SPEECH_SYSTEM + "\n\n" + TURN_INSTRUCTIONS_V2.format_map(briefing)
+            return self.last_speak_prompt, last_candidate_turn
         return system + "\n\n" + OPENING_INSTRUCTIONS_V2.format_map(briefing), (
             "Open the interview in your own words and invite them to introduce themselves."
         )
@@ -2290,7 +2372,11 @@ class InterviewFlow:
                 memory_note=parsed.memory_note,
             )
             issues: list[str] = []
-            if (policy and policy.delivery != "open") or getattr(
+            if question == getattr(self, "work_sample_text", "") or question == getattr(
+                self, "_spoken_move_text", ""
+            ):
+                pass
+            elif (policy and policy.delivery != "open") or getattr(
                 self, "last_left_interview", False
             ):
                 names = [
@@ -2687,17 +2773,40 @@ class InterviewFlow:
             self._record_answer_quality(
                 last_candidate_turn, is_intro_reply=is_intro_reply
             )
+        work_sample = self._due_work_sample() if last_candidate_turn else ""
         prompt, user_content = self._prompt_for_turn(last_candidate_turn)
+        spoken_move = ""
+        if (
+            last_candidate_turn
+            and not work_sample
+            and not self._uses_legacy_decision_flow()
+        ):
+            spoken_move = plain_spoken(
+                getattr(self, "last_work_noun", ""),
+                getattr(self, "last_move", "") or "their_part",
+            )
+            self._spoken_move_text = spoken_move
 
         started = time.perf_counter()
         policy = self.last_policy_decision
         try:
-            raw = await self.llm_client.generate_reply(
-                [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": user_content},
-                ]
-            )
+            if work_sample or spoken_move:
+                raw = json.dumps(
+                    {
+                        "question": work_sample or spoken_move,
+                        "intent": (policy.intent if policy else "") or "live_question",
+                        "competency_id": (policy.competency_id if policy else "") or "",
+                        "depth": policy.current_depth if policy else 1,
+                        "memory_note": "Spoken from the policy move and the work noun.",
+                    }
+                )
+            else:
+                raw = await self.llm_client.generate_reply(
+                    [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": user_content},
+                    ]
+                )
         except Exception:
             logger.exception(
                 "stage2_question_failed",
@@ -2810,7 +2919,10 @@ class InterviewFlow:
                     if _script_question(generated.question) or "follows_tangent" in (
                         self.last_validator_reasons or []
                     ):
-                        generated.question = ""
+                        generated.question = plain_spoken(
+                            getattr(self, "last_work_noun", ""),
+                            (policy.move if policy else "") or getattr(self, "last_move", ""),
+                        )
                         self.last_validator_ok = False
                         reasons = list(self.last_validator_reasons or [])
                         if "script_line" not in reasons:
@@ -3077,6 +3189,36 @@ class InterviewFlow:
             self._record_answer_quality(
                 last_candidate_turn, is_intro_reply=is_intro_reply
             )
+        if last_candidate_turn and not self._uses_legacy_decision_flow():
+            self._prompt_for_turn(last_candidate_turn)
+            sample = self._due_work_sample()
+            line = sample or plain_spoken(
+                getattr(self, "last_work_noun", ""),
+                getattr(self, "last_move", "") or "their_part",
+            )
+            if not sample:
+                self._spoken_move_text = line
+            started = time.perf_counter()
+            policy = self.last_policy_decision
+            raw = json.dumps(
+                {
+                    "question": line,
+                    "intent": (policy.intent if policy else "") or "live_question",
+                    "competency_id": (policy.competency_id if policy else "") or "",
+                    "depth": policy.current_depth if policy else 1,
+                    "memory_note": "Spoken from the policy move and the work noun.",
+                }
+            )
+            question = await self._complete_generated_turn(
+                raw,
+                last_candidate_turn,
+                started=started,
+                prompt="",
+                user_content="",
+            )
+            if question:
+                yield question
+            return
         prompt, user_content = self._prompt_for_turn(last_candidate_turn)
         started = time.perf_counter()
         policy = self.last_policy_decision

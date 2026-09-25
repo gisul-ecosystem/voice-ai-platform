@@ -191,6 +191,16 @@ def test_generic_ask_is_rejected_even_when_it_names_the_topic() -> None:
     assert "follows_tangent" in training
 
 
+def test_rejected_line_is_still_a_sentence_about_the_work() -> None:
+    from products.interviewer.flow import plain_spoken
+
+    spoken = plain_spoken("payments API", "cut_back")
+    assert spoken
+    assert "payments API" in spoken
+    assert "tell me" not in spoken.lower()
+    assert "specific" not in spoken.lower()
+
+
 def test_craft_uses_this_jobs_evidence_not_a_script() -> None:
     from products.interviewer.prompts import interview_craft
 
@@ -243,10 +253,11 @@ async def test_weak_question_is_rewritten_without_a_stock_line() -> None:
     assert "How did you approach that work?" not in question
     assert "you mentioned" not in question.lower()
     assert "price" in question.lower() or "buyer" in question.lower()
-    rewrite = llm.messages[-1][-1]["content"]
-    assert "They said:" in rewrite
-    assert "You still need:" in rewrite
-    assert "buyer" in rewrite.lower()
+    prompt = flow.last_speak_prompt
+    assert "They said:" in prompt
+    assert "You still need:" in prompt
+    assert "buyer" in prompt.lower()
+    assert llm.messages == []
 
 
 @pytest.mark.asyncio
@@ -280,10 +291,12 @@ async def test_generic_followup_is_replaced_with_their_context() -> None:
     )
     lowered = question.lower()
     assert "you mentioned" not in lowered
-    rewrite = flow.llm_client.messages[-1][-1]["content"]
-    assert "They said:" in rewrite
-    assert "You still need:" in rewrite
-    assert "buyer objected on price" in rewrite.lower()
+    assert "price" in lowered or "buyer" in lowered
+    prompt = flow.last_speak_prompt
+    assert "They said:" in prompt
+    assert "You still need:" in prompt
+    assert "buyer objected on price" in prompt.lower()
+    assert flow.llm_client.messages == []
 
 
 def test_prompt_keeps_hiring_bar_and_human_followup() -> None:

@@ -17,6 +17,18 @@ router = APIRouter(
 )
 logger = logging.getLogger("backend-api.sessions")
 
+
+@router.get(
+    "/slate/{definition_id}",
+    dependencies=[Depends(require_bff_service)],
+)
+async def read_definition_slate(definition_id: str) -> dict:
+    from brain.scoring import build_slate
+    from db import scorecards
+
+    rows = await scorecards.list_scorecards_for_definition(definition_id)
+    return {"definition_id": definition_id, "competencies": build_slate(rows)}
+
 _EXPECTED = {
     "live": ("joining", "live"),
     "completing": ("live", "completing"),

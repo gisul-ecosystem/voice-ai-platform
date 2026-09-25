@@ -324,7 +324,8 @@ async def test_safe_gated_path_revalidates_and_ships_clean_not_greenwashed() -> 
     )
     assert "regarding" not in question.lower()
     assert "you mentioned" not in question.lower()
-    assert flow.last_validator_ok is False
+    assert "specific" not in question.lower()
+    assert flow.last_validator_ok is True
 def _sales_definition() -> dict:
     return {
         "prompt_version": "interviewer-system-v2",

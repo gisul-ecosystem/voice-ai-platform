@@ -149,7 +149,7 @@ async def test_sales_definition_prompt_is_not_technical_script() -> None:
     question = await flow.generate_next_question(
         "I am a final year student and I interned in campus sales."
     )
-    prompt = llm.messages[0][0]["content"]
+    prompt = flow.last_speak_prompt
     assert "senior technical interviewer" not in prompt.lower()
     assert "every listed resume project" not in prompt.lower()
     assert "api, schema, queue" not in prompt.lower()
@@ -193,7 +193,7 @@ async def test_junior_bar_keeps_ownership_intent_for_student_profile() -> None:
     await flow.generate_next_question(
         "We used Java and it mostly worked."
     )
-    prompt = llm.messages[0][0]["content"]
+    prompt = flow.last_speak_prompt
     assert "one question" in prompt.lower()
     required = flow.coverage["problem_solving"]["required_intents"]
     assert "establish_ownership" in required
@@ -300,13 +300,18 @@ async def test_persisted_questions_include_competency_id(monkeypatch) -> None:
         ' "competency_id": "negotiation", "intent": "establish_ownership", "depth": 2,'
         ' "source_claim_ids": []}'
     )
+    from products.interviewer.policy import outline_from_definition
+
+    outline = outline_from_definition(_sales_definition())
     flow = InterviewFlow(
-        {"phases": []},
+        {"phases": list((outline or {}).get("phases") or [])},
         llm,
         interview_definition=_sales_definition(),
-        interviewer_turns=["Thanks for joining. Please introduce yourself."],
+        interviewer_turns=["Thanks for joining.", "Tell me about a deal."],
+        candidate_turns=["I interned in campus sales."],
         resume_text="Campus sales internship.",
         job_description="Enterprise sales.",
+        initial_phase_index=2,
     )
     question = await flow.generate_next_question(
         "I interned in campus sales and spoke with shop owners."
