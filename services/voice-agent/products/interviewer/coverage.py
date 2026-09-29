@@ -22,6 +22,17 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "assigned",
         "customer",
         "client",
+        # Phase 2: Sales/Ops/HR context markers
+        "the deal",
+        "the account",
+        "the prospect",
+        "the buyer",
+        "my territory",
+        "the quarter",
+        "the initiative",
+        "the campaign",
+        "the process",
+        "the candidate",
     ),
     "establish_ownership": (
         "i handled",
@@ -34,6 +45,20 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "i ran",
         "i managed",
         "personally",
+        # Phase 2: Sales/Ops ownership markers
+        "i closed",
+        "i negotiated",
+        "i qualified",
+        "i discovered",
+        "i pitched",
+        "i presented",
+        "i drove",
+        "i coordinated",
+        "i hired",
+        "i onboarded",
+        "i trained",
+        "i analyzed",
+        "i forecasted",
     ),
     "applied_understanding": (
         "how i",
@@ -45,6 +70,14 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "i used",
         "designed",
         "because",
+        # Phase 2: Sales/Ops method markers
+        "my framework",
+        "my strategy",
+        "my process",
+        "the way i",
+        "i structured",
+        "i organized",
+        "i prioritized",
     ),
     "problem_or_complexity": (
         "difficult",
@@ -56,6 +89,18 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "blocked",
         "incident",
         "problem",
+        # Phase 2: Sales/Ops/HR problem markers
+        "objection",
+        "pushback",
+        "blocker",
+        "stalled",
+        "lost",
+        "delayed",
+        "resistance",
+        "conflict",
+        "competitive",
+        "missed",
+        "shortfall",
     ),
     "tradeoff_or_transfer": (
         "tradeoff",
@@ -66,6 +111,13 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "next time",
         "learned",
         "chose",
+        # Phase 2: Reflection markers
+        "looking back",
+        "in hindsight",
+        "if i could",
+        "differently",
+        "mistake",
+        "lesson",
     ),
     "candidate_map": (
         "background",
@@ -179,6 +231,7 @@ _PROBLEM_CUES = (
 _TRADEOFF_CUES = ("instead", "rather than", "trade-off", "tradeoff", "would change")
 # Workplace / role vocabulary that keeps an answer on-topic even without
 # evidence_expected token overlap (ownership dodges still count as work talk).
+# Phase 2: expanded to include Sales, Ops, HR, Marketing, Finance vocabulary.
 _WORKPLACE_CUES = (
     " team ",
     " manager ",
@@ -205,6 +258,27 @@ _WORKPLACE_CUES = (
     " incident ",
     " customer ",
     " client ",
+    " stakeholder ",
+    " buyer ",
+    " prospect ",
+    " account ",
+    " revenue ",
+    " budget ",
+    " quota ",
+    " metric ",
+    " kpi ",
+    " conversion ",
+    " contract ",
+    " deal ",
+    " negotiation ",
+    " procurement ",
+    " pipeline ",
+    " objection ",
+    " partnership ",
+    " operations ",
+    " vendor ",
+    " process ",
+    " workflow ",
     " monolith ",
     " microservice ",
     " migrated ",
@@ -212,8 +286,110 @@ _WORKPLACE_CUES = (
     " fastapi ",
     " deploy ",
     " deployed ",
+    # Phase 2: Sales/BD vocabulary
+    " discovery ",
+    " qualification ",
+    " closing ",
+    " proposal ",
+    " outreach ",
+    " cold call ",
+    " warm lead ",
+    " lead ",
+    " leads ",
+    " territory ",
+    " forecast ",
+    " crm ",
+    " salesforce ",
+    " hubspot ",
+    " enterprise ",
+    " smb ",
+    " champion ",
+    " decision maker ",
+    " authority ",
+    " timeline ",
+    " urgency ",
+    " pain point ",
+    " value prop ",
+    " roi ",
+    " churn ",
+    " retention ",
+    " expansion ",
+    " upsell ",
+    " cross-sell ",
+    " renewal ",
+    " pricing ",
+    " discount ",
+    " terms ",
+    # Phase 2: Ops/PM/General work vocabulary
+    " initiative ",
+    " roadmap ",
+    " backlog ",
+    " sprint ",
+    " agile ",
+    " scrum ",
+    " milestone ",
+    " dependency ",
+    " risk ",
+    " mitigation ",
+    " escalation ",
+    " bottleneck ",
+    " throughput ",
+    " capacity ",
+    " resource ",
+    " allocation ",
+    " timeline ",
+    " deadline ",
+    " deliverable ",
+    " stakeholders ",
+    " alignment ",
+    " coordination ",
+    " handoff ",
+    " onboarding ",
+    " training ",
+    " documentation ",
+    " sop ",
+    " playbook ",
+    # Phase 2: HR/Recruiting/People vocabulary
+    " candidate ",
+    " candidates ",
+    " hiring ",
+    " interview ",
+    " offer ",
+    " compensation ",
+    " headcount ",
+    " requisition ",
+    " pipeline ",
+    " sourcing ",
+    " screening ",
+    " onboard ",
+    " performance ",
+    " feedback ",
+    " 1-on-1 ",
+    " one-on-one ",
+    " retention ",
+    " attrition ",
+    " engagement ",
+    " culture ",
+    # Phase 2: Finance/Accounting vocabulary
+    " forecast ",
+    " variance ",
+    " accrual ",
+    " reconciliation ",
+    " ledger ",
+    " journal ",
+    " accounts payable ",
+    " accounts receivable ",
+    " cash flow ",
+    " burn rate ",
+    " runway ",
+    " ebitda ",
+    " margin ",
+    " cost center ",
+    " profit ",
+    " loss ",
 )
-# Stem hits catch plurals / tense variants (services, migrated, payments).
+# Stem hits catch plurals / tense variants (services, migrated, payments, negotiations).
+# Phase 2: expanded to include Sales, Ops, HR, Marketing stems for domain-neutral coverage.
 _TECH_STEMS = (
     "servic",
     "migrat",
@@ -240,6 +416,92 @@ _TECH_STEMS = (
     "webhook",
     "retries",
     "retry",
+    # Phase 2: Sales/BD stems
+    "negotiat",
+    "qualif",
+    "prospect",
+    "stakehold",
+    "discover",
+    "object",  # objection
+    "pipelin",
+    "procure",
+    "converte",  # converted
+    "convert",
+    "deliver",
+    "forecast",
+    "territori",  # territory
+    "enterpris",  # enterprise
+    "upsell",
+    "cross-sell",
+    "renew",  # renewal
+    "churn",
+    "retain",  # retention
+    "expan",  # expansion
+    "closin",  # closing
+    "propos",  # proposal
+    "outreach",
+    "champion",
+    "author",  # authority (but also catches "author" — acceptable tradeoff)
+    "urgenc",  # urgency
+    "pain",  # pain point
+    "metric",
+    # Phase 2: Ops/PM/General stems
+    "operat",
+    "execut",
+    "improv",
+    "optimiz",
+    "initiat",  # initiative
+    "roadmap",
+    "backlog",
+    "sprint",
+    "agile",
+    "scrum",
+    "mileston",  # milestone
+    "depend",  # dependency
+    "mitigat",  # mitigation
+    "escalat",  # escalation
+    "bottleneck",
+    "throughput",
+    "capac",  # capacity
+    "resourc",  # resource
+    "allocat",  # allocation
+    "deadlin",  # deadline
+    "deliverab",  # deliverable
+    "align",  # alignment
+    "coordinat",  # coordination
+    "handoff",
+    "onboard",  # onboarding
+    "train",  # training
+    "document",  # documentation
+    "playbook",
+    # Phase 2: HR/Recruiting stems
+    "candidat",  # candidate
+    "hirin",  # hiring
+    "interv",  # interview (catches interviewer, interviewed, etc.)
+    "compens",  # compensation
+    "headcount",
+    "requisit",  # requisition
+    "sourc",  # sourcing
+    "screen",  # screening
+    "perform",  # performance
+    "feedback",
+    "attrition",
+    "engag",  # engagement
+    "cultur",  # culture
+    # Phase 2: Finance/Accounting stems
+    "varianc",  # variance
+    "accrual",
+    "reconcil",  # reconciliation
+    "ledger",
+    "journal",
+    "payabl",  # payable
+    "receivabl",  # receivable
+    "cash flow",
+    "burn",  # burn rate
+    "runway",
+    "ebitda",
+    "margin",
+    "profit",
 )
 _WEAK_OBJECTS = frozenset({"it", "that", "this", "them", "things", "stuff"})
 _STOP_TOKENS = frozenset(
