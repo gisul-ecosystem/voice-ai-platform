@@ -168,6 +168,10 @@ class PolicyState:
     #   Formula: 0.55 + weight/100 * 0.35, range 0.55-0.90.
     required_questions: int = 1
     depth_target: float = 0.55
+    # Phase 4: Belief Judge fields for credibility-based follow-up decisions
+    last_answer_credibility: str = "believable"  # "believable" | "questionable" | "likely_fabricated"
+    last_credibility_signals: list[str] = field(default_factory=list)
+    previous_facts: list[str] = field(default_factory=list)  # For contradiction checking
 
 
 def outline_from_definition(
@@ -841,6 +845,29 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             competency_id=state.competency_id,
             intent=intent,
             reason="progressive depth — baseline concept followed by applied method",
+            section="competency_assessment",
+        )
+
+    # Phase 4: Belief Judge integration - determine if credibility warrants probing
+    from products.interviewer.belief_judge import should_probe_deeper
+    belief_probe_needed = should_probe_deeper(
+        credibility_assessment=state.last_answer_credibility,
+        credibility_signals=state.last_credibility_signals,
+        technical_substance="partial"  # Default assumption for this context
+    )
+    
+    # If credibility is questionable/fabricated, force a probe to verify claims
+    if belief_probe_needed and depth < state.max_depth and state.probe_count < state.max_probes:
+        probe_action = PROBE_FOR_CONSISTENCY if "contradicts_fact" in str(state.last_credibility_signals) else PROBE_FOR_METHOD
+        return PolicyDecision(
+            action=probe_action,
+            forced_flow_decision="probe", 
+            allow_llm_decision=False,
+            current_depth=depth,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="verify_claims",
+            reason=f"credibility assessment '{state.last_answer_credibility}' warrants verification probe",
             section="competency_assessment",
         )
 

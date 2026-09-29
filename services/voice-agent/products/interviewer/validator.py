@@ -346,7 +346,28 @@ KNOWN_INTENTS = frozenset(
         "resume_project",
     }
 )
-KNOWN_INTENTS = frozenset(INTENT_PROBE_ALIASES) | STANDARD_ASSESSMENT_INTENTS | SKIP_HOOK_INTENTS
+
+BLOCKING_REASONS = frozenset(
+    {
+        "empty_question",
+        "compound_question",
+        "protected_topic",
+        "competency_label_spoken",
+        "duplicate_question",
+        "repeated_question_frame",
+        "adjacent_near_duplicate",
+        "project_in_competency_question",
+        "competency_mismatch",
+        "section_violation",
+        "generic_parrot_question",
+        "generic_learning_question",
+        "trivia_question",
+        "non_job_trivia",
+        "ungrounded_term",
+        "resume_project_ungrounded",
+        "invalid_hook_phrase",
+    }
+)
 
 _ACTION_TO_INTENT = {
     "PROBE_FOR_CONTEXT": "establish_context",
@@ -410,6 +431,14 @@ class AnswerEvaluation:
       needs_clarification: true only when the answer itself is too ambiguous to score
         confidently (unclear pronouns, contradictions, cut-off sentences) — distinct
         from "surface", which means a clear but shallow answer.
+      
+      Phase 4 — Belief Judge fields:
+      credibility_assessment: "believable" | "questionable" | "likely_fabricated"
+        - believable: consistent details, specific context, reasonable scope claims
+        - questionable: vague details, inconsistencies, or overly broad claims that need verification  
+        - likely_fabricated: clear signs of fabrication (impossible claims, textbook parroting, contradictions)
+      credibility_signals: list of specific patterns that influenced the credibility assessment
+        e.g. ["vague_ownership", "unrealistic_scale", "buzzword_heavy", "missing_context"]
 
     Score-mapping threshold (single source of truth other modules reference):
       factually_correct == False -> unclear -> weak, regardless of technical_substance.
@@ -430,6 +459,9 @@ class AnswerEvaluation:
     slots_demonstrated: list[str] = field(default_factory=list)
     slots_claimed: list[str] = field(default_factory=list)
     contradicts_earlier: bool = False
+    # Phase 4: Belief Judge fields
+    credibility_assessment: str = "believable"  # "believable" | "questionable" | "likely_fabricated" 
+    credibility_signals: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -442,6 +474,9 @@ class AnswerEvaluation:
             "slots_demonstrated": list(self.slots_demonstrated),
             "slots_claimed": list(self.slots_claimed),
             "contradicts_earlier": self.contradicts_earlier,
+            # Phase 4: Belief Judge fields
+            "credibility_assessment": self.credibility_assessment,
+            "credibility_signals": list(self.credibility_signals),
         }
 
 
@@ -479,6 +514,18 @@ def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
             if str(item).strip().lower() in valid_slots
         ]
 
+    # Phase 4: Parse Belief Judge fields
+    credibility = str(payload.get("credibility_assessment") or "believable").strip().lower()
+    if credibility not in {"believable", "questionable", "likely_fabricated"}:
+        credibility = "believable"
+    
+    credibility_signals_raw = payload.get("credibility_signals")
+    credibility_signals = (
+        [str(item).strip() for item in credibility_signals_raw if str(item).strip()]
+        if isinstance(credibility_signals_raw, list)
+        else []
+    )
+
     return AnswerEvaluation(
         technical_substance=substance,  # type: ignore[arg-type]
         key_facts_stated=facts[:20],
@@ -489,6 +536,9 @@ def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
         slots_demonstrated=slots("slots_demonstrated"),
         slots_claimed=slots("slots_claimed"),
         contradicts_earlier=bool(payload.get("contradicts_earlier")),
+        # Phase 4: Belief Judge fields
+        credibility_assessment=credibility,
+        credibility_signals=credibility_signals[:10],  # Limit to 10 signals
     )
 
 
@@ -679,13 +729,27 @@ def _grounding_terms(text: str) -> set[str]:
     }
 
 
-def _near_duplicate(left: str, right: str) -> bool:
+def _near_duplicate(left: str, right: str, threshold: float = 0.7) -> bool:
     left_tokens = _question_tokens(left)
     right_tokens = _question_tokens(right)
     if len(left_tokens) < 2 or len(right_tokens) < 2:
         return False
     overlap = len(left_tokens & right_tokens)
-    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.7
+    return overlap / min(len(left_tokens), len(right_tokens)) >= threshold
+
+
+def _same_question_frame(left: str, right: str) -> bool:
+    """Return True if left and right share the same opening question frame/stem."""
+    p_left = prefix_tokens(left, count=5)
+    p_right = prefix_tokens(right, count=5)
+    if len(p_left) >= 4 and len(p_right) >= 4:
+        # Match common frames like "can you describe the specific"
+        if p_left[:4] == p_right[:4]:
+            return True
+        overlap = len(set(p_left[:5]) & set(p_right[:5]))
+        if overlap >= 4:
+            return True
+    return False
 
 
 def parse_generated_question(raw: str) -> GeneratedQuestion | None:
@@ -869,6 +933,29 @@ def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
 
 
 
+def looks_like_compound_question(text: str) -> bool:
+    """Return True if the text asks two questions in one response."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return False
+    # If there are 2 or more question marks, it's definitely compound
+    if cleaned.count("?") >= 2:
+        return True
+    lowered = cleaned.lower()
+    # Check for conjunction joining two ask clauses with single question mark
+    # e.g., "... and if you...", "... and how did you...", "... and what happened..."
+    compound_patterns = (
+        r",\s*and\s+(?:how|what|why|did|could|would|if|where|when)\b",
+        r"\band\s+if\s+you\b",
+        r"\band\s+how\s+did\s+you\b",
+        r"\band\s+what\s+(?:happened|did|was|were)\b",
+    )
+    for pat in compound_patterns:
+        if re.search(pat, lowered):
+            return True
+    return False
+
+
 def _looks_like_non_job_trivia(question: str, *, corpus: str) -> bool:
     """Block puzzles/acronym drills unless clearly applied to the candidate's work."""
     lowered = (question or "").lower()
@@ -927,6 +1014,19 @@ _TECHNICAL_LEARNING_COMPETENCIES = frozenset({
     "transfer learning", "federated learning", "meta-learning",
     "online learning", "active learning",
 })
+
+
+def speaks_competency_label(question: str, competency_name: str) -> bool:
+    """True when the question speaks the admin rubric competency name verbatim as a noun phrase."""
+    q_low = (question or "").lower()
+    name_low = (competency_name or "").strip().lower()
+    if not name_low or len(name_low) < 3:
+        return False
+    # If the name is multiple words like 'Role expertise', check exact phrase match
+    pattern = rf"\b{re.escape(name_low)}\b"
+    if re.search(pattern, q_low):
+        return True
+    return False
 
 
 def _is_generic_learning_question(lowered: str, *, policy_competency_id: str | None = None,
@@ -998,11 +1098,19 @@ def validate_generated_question(
     ):
         reasons.append("generic_learning_question")
     live_probe = (policy_intent or "") not in SKIP_HOOK_INTENTS
+    if hook_fact and not is_clean_hook_fact(hook_fact):
+        reasons.append("invalid_hook_phrase")
     # Hook details and probe-shape rotation guide wording, but do not reject a
     # question that is otherwise safe, grounded, policy-compatible, and unique.
 
     expected_competency = (policy_competency_id or "").strip().lower()
     gen_comp = (generated.competency_id or "").strip().lower()
+    if definition and isinstance(definition.get("competencies"), list):
+        for comp in definition["competencies"]:
+            c_name = str(comp.get("name") or "")
+            if speaks_competency_label(question, c_name):
+                reasons.append("competency_label_spoken")
+                break
     if expected_competency and gen_comp and gen_comp != expected_competency:
         expected_tokens = set(re.findall(r"[a-z0-9]+", expected_competency))
         gen_tokens = set(re.findall(r"[a-z0-9]+", gen_comp))
@@ -1107,13 +1215,7 @@ def validate_generated_question(
     if _looks_like_non_job_trivia(question, corpus=corpus):
         reasons.append("non_job_trivia")
 
-    if _looks_like_non_job_trivia(question, corpus=corpus):
-        reasons.append("non_job_trivia")
-
-    # We still collect all reasons for logging and analysis, but we only block
-    # the question (force fallback) if it is genuinely empty. We want the real LLM
-    # generated question to reach TTS, despite minor stylistic issues.
-    ok = "empty_question" not in reasons
+    ok = not any(reason in BLOCKING_REASONS for reason in reasons)
     normalized = GeneratedQuestion(
         question=question,
         competency_id=expected_competency or generated.competency_id,

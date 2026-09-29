@@ -1107,6 +1107,10 @@ class InterviewFlow:
             # Phase 0 (spec 4.1): formula-driven behaviour from blueprint.
             required_questions=_required_questions,
             depth_target=_depth_target,
+            # Phase 4: Belief Judge credibility assessment from last answer
+            last_answer_credibility=getattr(self.last_answer_evaluation, "credibility_assessment", "believable") if self.last_answer_evaluation else "believable",
+            last_credibility_signals=getattr(self.last_answer_evaluation, "credibility_signals", []) if self.last_answer_evaluation else [],
+            previous_facts=list(self.known_facts.get(competency_id or "", []))[:20],  # Limit for performance
         )
 
     def _first_competency_phase_index(self) -> int | None:
