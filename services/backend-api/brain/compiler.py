@@ -9,6 +9,7 @@ import hashlib
 import re
 from typing import Iterable
 
+from brain import blueprint_formula
 from brain.defaults import (
     DEFAULT_ALLOWED_PROBES,
     DEFAULT_ENDING_POLICY,
@@ -26,8 +27,12 @@ from models.brain import (
     ExtractedItem,
     InterviewDefinitionDraft,
     JobIntelligence,
+    LevelAnchors,
+    QuestioningMode,
+    RigorLevel,
     RubricAnchor,
     ScenarioDefinition,
+    SectionDefinition,
     SeniorityLevel,
 )
 
@@ -323,6 +328,9 @@ def _build_competency(
     required: bool = True,
     definition: str | None = None,
     evidence_expected: list[str] | None = None,
+    allowed_intents: list[str] | None = None,
+    evaluation_lens: str | None = None,
+    level_anchors: LevelAnchors | None = None,
 ) -> CompetencyDefinition:
     evidence = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
     if not evidence:
@@ -345,6 +353,38 @@ def _build_competency(
         max_probes=3 if level in {"intern", "junior"} else 4,
         rubric=_role_rubric(name, level, hints),
         weight=round(weight, 2),
+        allowed_intents=[item.strip() for item in (allowed_intents or []) if item.strip()] or None,
+        evaluation_lens=(evaluation_lens or "").strip()[:200] or None,
+        level_anchors=level_anchors,
+    )
+
+
+def _anchors_from_rubric(rubric: list[RubricAnchor]) -> LevelAnchors:
+    """Derive weak/strong anchors from the 1/5 rubric anchors (spec 4.4)."""
+    by_rating = {anchor.rating: anchor.description for anchor in rubric}
+    weak = by_rating.get(1) or next(iter(rubric)).description
+    strong = by_rating.get(5) or rubric[-1].description
+    return LevelAnchors(weak=weak[:500], strong=strong[:500])
+
+
+def _apply_weight_formula(
+    competency: CompetencyDefinition,
+    *,
+    weight: float,
+) -> CompetencyDefinition:
+    """Populate formula-driven behaviour fields (spec 4.1).
+
+    Admins only move the weight slider; the deterministic conversion lives
+    in brain/blueprint_formula.py.
+    """
+    return competency.model_copy(
+        update={
+            "required_questions": blueprint_formula.required_questions(weight),
+            "max_probes": blueprint_formula.max_probes(weight),
+            "depth_target": blueprint_formula.depth_target(weight),
+            "level_anchors": competency.level_anchors
+            or _anchors_from_rubric(competency.rubric),
+        }
     )
 
 
@@ -434,6 +474,50 @@ def _scenario_bank(
     ]
 
 
+def _resolve_sections(
+    *,
+    sections: list[SectionDefinition] | None,
+    competencies: list[CompetencyDefinition],
+    questioning_mode: QuestioningMode,
+    duration_minutes: DurationMinutes,
+    formula_mode: bool,
+) -> list[SectionDefinition]:
+    """Choose the section plan for the draft (spec 4.4).
+
+    Caller-provided sections win only when they reference compiled competency
+    ids exactly; otherwise legacy drafts get no sections and formula-mode
+    drafts get one auto-grouped section covering every competency.
+    """
+    if not competencies:
+        return []
+    known_ids = {item.id for item in competencies}
+    if sections:
+        referenced: set[str] = set()
+        usable = True
+        for section in sections:
+            for competency_id in section.competency_ids:
+                if competency_id not in known_ids or competency_id in referenced:
+                    usable = False
+                    break
+                referenced.add(competency_id)
+            if not usable:
+                break
+        if usable and referenced == known_ids:
+            return sorted(sections, key=lambda section: section.order)
+    if not formula_mode:
+        return []
+    return [
+        SectionDefinition(
+            id="competency_assessment",
+            order=1,
+            type=questioning_mode,
+            max_minutes=int(duration_minutes),
+            competency_ids=[item.id for item in competencies],
+            is_warmup=False,
+        )
+    ]
+
+
 def compile_blueprint(
     *,
     job_intelligence: JobIntelligence,
@@ -446,11 +530,22 @@ def compile_blueprint(
     creator_exclusive: bool = False,
     resume_required: bool = False,
     include_scenarios: bool = True,
+    competency_weights: list[float] | None = None,
+    questioning_mode: QuestioningMode = "adaptive",
+    sections: list[SectionDefinition] | None = None,
+    rigor: RigorLevel = "balanced",
 ) -> InterviewDefinitionDraft:
     """Build a reviewable InterviewDefinitionDraft from JD intelligence.
 
     Competencies are the interview structure. Prefer LLM recommendations when
     provided; otherwise seed from creator guidance + JD heuristics.
+
+    Weight-formula mode (spec 4.1/4.4): when ``competency_weights`` is
+    provided (or the caller explicitly opts in via non-default
+    ``questioning_mode``/``rigor``), raw slider weights are normalized to a
+    mass of 100 and converted into required_questions / max_probes /
+    depth_target, and the draft gains explicit sections. With no weight input
+    the legacy level-based behaviour is emitted unchanged.
     """
     if not job_intelligence.raw_job_description.strip():
         raise ValueError("job_intelligence.raw_job_description is required")
@@ -479,7 +574,22 @@ def compile_blueprint(
         seed_names,
         creator_exclusive=exclusive,
     )
-    weights = _importance_weights([seed[3] for seed in seeds])
+    # Weight-formula mode (spec 4.1): explicit slider weights win when they
+    # line up with the seeded competencies; otherwise legacy mass-splitting.
+    formula_mode = (
+        competency_weights is not None
+        or questioning_mode != "adaptive"
+        or rigor != "balanced"
+        or bool(sections)
+    )
+    if (
+        formula_mode
+        and competency_weights is not None
+        and len(competency_weights) == len(seeds)
+    ):
+        weights = blueprint_formula.normalize_weights(competency_weights)
+    else:
+        weights = _importance_weights([seed[3] for seed in seeds])
     used_ids: set[str] = set()
     competencies: list[CompetencyDefinition] = []
 
@@ -498,20 +608,38 @@ def compile_blueprint(
             if isinstance(llm_evidence, list)
             else None
         )
+        llm_intents = enriched.get("allowed_intents")
+        intents_list = (
+            [str(x).strip() for x in llm_intents if str(x).strip()]
+            if isinstance(llm_intents, list)
+            else None
+        )
+        llm_lens = str(enriched.get("evaluation_lens") or "").strip() or None
+        anchors_raw = enriched.get("level_anchors")
+        level_anchors = None
+        if isinstance(anchors_raw, dict):
+            weak = str(anchors_raw.get("weak") or "").strip()
+            strong = str(anchors_raw.get("strong") or "").strip()
+            if len(weak) >= 4 and len(strong) >= 4:
+                level_anchors = LevelAnchors(weak=weak[:500], strong=strong[:500])
         if enriched and "required" in enriched:
             required = bool(enriched.get("required"))
-        competencies.append(
-            _build_competency(
-                competency_id=competency_id,
-                name=name,
-                hints=hints,
-                level=level,
-                weight=weight,
-                required=required,
-                definition=llm_definition or core_defs.get(id_base),
-                evidence_expected=evidence_list,
-            )
+        competency = _build_competency(
+            competency_id=competency_id,
+            name=name,
+            hints=hints,
+            level=level,
+            weight=weight,
+            required=required,
+            definition=llm_definition or core_defs.get(id_base),
+            evidence_expected=evidence_list,
+            allowed_intents=intents_list,
+            evaluation_lens=llm_lens,
+            level_anchors=level_anchors,
         )
+        if formula_mode:
+            competency = _apply_weight_formula(competency, weight=weight)
+        competencies.append(competency)
 
     ladders = [
         default_question_ladder(item.id, item.name)
@@ -519,6 +647,14 @@ def compile_blueprint(
     ]
     role_title = job_intelligence.role.title.strip() or "Interview"
     draft_title = (title or f"{role_title} interview").strip()[:160]
+
+    final_sections = _resolve_sections(
+        sections=sections,
+        competencies=competencies,
+        questioning_mode=questioning_mode,
+        duration_minutes=duration_minutes,
+        formula_mode=formula_mode,
+    )
 
     return InterviewDefinitionDraft(
         title=draft_title if len(draft_title) >= 2 else "Structured interview",
@@ -538,4 +674,6 @@ def compile_blueprint(
         scoring_policy=DEFAULT_SCORING_POLICY,
         prompt_version=DEFAULT_PROMPT_VERSION,
         resume_required=resume_required,
+        sections=final_sections,
+        rigor=rigor,
     )

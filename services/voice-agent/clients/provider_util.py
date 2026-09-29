@@ -5,7 +5,6 @@ import logging
 
 from clients.errors import ProviderConfigError
 from clients.settings import (
-    DEEPGRAM_API_KEY,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BASE_URL,
     LLM_API_KEY,
@@ -23,14 +22,13 @@ SELF_HOSTED_ALIASES = frozenset(
 )
 OPENAI_ALIASES = frozenset({"openai", "openai_api", "api"})
 ELEVENLABS_ALIASES = frozenset({"elevenlabs", "eleven_labs", "eleven-labs", "11labs"})
-DEEPGRAM_ALIASES = frozenset({"deepgram", "deep_gram"})
 SARVAM_ALIASES = frozenset({"sarvam", "sarvaam", "saaras", "s3", "saaras_v3", "saaras:v3"})
-KEYED_PROVIDERS = frozenset({"openai", "sarvam", "elevenlabs", "deepgram"})
+KEYED_PROVIDERS = frozenset({"openai", "sarvam", "elevenlabs"})
 
 SUPPORTED_BY_SERVICE = {
     "llm": frozenset({"self_hosted", "openai"}),
     "stt": frozenset({"self_hosted", "openai", "sarvam"}),
-    "tts": frozenset({"self_hosted", "openai", "elevenlabs", "deepgram"}),
+    "tts": frozenset({"self_hosted", "openai", "elevenlabs"}),
 }
 
 _ENV_KEY = {"llm": LLM_API_KEY, "stt": STT_API_KEY, "tts": TTS_API_KEY}
@@ -55,15 +53,13 @@ def normalize_provider(
         provider = "sarvam"
     elif name in ELEVENLABS_ALIASES:
         provider = "elevenlabs"
-    elif name in DEEPGRAM_ALIASES:
-        provider = "deepgram"
 
     if provider is None:
         raise ProviderConfigError(
             service or "inference",
             name,
             f"Unknown provider {name!r}. Use self_hosted, openai, sarvam, "
-            "elevenlabs, or deepgram.",
+            "or elevenlabs.",
         )
 
     if service is not None:
@@ -87,7 +83,7 @@ def normalize_provider(
 
 
 def resolve_api_key(service: str, provider: str, api_key_override: str | None) -> str:
-    if api_key_override is not None:
+    if api_key_override and api_key_override.strip():
         return api_key_override.strip()
     specific = (_ENV_KEY.get(service) or "").strip()
     if specific:
@@ -98,8 +94,6 @@ def resolve_api_key(service: str, provider: str, api_key_override: str | None) -
         return OPENAI_API_KEY
     if provider == "elevenlabs":
         return ELEVENLABS_API_KEY or TTS_API_KEY
-    if provider == "deepgram":
-        return DEEPGRAM_API_KEY or TTS_API_KEY
     return ""
 
 
@@ -109,7 +103,6 @@ def require_key_if_needed(service: str, provider: str, api_key: str) -> None:
             "openai": "OPENAI_API_KEY",
             "sarvam": "SARVAM_API_KEY",
             "elevenlabs": "ELEVENLABS_API_KEY",
-            "deepgram": "DEEPGRAM_API_KEY",
         }[provider]
         extra = f" or {provider_env}"
         env_names = f"{service.upper()}_API_KEY{extra}"
@@ -117,7 +110,7 @@ def require_key_if_needed(service: str, provider: str, api_key: str) -> None:
             service,
             provider,
             f"{service.upper()} provider {provider!r} requires an API key. "
-            f"Set {env_names} in the worker secret environment.",
+            f"Pass {service}_api_key in room metadata or set {env_names}.",
         )
 
 

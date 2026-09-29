@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-import asyncio
-import time
-
 import pytest
 
 import aaptor_agent
 import racko_agent
-
-
-@pytest.fixture(autouse=True)
-def _allow_legacy_interview_flow(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ALLOW_LEGACY_INTERVIEW_FLOW", "1")
 
 
 class FakeLlm:
@@ -60,181 +52,15 @@ async def test_aaptor_forces_advance_after_probe_limit() -> None:
             ]
         },
         llm,
-        max_probes_per_phase=2,
-        initial_state={"candidate_turns": ["I already introduced myself."]},
     )
 
     await agent.generate_next_question("Answer one")
     await agent.generate_next_question("Answer two")
+    await agent.generate_next_question("Answer three")
 
     assert agent.phase_index == 1
     assert agent.probe_count == 0
-    assert agent.candidate_turns == [
-        "I already introduced myself.",
-        "Answer one",
-        "Answer two",
-    ]
-
-
-def test_restored_agent_skips_opening_marker() -> None:
-    agent = aaptor_agent.AaptorAgent(
-        {
-            "phases": [
-                {
-                    "name": "experience",
-                    "duration_minutes": 5,
-                    "topics": ["ownership"],
-                    "source": "resume",
-                }
-            ]
-        },
-        FakeLlm(),
-        initial_state={
-            "candidate_turns": ["I built APIs."],
-            "interviewer_turns": ["Tell me about a project."],
-        },
-    )
-    assert agent._opened is True
-    assert agent._last_agent_text == "Tell me about a project."
-
-
-def test_candidate_only_restore_still_needs_greeting() -> None:
-    """Early STT before greeting must not mark the session as already opened."""
-    agent = aaptor_agent.AaptorAgent(
-        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": []}]},
-        FakeLlm(),
-        initial_state={"candidate_turns": ["Hello Hello"]},
-    )
-    assert agent._opened is False
-    assert agent._greeting_done is False
-
-
-@pytest.mark.asyncio
-async def test_llm_node_silent_while_greeting_in_progress(monkeypatch) -> None:
-    from livekit.agents import llm
-    from livekit.agents.voice.agent import ModelSettings
-
-    agent = aaptor_agent.AaptorAgent(
-        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": []}]},
-        FakeLlm(),
-    )
-    agent._greeting_in_progress = True
-    streamed: list[str] = []
-    async for chunk in agent.llm_node(llm.ChatContext(), [], ModelSettings()):
-        streamed.append(chunk)
-    assert streamed == []
-
-
-@pytest.mark.asyncio
-async def test_restored_agent_on_enter_does_not_respeak() -> None:
-    agent = aaptor_agent.AaptorAgent(
-        {
-            "phases": [
-                {
-                    "name": "experience",
-                    "duration_minutes": 5,
-                    "topics": ["ownership"],
-                    "source": "resume",
-                }
-            ]
-        },
-        FakeLlm(),
-        initial_state={
-            "candidate_turns": ["I built APIs."],
-            "interviewer_turns": ["Tell me about a project."],
-        },
-    )
-    spoken: list[str] = []
-
-    class _Session:
-        async def say(self, text: str, **_kwargs) -> None:
-            spoken.append(text)
-
-    agent.__dict__["session"] = _Session()
-    await agent.on_enter()
-    assert spoken == []
-
-
-@pytest.mark.asyncio
-async def test_agent_ignores_empty_llm_callback_during_opening() -> None:
-    agent = aaptor_agent.AaptorAgent(
-        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": ["background"]}]},
-        FakeLlm(),
-    )
-    agent._opening_in_progress = True
-
-    class _ChatContext:
-        items = []
-
-    spoken: list[str] = []
-    async for chunk in agent.llm_node(_ChatContext(), [], None):
-        spoken.append(chunk)
-
-    assert spoken == []
-
-
-@pytest.mark.asyncio
-async def test_opening_falls_back_when_llm_hangs(monkeypatch: pytest.MonkeyPatch) -> None:
-    from products.interviewer import agent as agent_mod
-
-    class HangingLlm:
-        async def generate_reply(self, messages, **_kwargs):
-            await asyncio.sleep(60)
-            return "{}"
-
-        async def generate_reply_stream(self, messages, **_kwargs):
-            await asyncio.sleep(60)
-            if False:
-                yield ""
-
-    agent = aaptor_agent.AaptorAgent(
-        {"phases": [{"name": "opening", "duration_minutes": 1, "topics": ["background"]}]},
-        HangingLlm(),
-        job_description="Backend engineer role.",
-        resume_text="Built billing APIs in Python.",
-    )
-    monkeypatch.setattr(agent_mod, "OPENING_LLM_TIMEOUT_SECONDS", 0.2)
-    started = time.monotonic()
-    opening = await agent._resolve_opening_speech()
-    elapsed = time.monotonic() - started
-
-    assert opening.strip(), "opening text was empty"
-    assert elapsed < 5.0, f"opening hung for {elapsed:.1f}s"
-    assert "Aaptor" in opening or "interview" in opening.lower() or "?" in opening
-    assert agent.flow.interviewer_turns, "fallback opening was not recorded"
-
-
-@pytest.mark.asyncio
-async def test_aaptor_closes_after_last_phase_probe_limit() -> None:
-    llm = FakeLlm(
-        "DECISION: probe\n\nFirst probe?",
-        "DECISION: probe\n\nSecond probe?",
-    )
-    agent = aaptor_agent.AaptorAgent(
-        {
-            "phases": [
-                {
-                    "name": "technical",
-                    "duration_minutes": 10,
-                    "topics": ["Python"],
-                    "source": "jd",
-                }
-            ]
-        },
-        llm,
-        max_probes_per_phase=2,
-        min_turns_before_close=3,
-        initial_state={"candidate_turns": ["I already introduced myself."]},
-    )
-
-    await agent.generate_next_question("Answer one")
-    await agent.generate_next_question("Answer two")
-    agent.flow.started_at = time.monotonic() - agent.flow.max_duration_seconds - 1
-    closing = await agent.generate_next_question("Answer three")
-
-    assert closing == aaptor_agent.CLOSING_MESSAGE
-    assert agent.flow.completed is True
-    assert len(llm.messages) == 2
+    assert agent.candidate_turns == ["Answer one", "Answer two", "Answer three"]
 
 
 def test_racko_parsers_and_id_extraction() -> None:

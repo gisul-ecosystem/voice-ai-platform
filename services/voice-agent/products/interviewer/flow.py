@@ -1058,6 +1058,11 @@ class InterviewFlow:
             if item.get("competency_id") and index >= self.phase_index
         ]
         gap_id = first_incomplete_competency(self.coverage, ahead_competency_ids)
+        # Phase 0: read required_questions and depth_target from the published
+        # competency definition (set by _apply_weight_formula in compiler.py).
+        comp_def = competency_by_id(self.interview_definition, competency_id)
+        _required_questions = int(comp_def.get("required_questions") or 1)
+        _depth_target = float(comp_def.get("depth_target") or 0.55)
         return PolicyState(
             candidate_turn_count=len(self.candidate_turns)
             + (1 if pending_candidate_turn else 0),
@@ -1066,6 +1071,8 @@ class InterviewFlow:
             probe_count=self.probe_count,
             elapsed_seconds=max(0, int(time.monotonic() - self.started_at)),
             consecutive_unusable=self.consecutive_unusable,
+            # Phase 0 bug fix: was always 0 — probes_without_gain is the live counter.
+            consecutive_no_gain_probes=self.probes_without_gain,
             completed=self.completed,
             phase_name=str(phase.get("name") or ""),
             competency_id=competency_id,
@@ -1080,6 +1087,8 @@ class InterviewFlow:
             coverage_complete=coverage_complete,
             has_coverage_gaps=bool(gap_id),
             gap_competency_id=gap_id,
+            # Phase 0 bug fix: wire contradiction flag into FSM.
+            contradiction_pending=self.contradiction_pending,
             consecutive_dry_probes=self.consecutive_dry_probes,
             dry_probe_limit=self.dry_probe_limit,
             clarify_after=self.clarify_after,
@@ -1089,6 +1098,9 @@ class InterviewFlow:
             intent_repair_available=self._intent_repair_available(
                 competency_id, missing
             ),
+            # Phase 0 (spec 4.1): formula-driven behaviour from blueprint.
+            required_questions=_required_questions,
+            depth_target=_depth_target,
         )
 
     def _first_competency_phase_index(self) -> int | None:
@@ -1836,6 +1848,35 @@ class InterviewFlow:
             "tool, or number — never just the competency name."
         )
 
+    def _level_anchor(self, competency: dict[str, Any], anchor_type: str) -> str:
+        """Phase 1 (spec 4.3): read weak/strong anchor from level_anchors or rubric.
+
+        level_anchors is set by rubric_synthesis.py (MEDDIC/BANT/STAR synthesis).
+        Fallback: extract from the rubric's 1-star and 5-star descriptions.
+        """
+        anchors = competency.get("level_anchors")
+        if isinstance(anchors, dict):
+            text = str(anchors.get(anchor_type) or "").strip()
+            if text:
+                return text[:500]
+        # Fallback: read from rubric if level_anchors is missing.
+        rubric = competency.get("rubric")
+        if isinstance(rubric, list) and rubric:
+            if anchor_type == "weak":
+                # 1-star rubric anchor
+                for item in rubric:
+                    if isinstance(item, dict) and item.get("rating") == 1:
+                        return str(item.get("description") or "").strip()[:500]
+                return str(rubric[0].get("description") or "").strip()[:500] if rubric else ""
+            elif anchor_type == "strong":
+                # 5-star rubric anchor
+                for item in rubric:
+                    if isinstance(item, dict) and item.get("rating") == 5:
+                        return str(item.get("description") or "").strip()[:500]
+                return str(rubric[-1].get("description") or "").strip()[:500] if rubric else ""
+        return f"({'Weak' if anchor_type == 'weak' else 'Strong'}) performance for this competency."
+
+
     def _prompt_version(self) -> str:
         if isinstance(self.interview_definition, dict):
             return str(self.interview_definition.get("prompt_version") or "interviewer-system-v2")
@@ -2163,6 +2204,13 @@ class InterviewFlow:
             else "(resume omitted — ask a standalone competency question)",
             "transition_context": transition_context,
             "jd_excerpt": clip_source_text(self.job_description, 2_000),
+            # Phase 1 (spec 4.3): inject rubric synthesis outputs into turn prompt.
+            # evaluation_lens: e.g. "MEDDIC", "STAR", "BANT", "Root-Cause Analysis".
+            # level_anchors: weak/strong descriptions from synthesis or fallback rubric.
+            "evaluation_lens": str(competency.get("evaluation_lens") or "").strip()
+            or "Structured Problem Solving",
+            "level_anchor_weak": self._level_anchor(competency, "weak"),
+            "level_anchor_strong": self._level_anchor(competency, "strong"),
             "recent_turns": (
                 "(previous phase was project discussion — do NOT reference it. Ask a fresh standalone competency question.)"
                 if _is_first_competency_probe

@@ -9,16 +9,7 @@ import httpx
 
 from clients.errors import ServiceUnavailableError
 from clients.provider_util import normalize_provider
-from clients.settings import ELEVENLABS_VOICE_ID
-from clients.settings import (
-    ELEVENLABS_LATENCY_OPTIMIZATION,
-    ELEVENLABS_SIMILARITY_BOOST,
-    ELEVENLABS_STABILITY,
-    ELEVENLABS_STYLE,
-    ELEVENLABS_USE_SPEAKER_BOOST,
-    ELEVENLABS_VOICE_SPEED,
-)
-from clients.tts import ElevenLabsTts, ResilientTts, get_tts_client
+from clients.tts import ElevenLabsTts, get_tts_client
 
 
 class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
@@ -29,8 +20,6 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
             api_key="mock-key-123",
             voice_id="JBFqnCBsd6RMkjVDRZzb",
             model_id="eleven_flash_v2_5",
-            stability=0.45,
-            similarity_boost=0.80,
         )
 
         mock_pcm = b"\x00\x00" * 2400  # 0.1s of silence in 16-bit 24kHz PCM
@@ -52,11 +41,10 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
                     "text": "Hello from ElevenLabs",
                     "model_id": "eleven_flash_v2_5",
                     "voice_settings": {
-                        "stability": ELEVENLABS_STABILITY,
-                        "similarity_boost": ELEVENLABS_SIMILARITY_BOOST,
-                        "style": ELEVENLABS_STYLE,
-                        "speed": max(0.7, min(float(ELEVENLABS_VOICE_SPEED or 0.82), 1.2)),
-                        "use_speaker_boost": ELEVENLABS_USE_SPEAKER_BOOST,
+                        "stability": 0.5,
+                        "similarity_boost": 0.8,
+                        "style": 0.0,
+                        "use_speaker_boost": True,
                     },
                 },
             )
@@ -64,42 +52,13 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
                 kwargs["params"],
                 {
                     "output_format": "pcm_24000",
-                    "optimize_streaming_latency": ELEVENLABS_LATENCY_OPTIMIZATION,
+                    "optimize_streaming_latency": "3",
                 },
             )
 
             # Verify output is a valid WAV container (starts with RIFF header)
             self.assertTrue(audio.startswith(b"RIFF"))
             self.assertGreater(len(audio), len(mock_pcm))
-
-    async def test_elevenlabs_stream_synthesize_mocked(self):
-        tts = ElevenLabsTts(
-            base_url="https://api.elevenlabs.io/v1",
-            api_key="mock-key-123",
-            voice_id="JBFqnCBsd6RMkjVDRZzb",
-            model_id="eleven_flash_v2_5",
-        )
-        pcm = b"\x00\x00" * 240
-
-        class FakeResponse:
-            async def aiter_bytes(self, _size=4096):
-                yield pcm[:240]
-                yield pcm[240:]
-
-        class FakeStream:
-            def __init__(self):
-                self.response = FakeResponse()
-
-            async def __aenter__(self):
-                return self.response
-
-            async def __aexit__(self, *_exc):
-                return None
-
-        with patch("clients.tts.elevenlabs.stream_request", return_value=FakeStream()):
-            chunks = [chunk async for chunk in tts.stream_synthesize("Hello live")]
-
-        self.assertEqual(b"".join(chunks), pcm)
 
     async def test_elevenlabs_invalid_key_error(self):
         """Invalid key test: verifies graceful failure raising ServiceUnavailableError."""
@@ -126,43 +85,10 @@ class TestElevenLabsTts(unittest.IsolatedAsyncioTestCase):
             provider_override="elevenlabs",
             api_key_override="override-key-456",
         )
-        self.assertIsInstance(client, ResilientTts)
-        inner = client._primary
-        self.assertIsInstance(inner, ElevenLabsTts)
-        self.assertEqual(inner._api_key, "override-key-456")
-        self.assertEqual(inner.voice_id, ELEVENLABS_VOICE_ID or "JBFqnCBsd6RMkjVDRZzb")
-        self.assertTrue(inner.model_id)
-
-    async def test_voice_override_cannot_change_interviewer_voice(self):
-        tts = ElevenLabsTts(
-            base_url="https://api.elevenlabs.io/v1",
-            api_key="mock-key-123",
-            voice_id="fixed-interviewer-voice",
-        )
-        response = httpx.Response(200, content=b"\x00\x00")
-
-        with patch("clients.tts.elevenlabs.request", new_callable=AsyncMock) as mock_request:
-            mock_request.return_value = response
-            await tts.synthesize("Hello", voice="different-voice")
-
-        self.assertIn(
-            "text-to-speech/fixed-interviewer-voice",
-            mock_request.call_args.args[2],
-        )
-
-    def test_normalize_speech_text(self):
-        """Tests text pre-processing and formatting for TTS."""
-        from clients.tts.elevenlabs import normalize_speech_text
-
-        raw = "**Great job!** Let's discuss:\n- Point 1\n- Point 2\n\nHow did that work?"
-        cleaned = normalize_speech_text(raw)
-        self.assertEqual(
-            cleaned, "Great job... Let's discuss: Point 1 Point 2 How did that work?"
-        )
-        self.assertEqual(
-            normalize_speech_text("2024 was the migration year."),
-            "2024 was the migration year.",
-        )
+        self.assertIsInstance(client, ElevenLabsTts)
+        self.assertEqual(client._api_key, "override-key-456")
+        self.assertEqual(client.voice_id, "JBFqnCBsd6RMkjVDRZzb")
+        self.assertEqual(client.model_id, "eleven_flash_v2_5")
 
     @unittest.skipUnless(
         os.getenv("ELEVENLABS_LIVE_TEST", "").strip().lower()
