@@ -41,12 +41,14 @@ def test_weight_drives_time_allocation() -> None:
 
 def test_equal_weights_split_evenly() -> None:
     minutes = _minutes(outline_from_definition(_definition([50.0, 50.0])))
-    assert minutes[0] == minutes[1]
+    # Equal weights must differ by at most 1 minute (odd total durations cannot split perfectly).
+    assert abs(minutes[0] - minutes[1]) <= 1
 
 
 def test_missing_weights_fall_back_to_an_even_split() -> None:
     minutes = _minutes(outline_from_definition(_definition([None, None, None])))
-    assert len(set(minutes)) == 1
+    # No weights: all shares must differ by at most 1 minute.
+    assert max(minutes) - min(minutes) <= 1
 
 
 def test_every_competency_keeps_a_usable_minimum() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -155,57 +156,52 @@ async def test_restored_agent_on_enter_does_not_respeak() -> None:
 
 
 @pytest.mark.asyncio
-async def test_opening_spoken_once_even_if_llm_node_runs(monkeypatch) -> None:
-    """Candidate must hear exactly one greeting — never on_enter + llm_node."""
-    from livekit.agents import llm
-    from livekit.agents.voice.agent import ModelSettings
+async def test_agent_ignores_empty_llm_callback_during_opening() -> None:
+    agent = aaptor_agent.AaptorAgent(
+        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": ["background"]}]},
+        FakeLlm(),
+    )
+    agent._opening_in_progress = True
 
-    class OpeningLlm:
-        async def generate_reply(self, messages: list[dict], **_kwargs) -> str:
-            return (
-                '{"question":"Thanks for joining — please introduce yourself.",'
-                '"intent":"opening","depth":1}'
-            )
+    class _ChatContext:
+        items = []
 
-        async def generate_reply_stream(self, messages: list[dict], **_kwargs):
-            raw = await self.generate_reply(messages)
-            yield raw
+    spoken: list[str] = []
+    async for chunk in agent.llm_node(_ChatContext(), [], None):
+        spoken.append(chunk)
+
+    assert spoken == []
+
+
+@pytest.mark.asyncio
+async def test_opening_falls_back_when_llm_hangs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from products.interviewer import agent as agent_mod
+
+    class HangingLlm:
+        async def generate_reply(self, messages, **_kwargs):
+            await asyncio.sleep(60)
+            return "{}"
+
+        async def generate_reply_stream(self, messages, **_kwargs):
+            await asyncio.sleep(60)
+            if False:
+                yield ""
 
     agent = aaptor_agent.AaptorAgent(
-        {"phases": [{"name": "opening", "duration_minutes": 2, "topics": []}]},
-        OpeningLlm(),
+        {"phases": [{"name": "opening", "duration_minutes": 1, "topics": ["background"]}]},
+        HangingLlm(),
+        job_description="Backend engineer role.",
+        resume_text="Built billing APIs in Python.",
     )
-    spoken: list[str] = []
-    streamed: list[str] = []
+    monkeypatch.setattr(agent_mod, "OPENING_LLM_TIMEOUT_SECONDS", 0.2)
+    started = time.monotonic()
+    opening = await agent._resolve_opening_speech()
+    elapsed = time.monotonic() - started
 
-    class _Session:
-        async def say(self, text: str, **_kwargs) -> None:
-            spoken.append(text)
-
-    sess = _Session()
-    monkeypatch.setattr(
-        type(agent),
-        "session",
-        property(lambda self: sess),
-        raising=False,
-    )
-    await agent.on_enter()
-    # Simulate a concurrent/auto llm_node invocation after enter.
-    async for chunk in agent.llm_node(
-        llm.ChatContext(),
-        [],
-        ModelSettings(),
-    ):
-        streamed.append(chunk)
-
-    assert len(spoken) == 1
-    assert spoken[0].strip()
-    # llm_node must not re-speak the greeting (empty ctx may clarify — that is fine).
-    assert all(
-        "joining" not in chunk.lower() and "introduce yourself" not in chunk.lower()
-        for chunk in streamed
-    )
-    assert agent._opened is True
+    assert opening.strip(), "opening text was empty"
+    assert elapsed < 5.0, f"opening hung for {elapsed:.1f}s"
+    assert "Aaptor" in opening or "interview" in opening.lower() or "?" in opening
+    assert agent.flow.interviewer_turns, "fallback opening was not recorded"
 
 
 @pytest.mark.asyncio

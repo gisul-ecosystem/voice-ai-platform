@@ -1,8 +1,10 @@
 """LiveKit worker lifecycle for the Aaptor interviewer product."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import tempfile
 from typing import Any
 
 from livekit.agents import AgentSession, JobContext, JobProcess, WorkerOptions, cli
@@ -47,6 +49,69 @@ from voice_platform.runtime import (
 )
 
 logger = logging.getLogger("voice-agent.aaptor")
+_ACTIVE_ROOMS: set[str] = set()
+_ROOM_LOCK_HANDLES: dict[str, object] = {}
+
+
+def _claim_room(room_name: str) -> bool:
+    """Claim a room across LiveKit job-runner processes on this host."""
+    if room_name in _ACTIVE_ROOMS:
+        return False
+    lock_path = os.path.join(
+        tempfile.gettempdir(),
+        f"voice-agent-aaptor-{room_name}.lock",
+    )
+    try:
+        handle = open(lock_path, "a+b")
+        handle.seek(0)
+        handle.write(b"1")
+        handle.flush()
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        try:
+            handle.close()
+        except UnboundLocalError:
+            pass
+        return False
+    _ACTIVE_ROOMS.add(room_name)
+    _ROOM_LOCK_HANDLES[room_name] = handle
+    return True
+
+
+def _release_room(room_name: str) -> None:
+    handle = _ROOM_LOCK_HANDLES.pop(room_name, None)
+    _ACTIVE_ROOMS.discard(room_name)
+    if handle is None:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _worker_load() -> float:
+    """Report interview capacity without using unrelated desktop CPU load locally."""
+    environment = (os.getenv("APP_ENV") or "development").strip().lower()
+    if environment not in {"production", "staging"}:
+        capacity = max(1, int(os.getenv("LIVEKIT_ROOM_CAPACITY", "1")))
+        return min(1.0, len(_ACTIVE_ROOMS) / capacity)
+    return 0.0
 
 
 async def flush_pending_session_turns(
@@ -114,7 +179,7 @@ GENERIC_OUTLINE = {
 }
 
 
-ALLOWED_DURATIONS = (15, 30, 45)
+ALLOWED_DURATIONS = (15, 20, 30, 45)
 
 
 class InterviewPlanUnavailableError(RuntimeError):
@@ -444,9 +509,25 @@ async def build_outline(ctx: JobContext) -> dict:
 
 
 async def entrypoint(ctx: JobContext) -> None:
+    room_name = str(ctx.room.name)
+    if not _claim_room(room_name):
+        logger.warning(
+            "duplicate_room_job_ignored",
+            extra={
+                "event": "duplicate_room_job_ignored",
+                "room": room_name,
+            },
+        )
+        return
     if hasattr(ctx, "log_context_fields"):
-        ctx.log_context_fields = {"room": ctx.room.name}
-    logger.info("session_start", extra={"event": "session_start", "room": ctx.room.name})
+        ctx.log_context_fields = {"room": room_name}
+    logger.info("session_start", extra={"event": "session_start", "room": room_name})
+
+    async def release_room_lock() -> None:
+        _release_room(room_name)
+
+    if hasattr(ctx, "add_shutdown_callback"):
+        ctx.add_shutdown_callback(release_room_lock)
     await ctx.connect()
 
     metadata = job_metadata(ctx)
@@ -471,7 +552,10 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
     if hasattr(ctx, "add_shutdown_callback"):
-        ctx.add_shutdown_callback(shutdown_session)
+        async def release_room() -> None:
+            await shutdown_session()
+
+        ctx.add_shutdown_callback(release_room)
 
     # TTS clients + AgentSession are built after definition load so voice_policy pins apply.
     initial_state: dict = {}
@@ -620,7 +704,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 logger.warning("status_report_unavailable", extra={"event": "status_report_unavailable"})
 
     target_duration_minutes = 30
-    max_probes_per_phase = 2
+    max_probes_per_phase = 3
     difficulty = "applied"
     language = "English"
     job_description = ""
@@ -636,7 +720,7 @@ async def entrypoint(ctx: JobContext) -> None:
                     setup.get("durationMinutes")
                 )
                 max_probes_per_phase = normalize_probe_count(
-                    setup.get("maxProbesPerPhase")
+                    setup.get("maxProbesPerPhase"), default=3
                 )
                 difficulty = str(setup.get("difficulty") or "applied").strip().lower()
                 language = str(setup.get("language") or "English").strip() or "English"
@@ -689,11 +773,8 @@ async def entrypoint(ctx: JobContext) -> None:
         if isinstance(interview_definition, dict)
         else None
     )
-    # Align published voice_policy with session TTS provider (room metadata).
-    session_tts = str(metadata.get("tts_provider") or "").strip() or None
     voice_policy = resolve_voice_policy(
-        voice_raw if isinstance(voice_raw, dict) else None,
-        provider_override=session_tts,
+        voice_raw if isinstance(voice_raw, dict) else None
     )
     clients = load_inference_clients(ctx, logger, voice_policy=voice_policy)
     try:
@@ -731,12 +812,7 @@ async def entrypoint(ctx: JobContext) -> None:
                     extra={"event": "status_report_unavailable"},
                 )
         raise
-    vad = None
-    proc = getattr(ctx, "proc", None)
-    userdata = getattr(proc, "userdata", None) if proc is not None else None
-    if isinstance(userdata, dict):
-        vad = userdata.get("vad")
-    session = build_agent_session(clients, vad=vad)
+    session = build_agent_session(clients)
     attach_session_metrics(session, logger)
     try:
         outline, outline_source = resolve_live_outline(
@@ -789,6 +865,19 @@ async def entrypoint(ctx: JobContext) -> None:
         definition=interview_definition,
         existing=context.get("candidate_profile") if isinstance(context, dict) else None,
     )
+    if hasattr(ctx, "wait_for_participant"):
+        try:
+            await asyncio.wait_for(ctx.wait_for_participant(), timeout=45.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "wait_for_participant_timeout",
+                extra={"event": "wait_for_participant_timeout"},
+            )
+        except Exception:
+            logger.warning(
+                "wait_for_participant_failed",
+                extra={"event": "wait_for_participant_failed"},
+            )
     await session.start(
         agent=AaptorAgent(
             outline,
@@ -829,18 +918,20 @@ def prewarm(proc: JobProcess) -> None:
 
 def run() -> None:
     validate_startup_configuration()
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
-            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "aaptor"),
-            port=int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
-            # Default 0.7 is based on whole-machine CPU; on a dev box with
-            # unrelated apps running, that falsely marks the worker "at
-            # capacity" and it refuses to join new interview rooms.
-            load_threshold=float(os.getenv("AAPTOR_LOAD_THRESHOLD", "0.95")),
-        )
-    )
+    options: dict = {
+        "entrypoint_fnc": entrypoint,
+        "agent_name": os.getenv("LIVEKIT_AGENT_NAME", "aaptor"),
+        "port": int(os.getenv("AAPTOR_WORKER_PORT", "8081")),
+        # Default 0.7 is based on whole-machine CPU; on a dev box with
+        # unrelated apps running, that falsely marks the worker at capacity.
+        "load_threshold": float(os.getenv("AAPTOR_LOAD_THRESHOLD", "0.95")),
+    }
+    if (os.getenv("APP_ENV") or "development").strip().lower() not in {
+        "production",
+        "staging",
+    }:
+        options["load_fnc"] = _worker_load
+    cli.run_app(WorkerOptions(**options))
 
 
 if __name__ == "__main__":

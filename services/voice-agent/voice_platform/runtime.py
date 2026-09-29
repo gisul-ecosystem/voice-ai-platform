@@ -89,21 +89,19 @@ def build_agent_session(
 ) -> AgentSession:
     """Construct the shared STT → LLM → TTS LiveKit pipeline."""
     return AgentSession(
-        # Prefer a prewarmed VAD so room join does not pay Silero ONNX load cost.
-        vad=vad or get_or_load_vad(),
+        # Allow natural breathing pauses during technical answers before concluding the turn.
+        vad=silero.VAD.load(min_speech_duration=0.35, min_silence_duration=1.2),
         stt=LaptopSTT(client=clients.stt),
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
         # Publish agent speech text so the live transcript can show interviewer lines.
         use_tts_aligned_transcript=True,
-        # Allow barge-in, but require a bit of sustained speech so laptop echo of
-        # the agent voice does not steal the turn.
+        # Allow natural barge-in if candidate starts speaking or correcting.
         allow_interruptions=True,
-        min_interruption_duration=0.8,
-        min_interruption_words=2,
-        # Wait just long enough for Sarvam finals without feeling sluggish.
-        min_endpointing_delay=0.5,
-        max_endpointing_delay=1.8,
+        min_interruption_duration=1.2,
+        min_interruption_words=3,
+        min_endpointing_delay=1.0,
+        max_endpointing_delay=2.5,
         resume_false_interruption=True,
         false_interruption_timeout=1.2,
         # Preemptive drafting made the agent commit to replying on partial/paused

@@ -484,6 +484,28 @@ def test_validator_rejects_protected_topics_and_duplicates() -> None:
     assert "duplicate_question" in result.reasons
 
 
+def test_validator_rejects_trivia_questions() -> None:
+    generated = GeneratedQuestion(
+        question="Here is a brain teaser: how many ping-pong balls fit in a bus?",
+        competency_id="negotiation",
+        intent="establish_context",
+        depth=1,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="negotiation",
+        policy_intent="establish_context",
+        policy_depth=1,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=_sales_definition()["allowed_probes"],
+    )
+
+    assert result.ok is False
+    assert "trivia_question" in result.reasons
+
+
 def test_ladder_fallback_is_domain_neutral() -> None:
     spoken = ladder_fallback_question(
         _sales_definition(),
@@ -493,6 +515,17 @@ def test_ladder_fallback_is_domain_neutral() -> None:
     assert "API" not in spoken
     assert "queue" not in spoken.lower()
     assert "situation" in spoken.lower()
+
+
+def test_ladder_fallback_anchors_to_candidate_answer() -> None:
+    spoken = ladder_fallback_question(
+        _sales_definition(),
+        competency_id="negotiation",
+        intent="baseline",
+        last_candidate_turn="I optimized arrays and strings.",
+    )
+    assert "optimized arrays and strings" in spoken
+    assert "personally" in spoken.lower()
 
 
 def test_validator_preserves_evaluation_and_tags_on_success() -> None:
@@ -529,18 +562,16 @@ def test_validator_preserves_evaluation_and_tags_on_success() -> None:
 
 def test_probe_action_phrasing_is_unique() -> None:
     keys = [
-        "PROBE_FOR_CONTEXT",
-        "PROBE_FOR_OWNERSHIP",
-        "PROBE_FOR_METHOD",
-        "PROBE_FOR_REASONING",
-        "PROBE_FOR_RESULT",
-        "PROBE_FOR_REFLECTION",
+        "CLARIFY_CURRENT_ANSWER",
+        "MOVE_TO_NEXT_COMPETENCY",
+        "WALK_RESUME_PROJECT",
+        "CLOSE_INTERVIEW",
     ]
     notes = [ACTION_PHRASING[key] for key in keys]
     assert len(set(notes)) == len(notes)
 
 
-def test_validator_requires_hook_stem_on_live_probes() -> None:
+def test_validator_allows_natural_question_without_hook_stem() -> None:
     generated = GeneratedQuestion(
         question="What would you change about the approach next time?",
         competency_id="negotiation",
@@ -559,8 +590,7 @@ def test_validator_requires_hook_stem_on_live_probes() -> None:
         recent_turns=["We used Redis during that renewal."],
         hook_fact="Redis",
     )
-    assert missing.ok is False
-    assert "missing_hook_stem" in missing.reasons
+    assert missing.ok is True
 
     hooked = validate_generated_question(
         GeneratedQuestion(
@@ -582,31 +612,7 @@ def test_validator_requires_hook_stem_on_live_probes() -> None:
     assert hooked.ok is True
 
 
-def test_star_probes_keep_hooked_question_when_json_intent_mismatches() -> None:
-    result = validate_generated_question(
-        GeneratedQuestion(
-            question="You mentioned Redis. When did you use it on billing retries, and for whom?",
-            competency_id="negotiation",
-            intent="establish_ownership",
-            depth=2,
-        ),
-        definition=_sales_definition(),
-        policy_competency_id="negotiation",
-        policy_intent="establish_context",
-        policy_depth=1,
-        max_depth=3,
-        recent_questions=[],
-        allowed_probes=_sales_definition()["allowed_probes"],
-        recent_turns=["I used Redis on billing retries."],
-        hook_fact="Redis",
-    )
-    assert result.ok is True
-    assert result.question.intent == "establish_context"
-    assert "intent_mismatch" not in result.reasons
-    assert "probe_intent_not_allowed" not in result.reasons
-
-
-def test_validator_rejects_repeated_six_word_prefix() -> None:
+def test_validator_still_rejects_near_duplicate_question() -> None:
     generated = GeneratedQuestion(
         question="What part of that deal did you change afterward?",
         competency_id="negotiation",
@@ -624,10 +630,10 @@ def test_validator_rejects_repeated_six_word_prefix() -> None:
         allowed_probes=_sales_definition()["allowed_probes"],
     )
     assert result.ok is False
-    assert "repeated_prefix" in result.reasons
+    assert "duplicate_question" in result.reasons
 
 
-def test_validator_rejects_repeated_probe_shape() -> None:
+def test_validator_allows_repeated_probe_shape_when_question_is_valid() -> None:
     generated = GeneratedQuestion(
         question="Why did you choose Redis for that deal?",
         competency_id="negotiation",
@@ -649,5 +655,71 @@ def test_validator_rejects_repeated_probe_shape() -> None:
         required_probe_shape="failure_mode",
         last_probe_shape="why",
     )
+    assert result.ok is True
+
+
+def test_competency_question_that_names_a_resume_project_is_rejected() -> None:
+    generated = GeneratedQuestion(
+        question="How did Payments Gateway handle retries?",
+        competency_id="python",
+        intent="applied_understanding",
+        depth=2,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="python",
+        policy_intent="applied_understanding",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=[],
+        resume_projects=["Payments Gateway"],
+        require_resume_grounding=False,
+    )
     assert result.ok is False
-    assert "repeated_probe_shape" in result.reasons
+    assert "project_in_competency_question" in result.reasons
+    assert "competency_mismatch" in result.reasons
+
+
+def test_regarding_tell_me_more_is_rejected() -> None:
+    generated = GeneratedQuestion(
+        question="Regarding will push here, can you tell me more about this?",
+        competency_id="python",
+        intent="clarify",
+        depth=1,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="python",
+        policy_intent="clarify",
+        policy_depth=1,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=[],
+    )
+    assert result.ok is False
+    assert "generic_parrot_question" in result.reasons
+
+
+def test_standalone_competency_question_does_not_need_a_project() -> None:
+    generated = GeneratedQuestion(
+        question="How does a Python generator differ from a regular iterator?",
+        competency_id="python",
+        intent="applied_understanding",
+        depth=2,
+    )
+    result = validate_generated_question(
+        generated,
+        definition=_sales_definition(),
+        policy_competency_id="python",
+        policy_intent="applied_understanding",
+        policy_depth=2,
+        max_depth=3,
+        recent_questions=[],
+        allowed_probes=[],
+        resume_projects=["Payments Gateway"],
+        require_resume_grounding=False,
+    )
+    assert result.ok is True

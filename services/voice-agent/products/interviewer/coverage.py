@@ -88,6 +88,8 @@ DEFAULT_INTENTS = (
     "applied_understanding",
 )
 
+EVIDENCE_STATES = frozenset({"missing", "claimed", "demonstrated", "confirmed"})
+
 _NUMBER = re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|%|k|m|b)?\b", re.IGNORECASE)
 _QUOTED = re.compile(r"\"([^\"]+)\"|'([^']+)'")
 _FIRST_PERSON = re.compile(
@@ -337,8 +339,7 @@ def empty_coverage_entry(required: list[str]) -> dict[str, Any]:
         "covered_intents": [],
         "missing_intents": list(intents),
         "evidence_ids": [],
-        # absent | asked | covered | assessed_insufficient
-        "intent_status": {intent: "absent" for intent in intents},
+        "evidence_states": {intent: "missing" for intent in intents},
     }
 
 
@@ -676,8 +677,20 @@ def apply_coverage(
             intent_status[intent] = "covered"
     missing = [intent for intent in required if intent not in already]
     evidence_ids = list(entry.get("evidence_ids") or [])
+    evidence_states = {
+        intent: state
+        for intent, state in (entry.get("evidence_states") or {}).items()
+        if intent in required and state in EVIDENCE_STATES
+    }
+    for intent in required:
+        evidence_states.setdefault(intent, "missing")
     if evidence_id and evidence_id not in evidence_ids:
         evidence_ids.append(evidence_id)
+    for intent in covered_intents:
+        if intent not in required:
+            continue
+        previous = evidence_states.get(intent, "missing")
+        evidence_states[intent] = "confirmed" if previous == "demonstrated" else "demonstrated"
     if not already:
         status = "not_started"
     elif missing:
@@ -695,7 +708,7 @@ def apply_coverage(
         "covered_intents": already,
         "missing_intents": missing,
         "evidence_ids": evidence_ids,
-        "intent_status": intent_status,
+        "evidence_states": evidence_states,
     }
     return coverage
 

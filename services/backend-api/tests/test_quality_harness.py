@@ -151,3 +151,6 @@ def test_scorecard_excerpts_and_missing_intents_are_evidence_linked() -> None:
     assert scorecard.quality_metrics is not None
     assert scorecard.quality_metrics.validator_failure_rate == 0
     assert any("personally" in item.lower() or "handled" in item.lower() for item in scorecard.next_human_questions)
+
+
+

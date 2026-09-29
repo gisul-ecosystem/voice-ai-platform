@@ -14,7 +14,7 @@ from clients.errors import ServiceUnavailableError
 from clients.settings import HTTP_CONNECT_TIMEOUT_SECONDS, HTTP_RETRY_ATTEMPTS
 
 logger = logging.getLogger("voice-agent.http")
-_CLIENT: httpx.AsyncClient | None = None
+_CLIENTS: dict[int, httpx.AsyncClient] = {}
 
 
 def make_timeout(seconds: float) -> httpx.Timeout:
@@ -32,17 +32,21 @@ def _is_retryable(exc: BaseException) -> bool:
 
 
 def _client() -> httpx.AsyncClient:
-    global _CLIENT
-    if _CLIENT is None or _CLIENT.is_closed:
-        _CLIENT = httpx.AsyncClient()
-    return _CLIENT
+    loop = asyncio.get_running_loop()
+    loop_id = id(loop)
+    client = _CLIENTS.get(loop_id)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient()
+        _CLIENTS[loop_id] = client
+    return client
 
 
 async def close_http_client() -> None:
-    global _CLIENT
-    if _CLIENT is not None:
-        await _CLIENT.aclose()
-        _CLIENT = None
+    clients = list(_CLIENTS.values())
+    _CLIENTS.clear()
+    for client in clients:
+        if not client.is_closed:
+            await client.aclose()
 
 
 @asynccontextmanager

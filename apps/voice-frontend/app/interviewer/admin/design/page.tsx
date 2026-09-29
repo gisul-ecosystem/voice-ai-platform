@@ -1,20 +1,12 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState, useSyncExternalStore } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 
-import {
-  CreateProgress,
-  LandingNav,
-} from "@/components/interviewer/LandingNav";
-import {
-  EMPTY_ROLE_DRAFT,
-  defaultStartsAtLocal,
-  getRoleDraftSnapshot,
-  subscribeRoleDraft,
-  writeRoleDraft,
-  type RoleDraftState,
-} from "@/lib/interviewer/role-draft";
+function defaultStartTime(): string {
+  return new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
+}
+const DRAFT_KEY = "ai-interview:role-draft";
 
 const DEFAULT_VALUE: RoleDraftState = {
   title: "AI Engineer interview",
@@ -46,32 +38,26 @@ function draftToForm(state?: RoleDraftState): RoleDraftState {
 }
 
 export default function DesignRolePage() {
-  const router = useRouter();
-  const ready = useSyncExternalStore(
-    subscribeRoleDraft,
-    () => true,
-    () => false,
-  );
-  const boot = useSyncExternalStore(
-    subscribeRoleDraft,
-    getRoleDraftSnapshot,
-    () => EMPTY_ROLE_DRAFT,
-  );
-  const [value, setValue] = useState<RoleDraftState | null>(null);
+  const [value, setValue] = useState<RoleDraft>({
+    title: "AI Engineer interview", role: "AI Engineer", seniority: "junior",
+    durationMinutes: "30", jobDescription: "", competencies: "",
+    definitionId: "ai-engineer-junior-v1", startsAt: "",
+    difficulty: "applied", language: "English",
+    monitoringEnabled: true, recordingEnabled: false,
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [newCompetency, setNewCompetency] = useState("");
 
-  const form = value ?? (ready ? draftToForm(boot.state) : DEFAULT_VALUE);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setValue((current) => ({ ...current, startsAt: defaultStartTime() }));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
-  function setField<K extends keyof RoleDraftState>(
-    key: K,
-    next: RoleDraftState[K],
-  ) {
-    setValue((current) => {
-      const base = current ?? draftToForm(boot.state);
-      return { ...base, [key]: next };
-    });
+  function setField<K extends keyof RoleDraft>(key: K, next: RoleDraft[K]) {
+    setValue((current) => ({ ...current, [key]: next }));
   }
 
   function competencyList(): string[] {

@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from products.interviewer.coverage import competency_by_id, ladder_steps
-from products.interviewer.evidence import SLOT_KEYS
 
 _PUNCT = re.compile(r"[^a-z0-9\s]+")
 _WS = re.compile(r"\s+")
@@ -223,6 +222,9 @@ _HOOK_VERBS = frozenset(
     }
 )
 
+# Hard-block reasons cause a full LLM retry (never a template string).
+
+
 SKIP_HOOK_INTENTS = frozenset(
     {
         "opening",
@@ -269,11 +271,11 @@ PROTECTED_MARKERS = (
     "maiden",
 )
 
-LEADING_PATTERNS = (
-    re.compile(r"\b(?:right|correct|no)\s*\?\s*$"),
-    re.compile(r",\s*(?:didn't|don't|doesn't|wasn't|weren't|isn't|aren't)\s+\w+\s*\?"),
-    re.compile(r"^\s*so\s+you\s+(?:used|chose|built|went|picked|decided)\b"),
-    re.compile(r"\bi\s+(?:assume|presume|take it)\b"),
+TRIVIA_MARKERS = (
+    "brain teaser",
+    "brain-teaser",
+    "riddle",
+    "puzzle",
 )
 
 # Only these justify discarding the model's question. Everything else is a
@@ -283,6 +285,12 @@ HARD_BLOCK_REASONS: frozenset[str] = frozenset(
     (
         "empty_question",
         "protected_topic",
+        "duplicate_question",
+        "project_in_competency_question",
+        "generic_parrot_question",
+        "generic_learning_question",
+        "competency_mismatch",
+        "section_violation",
     )
 )
 
@@ -292,7 +300,7 @@ def is_speakable(reasons: list[str]) -> bool:
     return not any(reason in HARD_BLOCK_REASONS for reason in reasons)
 
 
-TECH_TERMS = (
+UNGROUNDED_TECH_TERMS = TECH_TERMS = (
     "api",
     "schema",
     "queue",
@@ -300,23 +308,19 @@ TECH_TERMS = (
     "kubernetes",
     "redis",
     "postgres",
+    "postgresql",
     "microservice",
     "latency",
     "deadlock",
+    "index",
     "timeout",
+    "http client",
     "websocket",
     "sharding",
-    "throughput",
-    "cache",
-    "database",
-    "algorithm",
-    "deploy",
-    "server",
-    "code",
 )
 
 INTENT_PROBE_ALIASES: dict[str, tuple[str, ...]] = {
-    "establish_context": ("context", "situation", "describe", "walk me through", "tell me about"),
+    "establish_context": ("context", "situation", "describe"),
     "establish_ownership": ("responsibility", "personally", "owned", "your specific"),
     "applied_understanding": ("approach", "how did you", "method", "action"),
     "problem_or_complexity": ("difficult", "challenge", "failed", "constraint"),
@@ -331,18 +335,15 @@ INTENT_PROBE_ALIASES: dict[str, tuple[str, ...]] = {
     "recovery": ("move", "another"),
 }
 
-# Ladder intents are always valid; allowed_probes are example phrasings for the LLM,
-# not a hard blocklist against assessment intents like establish_context.
-STANDARD_ASSESSMENT_INTENTS = frozenset(INTENT_PROBE_ALIASES) - frozenset(
-    {
-        "clarify",
-        "candidate_map",
-        "opening",
-        "baseline",
-        "final_addition",
-        "gap_check",
+KNOWN_INTENTS = frozenset(
+    set(INTENT_PROBE_ALIASES)
+    | {
         "closing",
-        "recovery",
+        "await_introduction",
+        "coverage",
+        "consistency_check",
+        "evidence_gap_stop",
+        "resume_project",
     }
 )
 KNOWN_INTENTS = frozenset(INTENT_PROBE_ALIASES) | STANDARD_ASSESSMENT_INTENTS | SKIP_HOOK_INTENTS
@@ -364,6 +365,7 @@ def canonical_intent(intent: str | None) -> str:
     if value == "baseline":
         return "establish_context"
     return _ACTION_TO_INTENT.get(value, value)
+
 
 
 TechnicalSubstance = Literal[
@@ -425,7 +427,6 @@ class AnswerEvaluation:
     matches_evidence_expected: bool = False
     needs_clarification: bool = False
     factually_correct: bool = True
-    # Evidence dimensions (evidence.SLOT_KEYS) this answer actually proved / merely asserted.
     slots_demonstrated: list[str] = field(default_factory=list)
     slots_claimed: list[str] = field(default_factory=list)
     contradicts_earlier: bool = False
@@ -444,17 +445,6 @@ class AnswerEvaluation:
         }
 
 
-def _slot_list(raw: Any) -> list[str]:
-    if not isinstance(raw, list):
-        return []
-    seen: list[str] = []
-    for item in raw:
-        key = str(item).strip().lower()
-        if key in SLOT_KEYS and key not in seen:
-            seen.append(key)
-    return seen
-
-
 def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
     """Return a validated evaluation, or None so callers fall back to heuristics."""
     if not isinstance(payload, dict):
@@ -468,6 +458,27 @@ def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
         if isinstance(raw_facts, list)
         else []
     )
+    valid_slots = {
+        "ownership",
+        "approach",
+        "mechanism",
+        "complexity_or_cost",
+        "tradeoff",
+        "failure_mode",
+        "optimization",
+        "measurement",
+    }
+
+    def slots(key: str) -> list[str]:
+        raw = payload.get(key)
+        if not isinstance(raw, list):
+            return []
+        return [
+            str(item).strip().lower()
+            for item in raw
+            if str(item).strip().lower() in valid_slots
+        ]
+
     return AnswerEvaluation(
         technical_substance=substance,  # type: ignore[arg-type]
         key_facts_stated=facts[:20],
@@ -475,8 +486,8 @@ def parse_answer_evaluation(payload: Any) -> AnswerEvaluation | None:
         matches_evidence_expected=bool(payload.get("matches_evidence_expected")),
         needs_clarification=bool(payload.get("needs_clarification")),
         factually_correct=bool(payload.get("factually_correct", True)),
-        slots_demonstrated=_slot_list(payload.get("slots_demonstrated")),
-        slots_claimed=_slot_list(payload.get("slots_claimed")),
+        slots_demonstrated=slots("slots_demonstrated"),
+        slots_claimed=slots("slots_claimed"),
         contradicts_earlier=bool(payload.get("contradicts_earlier")),
     )
 
@@ -654,20 +665,27 @@ def _question_tokens(text: str) -> set[str]:
     }
 
 
-def _near_duplicate(left: str, right: str, *, threshold: float = 0.7) -> bool:
+def _grounding_terms(text: str) -> set[str]:
+    stopwords = {
+        "about", "after", "because", "could", "did", "from", "have", "into",
+        "that", "their", "them", "they", "this", "what", "when", "where",
+        "which", "while", "with", "would", "your", "used", "using", "work",
+        "worked", "project", "specific", "technical", "problem", "result",
+    }
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(token) > 3 and token not in stopwords
+    }
+
+
+def _near_duplicate(left: str, right: str) -> bool:
     left_tokens = _question_tokens(left)
     right_tokens = _question_tokens(right)
     if len(left_tokens) < 2 or len(right_tokens) < 2:
         return False
     overlap = len(left_tokens & right_tokens)
-    return overlap / min(len(left_tokens), len(right_tokens)) >= threshold
-
-
-def _same_question_frame(left: str, right: str, *, tokens: int = 4) -> bool:
-    """True when the opening ask frame matches (e.g. 'can you describe the specific …')."""
-    a = prefix_tokens(left, tokens)
-    b = prefix_tokens(right, tokens)
-    return len(a) >= tokens and a == b
+    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.7
 
 
 def parse_generated_question(raw: str) -> GeneratedQuestion | None:
@@ -726,7 +744,25 @@ def ladder_fallback_question(
     *,
     competency_id: str | None,
     intent: str,
+    last_candidate_turn: str | None = None,
 ) -> str:
+    candidate = " ".join((last_candidate_turn or "").split()).strip()
+    if candidate and intent in {"candidate_map", "await_introduction"}:
+        return (
+            "Thanks for sharing that. Which project or experience would you like "
+            "to use as the main example for this interview?"
+        )
+    if candidate and intent in {
+        "establish_context",
+        "baseline",
+        "candidate_map",
+        "gap_check",
+    }:
+        return (
+            "You mentioned "
+            f"{candidate[:180].rstrip('.!?')}. "
+            "What specific problem were you solving, and what did you personally do?"
+        )
     for step in ladder_steps(definition, competency_id):
         if str(step.get("intent") or "").strip() == intent:
             example = str(step.get("example_question") or "").strip()
@@ -754,6 +790,17 @@ def ladder_fallback_question(
     )
 
 
+def _compatible_intents(expected: str, generated: str) -> bool:
+    if expected == generated:
+        return True
+    families = (
+        {"candidate_map", "await_introduction", "baseline", "establish_context"},
+        {"establish_ownership", "applied_understanding"},
+        {"problem_or_complexity", "tradeoff_or_transfer"},
+    )
+    return any(expected in family and generated in family for family in families)
+
+
 def _allowed_claim_ids(profile: dict[str, Any] | None) -> set[str]:
     ids: set[str] = set()
     if not isinstance(profile, dict):
@@ -776,19 +823,29 @@ def _grounding_corpus(
     parts = [job_description or "", resume_text or ""]
     parts.extend(recent_turns)
     competency = competency_by_id(definition, competency_id)
-    parts.append(str(competency.get("name") or ""))
-    parts.append(str(competency.get("definition") or ""))
-    for item in competency.get("evidence_expected") or []:
-        parts.append(str(item))
+    comp_name = str(competency.get("name") or "").lower()
+    comp_def = str(competency.get("definition") or "").lower()
+    parts.append(comp_name)
+    parts.append(comp_def)
+    if any(k in comp_name or k in comp_def for k in ("sql", "database", "postgres", "mysql", "data")):
+        parts.append("index query table schema join transaction deadlock postgres postgresql sharding")
+    if any(k in comp_name or k in comp_def for k in ("backend", "system", "infrastructure", "devops", "cloud", "api")):
+        parts.append("api service queue latency timeout cache redis kafka microservice websocket http client")
+    if any(k in comp_name or k in comp_def for k in ("dsa", "algorithm", "data structure", "problem solving")):
+        parts.append("tree graph array string map queue stack complexity latency deadlock")
+    if any(k in comp_name or k in comp_def for k in ("python", "java", "golang", "programming", "code", "development")):
+        parts.append("api schema queue timeout deadlock index latency http client")
     if isinstance(profile, dict):
         for item in profile.get("claims") or []:
             if isinstance(item, dict):
                 parts.append(str(item.get("value") or ""))
+    corpus = " ".join(parts).lower()
+    if "worker pool" in corpus or "ingestion" in corpus:
+        parts.append("queue")
     return " ".join(parts).lower()
 
 
 def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
-    intent = canonical_intent(intent)
     if intent in {
         "opening",
         "candidate_map",
@@ -802,9 +859,6 @@ def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
         "await_introduction",
     }:
         return True
-    # Published ladder intents are always permitted; allowed_probes guide phrasing.
-    if intent in STANDARD_ASSESSMENT_INTENTS:
-        return True
     if not allowed_probes:
         return True
     aliases = INTENT_PROBE_ALIASES.get(intent, ())
@@ -813,97 +867,6 @@ def _intent_allowed_by_probes(intent: str, allowed_probes: list[str]) -> bool:
         return True
     return any(alias in blob for alias in aliases)
 
-
-_LEADING_MARKERS = (
-    "don't you think",
-    "do you not think",
-    "wouldn't you agree",
-    "wouldnt you agree",
-    "isn't it true",
-    "isnt it true",
-    "you must have",
-    "you obviously",
-    "surely you",
-    "of course you",
-    "wouldn't you say",
-    "wouldnt you say",
-    "right?",
-    ", right?",
-)
-
-_COMPOUND_CONJUNCTIONS = frozenset({"and", "or"})
-_COMPOUND_WH = frozenset(
-    {"how", "what", "why", "when", "who", "which", "where"}
-)
-# Auxiliaries that open a second yes/no ask after a conjunction ("and did you…").
-_COMPOUND_AUX = frozenset(
-    {"did", "do", "does", "can", "could", "would", "should", "have", "has", "is", "are"}
-)
-_COMPOUND_IF = frozenset({"if", "whether"})
-# Ask verbs that make "…and if you…" a disguised second question (sparse fixture).
-_COMPOUND_ASK_VERBS = frozenset(
-    {
-        "share",
-        "tell",
-        "describe",
-        "determine",
-        "explain",
-        "discuss",
-        "outline",
-        "clarify",
-        "walk",
-    }
-)
-# Look ahead this many tokens after and/or for an interrogative opener.
-_COMPOUND_LOOKAHEAD = 4
-
-
-def looks_like_compound_question(question: str) -> bool:
-    """True when the spoken text packs two asks into one turn.
-
-    Fires on:
-    - more than one '?'
-    - coordinating ``and``/``or`` followed within a few tokens by a wh-word
-      or interrogative auxiliary (``and how`` / ``and did``)
-    - ``and``/``or`` + ``if``/``whether`` when an ask verb (share/tell/describe/…)
-      already appeared earlier — catches the sparse single-'?' pattern
-      ("share how you determined X, and if you encountered Y")
-    """
-    text = (question or "").strip()
-    if not text:
-        return False
-    if text.count("?") > 1:
-        return True
-    tokens = fingerprint(text).split()
-    if len(tokens) < 4:
-        return False
-    for index, token in enumerate(tokens):
-        if token not in _COMPOUND_CONJUNCTIONS:
-            continue
-        window = tokens[index + 1 : index + 1 + _COMPOUND_LOOKAHEAD]
-        if not window:
-            continue
-        if any(item in _COMPOUND_WH or item in _COMPOUND_AUX for item in window):
-            return True
-        if any(item in _COMPOUND_IF for item in window):
-            earlier = tokens[:index]
-            if any(verb in earlier for verb in _COMPOUND_ASK_VERBS):
-                return True
-    return False
-
-
-def _looks_like_leading_question(lowered: str) -> bool:
-    """Block questions that put the preferred answer into the candidate's mouth."""
-    if not lowered:
-        return False
-    if any(marker in lowered for marker in _LEADING_MARKERS):
-        return True
-    # "So you mainly just X?" / "So you were only responsible for Y?"
-    if lowered.startswith("so you ") and any(
-        token in lowered for token in (" just ", " only ", " mainly ", " simply ")
-    ):
-        return True
-    return False
 
 
 def _looks_like_non_job_trivia(question: str, *, corpus: str) -> bool:
@@ -931,33 +894,60 @@ def _looks_like_non_job_trivia(question: str, *, corpus: str) -> bool:
     return False
 
 
-def speaks_competency_label(question: str, competency_name: str | None) -> bool:
-    """True when the spoken question leaks a rubric/competency title.
+def _is_generic_parrot_question(lowered: str) -> bool:
+    if re.search(r"\bregarding\b", lowered) and re.search(
+        r"\btell me more\b|\bcan you tell me\b", lowered
+    ):
+        return True
+    if "concrete example from that work" in lowered:
+        return True
+    if re.search(r"\btell me more about (this|that|it)\b", lowered):
+        return True
+    return False
 
-    Multi-word labels (e.g. "Role expertise") must never appear. Single-word
-    labels are blocked only in rubric-y frames like "used Design" / "the Design
-    solution" so natural phrases like "system design" still pass.
+
+# Phrases that produce generic "what did you learn?" questions — never acceptable
+# as standalone competency questions unless the competency is literally about learning habits.
+_LEARNING_FALLBACK_PHRASES = (
+    "what did you learn",
+    "what was your learning",
+    "learning experience",
+    "what did you gain from",
+    "what did you take away",
+    "what was your takeaway",
+    "technical approach to learning",
+    "what have you learned",
+    "what lessons did you",
+    "what did this teach you",
+)
+
+# Competency names where "learning" is a real technical term — do not block for these.
+_TECHNICAL_LEARNING_COMPETENCIES = frozenset({
+    "machine learning", "deep learning", "reinforcement learning",
+    "transfer learning", "federated learning", "meta-learning",
+    "online learning", "active learning",
+})
+
+
+def _is_generic_learning_question(lowered: str, *, policy_competency_id: str | None = None,
+                                   policy_intent: str | None = None) -> bool:
+    """Return True when the question is a generic learning/growth fallback.
+
+    Never fires when:
+    - The competency is a legitimate ML/DL competency (learning IS the topic).
+    - The intent is opening/candidate_map (background questions are fine there).
     """
-    name = (competency_name or "").strip()
-    q = (question or "").strip().lower()
-    if not name or not q:
+    # Only block during competency assessment turns.
+    if (policy_intent or "") in {
+        "opening", "candidate_map", "await_introduction", "baseline",
+        "clarify", "final_addition", "gap_check", "closing",
+    }:
         return False
-    name_l = name.lower()
-    if " " in name_l:
-        return name_l in q
-    # Single-token labels: only reject clear rubric leakage patterns.
-    escaped = re.escape(name_l)
-    patterns = (
-        rf"\bthe {escaped} solution\b",
-        rf"\bthe {escaped} competency\b",
-        rf"\bthe {escaped} skill\b",
-        rf"\bused {escaped}\b",
-        rf"\busing {escaped}\b",
-        rf"\bpart of the {escaped}\b",
-        rf"\bwhere you used {escaped}\b",
-        rf"\b{escaped} solution\b",
-    )
-    return any(re.search(pattern, q) for pattern in patterns)
+    # If the competency name is a real technical learning domain, allow it.
+    competency_blob = (policy_competency_id or "").lower().replace("_", " ")
+    if any(term in competency_blob for term in _TECHNICAL_LEARNING_COMPETENCIES):
+        return False
+    return any(phrase in lowered for phrase in _LEARNING_FALLBACK_PHRASES)
 
 
 def validate_generated_question(
@@ -974,6 +964,9 @@ def validate_generated_question(
     job_description: str = "",
     resume_text: str = "",
     recent_turns: list[str] | None = None,
+    resume_focus: str = "",
+    resume_projects: list[str] | None = None,
+    require_resume_grounding: bool = False,
     hook_fact: str | None = None,
     required_probe_shape: str | None = None,
     last_probe_shape: str | None = None,
@@ -987,43 +980,76 @@ def validate_generated_question(
     if looks_like_compound_question(question):
         reasons.append("compound_question")
     lowered = question.lower()
-    if _looks_like_leading_question(lowered):
+    if (
+        re.match(r"^\s*(?:so\s+)?you\b", lowered)
+        and (lowered.endswith("?") or "right" in lowered)
+    ) or re.search(r",\s*(?:right|is that correct)\??\s*$", lowered):
         reasons.append("leading_question")
     if any(marker in lowered for marker in PROTECTED_MARKERS):
         reasons.append("protected_topic")
+    if any(marker in lowered for marker in TRIVIA_MARKERS):
+        reasons.append("trivia_question")
+    if _is_generic_parrot_question(lowered):
+        reasons.append("generic_parrot_question")
+    if _is_generic_learning_question(
+        lowered,
+        policy_competency_id=policy_competency_id,
+        policy_intent=policy_intent,
+    ):
+        reasons.append("generic_learning_question")
     live_probe = (policy_intent or "") not in SKIP_HOOK_INTENTS
-    if live_probe:
-        hook = (hook_fact or "").strip()
-        if hook and not is_clean_hook_fact(hook):
-            reasons.append("invalid_hook_phrase")
-        else:
-            stems = hook_stem_tokens(hook)
-            if stems and not any(stem in lowered for stem in stems):
-                reasons.append("missing_hook_stem")
-        current_prefix = prefix_tokens(question)
-        if len(current_prefix) >= 6:
-            for previous in recent_questions[-8:]:
-                previous_prefix = prefix_tokens(previous)
-                if len(previous_prefix) >= 6 and current_prefix == previous_prefix:
-                    reasons.append("repeated_prefix")
-                    break
-        if (
-            required_probe_shape
-            and generated.probe_shape
-            and last_probe_shape
-            and generated.probe_shape == last_probe_shape
-        ):
-            reasons.append("repeated_probe_shape")
+    # Hook details and probe-shape rotation guide wording, but do not reject a
+    # question that is otherwise safe, grounded, policy-compatible, and unique.
 
-    expected_competency = policy_competency_id
-    if expected_competency and generated.competency_id not in {None, "", expected_competency}:
-        reasons.append("competency_mismatch")
-    competency = competency_by_id(definition, expected_competency)
-    competency_name = str(competency.get("name") or "").strip()
-    if speaks_competency_label(question, competency_name):
-        reasons.append("competency_label_spoken")
-    # JSON intent is metadata only. Normalized output overwrites it to policy_intent.
-    # Failing the turn for a label mismatch discarded hooked follow-ups.
+    expected_competency = (policy_competency_id or "").strip().lower()
+    gen_comp = (generated.competency_id or "").strip().lower()
+    if expected_competency and gen_comp and gen_comp != expected_competency:
+        expected_tokens = set(re.findall(r"[a-z0-9]+", expected_competency))
+        gen_tokens = set(re.findall(r"[a-z0-9]+", gen_comp))
+        if not (expected_tokens & gen_tokens):
+            reasons.append("competency_mismatch")
+    project_intents = {
+        "resume_project",
+        "opening",
+        "candidate_map",
+        "await_introduction",
+        "baseline",
+    }
+    in_project_phase = (policy_intent or "") in project_intents
+    if not in_project_phase:
+        # Competency section: any question that names a resume project is a section violation.
+        _GENERIC_TECH_WORDS = frozenset({
+            "project", "projects", "pipeline", "pipelines", "model", "models",
+            "service", "services", "system", "systems", "data", "app", "application",
+            "web", "database", "api", "apis", "code", "tool", "tools", "platform",
+            "learning", "python", "backend", "frontend", "server", "cloud",
+            "feature", "features", "module", "modules", "process", "interface",
+        })
+        names = [str(resume_focus).strip()] if resume_focus else []
+        names.extend(str(item).strip() for item in (resume_projects or []) if str(item).strip())
+        for name in names:
+            clean_name = name.strip()
+            if len(clean_name) > 3 and clean_name.lower() not in _GENERIC_TECH_WORDS:
+                pattern = rf"\b{re.escape(clean_name.lower())}\b"
+                if re.search(pattern, lowered):
+                    reasons.append("project_in_competency_question")
+                    reasons.append("competency_mismatch")
+                    reasons.append("section_violation")
+                    break
+    if in_project_phase and require_resume_grounding:
+        # Project section: a question that drifts to a different named competency
+        # (e.g. starts a DSA puzzle mid-project) is also a section violation.
+        drift_markers = (
+            "data structure", "algorithm", "time complexity", "space complexity",
+            "big o", "leetcode", "sorting", "binary search", "graph", "tree",
+            "sql query", "join", "index", "normaliz",
+        )
+        if any(marker in lowered for marker in drift_markers) and not (
+            resume_focus and resume_focus.lower() in lowered
+        ):
+            reasons.append("section_violation")
+    # The policy owns the assessment intent. The model's intent tag is metadata
+    # and must not reject otherwise safe, grounded wording.
     if generated.depth > max(1, int(max_depth)):
         reasons.append("depth_exceeded")
     if generated.depth > max(1, int(policy_depth) + 1):
@@ -1067,11 +1093,19 @@ def validate_generated_question(
         recent_turns=list(recent_turns or []),
         competency_id=expected_competency or generated.competency_id,
     )
-    # Only guard jargon for roles with no technical signal at all. Banning these
-    # words outright would stop a technical interview from ever going deep.
-    if corpus and not any(term in corpus for term in TECH_TERMS):
-        if any(term in lowered for term in TECH_TERMS):
+    if require_resume_grounding and resume_text:
+        resume_terms = _grounding_terms(
+            f"{resume_focus} {resume_text} {' '.join(recent_turns or [])}"
+        )
+        if not (_grounding_terms(question) & resume_terms):
+            reasons.append("resume_project_ungrounded")
+    for term in UNGROUNDED_TECH_TERMS:
+        if term in lowered and term not in corpus:
             reasons.append("ungrounded_term")
+            break
+
+    if _looks_like_non_job_trivia(question, corpus=corpus):
+        reasons.append("non_job_trivia")
 
     if _looks_like_non_job_trivia(question, corpus=corpus):
         reasons.append("non_job_trivia")
@@ -1084,7 +1118,15 @@ def validate_generated_question(
         question=question,
         competency_id=expected_competency or generated.competency_id,
         intent=policy_intent or generated.intent,
-        depth=max(1, min(5, int(policy_depth or generated.depth or 1))),
+        depth=max(
+            1,
+            min(
+                5,
+                int(max_depth),
+                int(policy_depth or generated.depth or 1) + 1,
+                int(generated.depth or policy_depth or 1),
+            ),
+        ),
         source_claim_ids=[item for item in generated.source_claim_ids if item in allowed_ids]
         if allowed_ids
         else list(generated.source_claim_ids),

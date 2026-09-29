@@ -59,6 +59,18 @@ class TranscriptParseTests(unittest.TestCase):
             parse_realtime_message({"event": "transcript.final", "text": "hello"}),
             ("final", "hello"),
         )
+        self.assertEqual(
+            parse_realtime_message(
+                {"event": "transcript.partial", "data": {"transcript": "nested"}}
+            ),
+            ("partial", "nested"),
+        )
+        self.assertEqual(
+            parse_realtime_message(
+                {"event": "transcript.final", "data": [{"text": "hello"}, {"transcript": "world"}]}
+            ),
+            ("final", "hello world"),
+        )
 
 
 class FactoryTests(unittest.TestCase):
