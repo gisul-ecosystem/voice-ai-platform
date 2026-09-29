@@ -59,6 +59,14 @@ def flow_to_brain_state(
         for item in (profile.get("claims") or [])
         if isinstance(item, dict) and item.get("claim_id")
     ]
+    
+    # Phase 3: serialize evidence ledger for persistence across reconnects
+    evidence_ledger = {}
+    flow_ledger = getattr(flow, "evidence_ledger", None)
+    if flow_ledger:
+        from products.interviewer.evidence import serialize_ledger
+        evidence_ledger = serialize_ledger(flow_ledger)
+    
     return {
         "session_id": session_id,
         "definition_id": definition_id,
@@ -74,6 +82,7 @@ def flow_to_brain_state(
         "asked_question_ids": list(asked_question_ids),
         "candidate_claim_ids": claim_ids,
         "coverage": dict(getattr(flow, "coverage", None) or {}),
+        "evidence_ledger": evidence_ledger,
         "consecutive_unusable_answers": max(
             0, int(getattr(flow, "consecutive_unusable", 0) or 0)
         ),
@@ -114,6 +123,16 @@ def brain_bundle_to_initial_state(bundle: dict[str, Any] | None) -> dict[str, An
     if not active_question_id and asked_question_ids:
         active_question_id = asked_question_ids[-1]
 
+    # Phase 3: restore evidence ledger from persisted state
+    initial_evidence_ledger = None
+    evidence_ledger_data = state.get("evidence_ledger")
+    if isinstance(evidence_ledger_data, dict) and evidence_ledger_data:
+        from products.interviewer.evidence import deserialize_ledger
+        try:
+            initial_evidence_ledger = deserialize_ledger(evidence_ledger_data)
+        except Exception as exc:
+            logger.warning("evidence_ledger_restore_failed", extra={"error": str(exc)})
+
     restored: dict[str, Any] = {
         "candidate_turns": candidate_turns,
         "interviewer_turns": interviewer_turns,
@@ -124,6 +143,7 @@ def brain_bundle_to_initial_state(bundle: dict[str, Any] | None) -> dict[str, An
         "brain_active_question_id": active_question_id,
         "brain_asked_question_ids": [qid for qid in asked_question_ids if qid],
         "initial_coverage": state.get("coverage") or {},
+        "initial_evidence_ledger": initial_evidence_ledger,
     }
     return restored
 

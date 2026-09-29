@@ -773,6 +773,8 @@ class InterviewFlow:
         initial_coverage: dict[str, Any] | None = None,
         difficulty: str | None = None,
         language: str | None = None,
+        # Phase 3: evidence ledger persistence across reconnects
+        initial_evidence_ledger: dict[str, Any] | None = None,
     ) -> None:
         if candidate_profile and candidate_profile.get("claims"):
             projects = [
@@ -848,11 +850,15 @@ class InterviewFlow:
         self.difficulty = (difficulty or "applied").strip().lower()
         self.language = (language or "English").strip() or "English"
         self.difficulty_profile = difficulty_profile(self.difficulty)
-        self.evidence_ledger = build_ledger(
-            self.interview_definition,
-            target_level=str(self.candidate_profile.get("job_target_level") or "mid"),
-            difficulty=self.difficulty,
-        )
+        # Phase 3: restore evidence ledger from persistence or build fresh
+        if initial_evidence_ledger:
+            self.evidence_ledger = initial_evidence_ledger
+        else:
+            self.evidence_ledger = build_ledger(
+                self.interview_definition,
+                target_level=str(self.candidate_profile.get("job_target_level") or "mid"),
+                difficulty=self.difficulty,
+            )
         self.last_question_competency_id: str | None = None
         self.last_question_intent = "opening"
         self.last_question_depth = 1

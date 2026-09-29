@@ -167,6 +167,16 @@ class CompetencyLedger:
             "probes_spent": self.probes_spent,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CompetencyLedger":
+        """Phase 3: restore from persisted state."""
+        return cls(
+            competency_id=str(data.get("competency_id", "")),
+            required=list(data.get("required", [])),
+            states=dict(data.get("states", {})),
+            probes_spent=int(data.get("probes_spent", 0)),
+        )
+
     def status_of(self, key: str) -> str:
         return self.states.get(key, MISSING)
 
@@ -228,6 +238,20 @@ def build_ledger(
             required=required or list(_required_slots(item, target_level))[:1],
             states={},
         )
+    return ledger
+
+
+def serialize_ledger(ledger: dict[str, CompetencyLedger]) -> dict[str, dict[str, Any]]:
+    """Phase 3: serialize evidence ledger for brain state persistence."""
+    return {competency_id: entry.as_dict() for competency_id, entry in ledger.items()}
+
+
+def deserialize_ledger(data: dict[str, dict[str, Any]]) -> dict[str, CompetencyLedger]:
+    """Phase 3: restore evidence ledger from persisted brain state."""
+    ledger: dict[str, CompetencyLedger] = {}
+    for competency_id, entry_data in data.items():
+        if isinstance(entry_data, dict):
+            ledger[competency_id] = CompetencyLedger.from_dict(entry_data)
     return ledger
 
 
