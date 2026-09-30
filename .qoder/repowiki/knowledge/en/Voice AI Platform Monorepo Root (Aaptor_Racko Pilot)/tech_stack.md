@@ -1,0 +1,1 @@
+Python 3.11 FastAPI + async/await for backend/agent services; livekit-agents 1.x `AgentSession` orchestrator; Next.js frontend via npm workspaces; Docker images built and published to GitHub Container Registry; staging runs on a self-hosted Linux runner behind Caddy with Let's Encrypt TLS and Redis as the 'hot interview brain'.

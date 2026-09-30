@@ -85,7 +85,7 @@ def test_outline_skips_jd_duty_fragment_competencies() -> None:
     assert "Python backend" in names
     assert "Debugging" in names
     assert names[0] == "opening"
-    assert names[1] == "candidate_map"
+    assert names[1] == "Python backend"
     assert names[-1] == "closing"
 
 

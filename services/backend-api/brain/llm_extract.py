@@ -461,12 +461,12 @@ async def extract_job_intelligence_async(
         "required": ["competencies"]
     }
     comp_prompt = (
-        "You are an expert technical recruiter. Review the extracted mandatory requirements and skills from a job description, "
-        "and convert them into a concise list of 5 to 8 core competencies. "
-        "Use standard, normalized names (e.g. 'Data Structures and Algorithms', 'REST APIs', 'React.js', 'System Design'). "
-        "DO NOT use full sentences or trailing context. Return ONLY the noun phrases representing the core skills. "
-        "For example, instead of 'experience with scalable architectures', return 'Scalable Architecture'. "
-        "Instead of 'solid foundations in data structures', return 'Data Structures'. DO NOT include experience years."
+        "You are an expert assessment and evaluation designer. Review the extracted mandatory requirements and skills from a job description, "
+        "and convert them into a concise list of 5 to 8 core competencies relevant to the role. "
+        "Use standard, normalized names (e.g. for software: 'System Design', 'APIs'; for sales: 'Discovery & Qualification', 'Objection Handling', 'Negotiation'; for operations: 'Process Optimization', 'Vendor Management'). "
+        "DO NOT use full sentences or trailing context. Return ONLY the noun phrases representing the core competency areas. "
+        "For example, instead of 'experience with enterprise client relationships', return 'Enterprise Account Management'. "
+        "Instead of 'deep understanding of financial modeling', return 'Financial Modeling'. DO NOT include experience years or generic fillers."
     )
     reqs_text = "\n".join(
         [i.text for i in merged.mandatory_requirements] + [i.text for i in merged.skills]

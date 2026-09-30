@@ -84,6 +84,13 @@ export async function POST(request: Request) {
         creator_competencies: body.competencies,
         resume_required: true,
         include_scenarios: true,
+        // Spec 4.1 admin layer (Phase 0). Backend defaults match the legacy
+        // output when these are absent.
+        rigor: typeof body.rigor === "string" ? body.rigor : undefined,
+        questioning_mode:
+          typeof body.questioningMode === "string"
+            ? body.questioningMode
+            : undefined,
       });
       const data = await compiled.json().catch(() => ({}));
       if (!compiled.ok) {

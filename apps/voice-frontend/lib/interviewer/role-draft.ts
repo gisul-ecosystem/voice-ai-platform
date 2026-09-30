@@ -17,6 +17,9 @@ export type RoleDraftState = {
   jobDescription: string;
   competencies: string;
   startsAt: string;
+  /** Spec 4.1 admin layer (Phase 0) — defaults keep legacy compile output. */
+  rigor?: string;
+  questioningMode?: string;
   draft?: Record<string, unknown>;
   published?: unknown;
 };

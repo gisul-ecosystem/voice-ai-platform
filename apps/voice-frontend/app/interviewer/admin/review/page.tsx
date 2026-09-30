@@ -179,6 +179,34 @@ export default function ReviewAlignmentPage() {
     return evidence.map(String).join(", ");
   }
 
+  /** Spec 4.4 anchors preview — weak/strong expectations for this competency. */
+  function anchorsPreview(
+    item: Record<string, unknown>,
+  ): { weak: string; strong: string } | null {
+    const anchors = item.level_anchors as
+      | { weak?: unknown; strong?: unknown }
+      | undefined;
+    if (anchors && typeof anchors === "object") {
+      const weak = String(anchors.weak || "").trim();
+      const strong = String(anchors.strong || "").trim();
+      if (weak && strong) return { weak, strong };
+    }
+    const rubric = Array.isArray(item.rubric)
+      ? (item.rubric as Array<Record<string, unknown>>)
+      : [];
+    const byRating = new Map<number, string>();
+    for (const anchor of rubric) {
+      const rating = Number(anchor.rating);
+      const description = String(anchor.description || "").trim();
+      if (rating && description) byRating.set(rating, description);
+    }
+    const weak = byRating.get(1);
+    const strong =
+      byRating.get(5) || [...byRating.values()].slice(-1)[0] || "";
+    if (weak && strong) return { weak, strong };
+    return null;
+  }
+
   function handleDrop(targetIndex: number) {
     if (draggingIndex !== null) moveTo(draggingIndex, targetIndex);
     setDraggingIndex(null);
@@ -430,6 +458,20 @@ export default function ReviewAlignmentPage() {
                 }
               />
             </label>
+            {(() => {
+              const anchors = anchorsPreview(competency);
+              return anchors ? (
+                <div className="anchor-preview">
+                  <span className="anchor-preview-label">Level anchors</span>
+                  <p>
+                    <strong>Weak (1):</strong> {anchors.weak}
+                  </p>
+                  <p>
+                    <strong>Strong (5):</strong> {anchors.strong}
+                  </p>
+                </div>
+              ) : null;
+            })()}
             <div className="admin-field-grid">
               <label>
                 Maximum depth

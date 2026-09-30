@@ -2834,6 +2834,69 @@ select:focus-visible,
   background: #f8fafc;
 }
 
+/* Spec 4.1 weight plan — per-competency sliders (Phase 0). */
+.weight-plan {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.weight-plan legend {
+  padding: 0 7px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.weight-slider-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 2fr 56px;
+  align-items: center;
+  gap: 12px;
+}
+
+.weight-slider-name {
+  font-size: 0.8rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.weight-slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--foreground);
+}
+
+.weight-slider-value {
+  font: 650 0.78rem var(--font-geist-mono), monospace;
+  text-align: right;
+  color: var(--muted);
+}
+
+.weight-slider-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+}
+
+.weight-slider-total > span:first-child {
+  font-weight: 700;
+}
+
+.weight-slider-hint {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.weight-slider-total .button {
+  min-height: 34px;
+  padding: 4px 12px;
+  font-size: 0.74rem;
+}
+
 .policy-list legend {
   padding: 0 7px;
   font-size: 0.82rem;

@@ -1,0 +1,1 @@
+Repository root for the Voice AI Platform monorepo hosting two LiveKit-based voice products (Aaptor interviewer, Racko customer support) plus shared services, frontend, staging deployment, and CI/CD.

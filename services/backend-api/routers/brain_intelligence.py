@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from brain.compiler import compile_blueprint
+from brain.compiler import compile_blueprint, normalize_skill_label
 from brain.documents import DocumentIngestError, extract_document_text
 from brain.llm_extract import (
     extract_candidate_profile_async,
@@ -23,6 +23,8 @@ from models.brain import (
     InterviewDefinitionVersion,
     JobIntelligence,
     PublicationValidationResult,
+    QuestioningMode,
+    RigorLevel,
     SeniorityLevel,
     utc_now,
 )
@@ -107,6 +109,13 @@ class CompileBlueprintRequest(BaseModel):
     creator_competencies: list[str] = Field(default_factory=list, max_length=8)
     resume_required: bool = False
     include_scenarios: bool = True
+    # Spec 4.1 admin layer (Phase 0). Defaults keep the legacy compile output
+    # byte-identical when clients omit them.
+    rigor: RigorLevel = "balanced"
+    questioning_mode: QuestioningMode = "adaptive"
+    competency_weights: list[float] | None = Field(
+        default=None, min_length=1, max_length=8
+    )
 
 
 class PublishBlueprintRequest(BaseModel):
@@ -310,6 +319,44 @@ async def compile_interview_blueprint(
             duration_minutes=int(req.duration_minutes),
             creator_guidance=guidance,
         )
+        # Spec §4.3: Rubric Synthesis Engine provides domain-specific competencies,
+        # evaluation lens (e.g. MEDDIC vs BANT vs STAR), required skills, and anchors.
+        rubric_data: dict[str, Any] | None = None
+        if not guidance or not recommended:
+            try:
+                from brain.rubric_synthesis import synthesize_rubric_async
+                rubric_data = await synthesize_rubric_async(
+                    role=req.job_intelligence.role.title,
+                    seniority=req.job_intelligence.role.target_level,
+                    job_description=req.job_intelligence.raw_job_description,
+                    target_duration_minutes=int(req.duration_minutes),
+                    creator_guidance=guidance,
+                )
+            except Exception as synth_err:
+                logger.warning("rubric_synthesis_skipped", extra={"error": str(synth_err)})
+
+        if rubric_data and rubric_data.get("competencies"):
+            synth_comps = rubric_data["competencies"]
+            lens = rubric_data.get("evaluation_lens")
+            if not recommended:
+                recommended = []
+            rec_by_name = {normalize_skill_label(str(r.get("name") or "")).lower(): r for r in recommended}
+            for sc in synth_comps:
+                s_name = str(sc.get("name") or "").strip()
+                s_key = normalize_skill_label(s_name).lower()
+                if s_key not in rec_by_name:
+                    item = {
+                        "name": s_name,
+                        "definition": sc.get("description"),
+                        "evidence_expected": sc.get("required_skills"),
+                        "required": sc.get("importance") == "high",
+                        "allowed_intents": sc.get("allowed_intents"),
+                        "evaluation_lens": lens,
+                        "level_anchors": sc.get("level_anchors"),
+                    }
+                    recommended.append(item)
+                    rec_by_name[s_key] = item
+
         # Competencies structure the interview. Never silently pad CORE_FALLBACKS
         # when the creator asked the LLM to invent the plan from the JD alone.
         if not recommended and not guidance:
@@ -332,6 +379,9 @@ async def compile_interview_blueprint(
             creator_exclusive=bool(recommended) or len(guidance) >= 3,
             resume_required=req.resume_required,
             include_scenarios=req.include_scenarios,
+            competency_weights=req.competency_weights,
+            questioning_mode=req.questioning_mode,
+            rigor=req.rigor,
         )
     except HTTPException:
         raise

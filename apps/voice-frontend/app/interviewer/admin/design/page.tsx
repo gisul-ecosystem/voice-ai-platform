@@ -1,12 +1,26 @@
-"use client";
+﻿"use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useState, useSyncExternalStore } from "react";
 
-function defaultStartTime(): string {
-  return new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
-}
-const DRAFT_KEY = "ai-interview:role-draft";
+import {
+  CreateProgress,
+  LandingNav,
+} from "@/components/interviewer/LandingNav";
+import {
+  normalizeQuestioningMode,
+  normalizeRigor,
+  QUESTIONING_MODE_OPTIONS,
+  RIGOR_OPTIONS,
+} from "@/lib/session-contract";
+import {
+  EMPTY_ROLE_DRAFT,
+  defaultStartsAtLocal,
+  getRoleDraftSnapshot,
+  subscribeRoleDraft,
+  writeRoleDraft,
+  type RoleDraftState,
+} from "@/lib/interviewer/role-draft";
 
 const DEFAULT_VALUE: RoleDraftState = {
   title: "AI Engineer interview",
@@ -18,6 +32,8 @@ const DEFAULT_VALUE: RoleDraftState = {
   competencies: "",
   definitionId: "ai-engineer-junior-v1",
   startsAt: defaultStartsAtLocal(),
+  rigor: "balanced",
+  questioningMode: "adaptive",
 };
 
 function draftToForm(state?: RoleDraftState): RoleDraftState {
@@ -32,32 +48,40 @@ function draftToForm(state?: RoleDraftState): RoleDraftState {
     jobDescription: state.jobDescription || "",
     competencies: state.competencies ?? "",
     startsAt: state.startsAt || startsAt,
+    rigor: normalizeRigor(state.rigor),
+    questioningMode: normalizeQuestioningMode(state.questioningMode),
     draft: state.draft,
     published: state.published,
   };
 }
 
 export default function DesignRolePage() {
-  const [value, setValue] = useState<RoleDraft>({
-    title: "AI Engineer interview", role: "AI Engineer", seniority: "junior",
-    durationMinutes: "30", jobDescription: "", competencies: "",
-    definitionId: "ai-engineer-junior-v1", startsAt: "",
-    difficulty: "applied", language: "English",
-    monitoringEnabled: true, recordingEnabled: false,
-  });
+  const router = useRouter();
+  const ready = useSyncExternalStore(
+    subscribeRoleDraft,
+    () => true,
+    () => false,
+  );
+  const boot = useSyncExternalStore(
+    subscribeRoleDraft,
+    getRoleDraftSnapshot,
+    () => EMPTY_ROLE_DRAFT,
+  );
+  const [value, setValue] = useState<RoleDraftState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [newCompetency, setNewCompetency] = useState("");
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setValue((current) => ({ ...current, startsAt: defaultStartTime() }));
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+  const form = value ?? (ready ? draftToForm(boot.state) : DEFAULT_VALUE);
 
-  function setField<K extends keyof RoleDraft>(key: K, next: RoleDraft[K]) {
-    setValue((current) => ({ ...current, [key]: next }));
+  function setField<K extends keyof RoleDraftState>(
+    key: K,
+    next: RoleDraftState[K],
+  ) {
+    setValue((current) => {
+      const base = current ?? draftToForm(boot.state);
+      return { ...base, [key]: next };
+    });
   }
 
   function competencyList(): string[] {
@@ -74,7 +98,7 @@ export default function DesignRolePage() {
       .map((item) => item.trim())
       .filter(Boolean);
     // Legacy CSV: only split when every segment looks like a short chip.
-    // A pasted duty line ("Design, develop, test, and maintain…") stays one item.
+    // A pasted duty line ("Design, develop, test, and maintainΓÇª") stays one item.
     if (
       parts.length > 1 &&
       parts.every(
@@ -125,6 +149,8 @@ export default function DesignRolePage() {
           competencies: competenciesPayload,
           timezone:
             Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+          rigor: form.rigor || "balanced",
+          questioningMode: form.questioningMode || "adaptive",
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -221,6 +247,37 @@ export default function DesignRolePage() {
               <option value="45">45 minutes</option>
             </select>
           </label>
+          <label>
+            Assessment rigor
+            <select
+              value={form.rigor || "balanced"}
+              onChange={(e) => setField("rigor", normalizeRigor(e.target.value))}
+            >
+              {RIGOR_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option.replace("_", " ")}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Questioning style
+            <select
+              value={form.questioningMode || "adaptive"}
+              onChange={(e) =>
+                setField(
+                  "questioningMode",
+                  normalizeQuestioningMode(e.target.value),
+                )
+              }
+            >
+              {QUESTIONING_MODE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="admin-field-wide">
             Job description <span className="field-required">Required</span>
             <textarea
@@ -253,7 +310,7 @@ export default function DesignRolePage() {
                       )
                     }
                   >
-                    ×
+                    ├ù
                   </button>
                 </span>
               ))}

@@ -1,0 +1,20 @@
+schema_version: 1
+module_path: ""
+title: Voice AI Platform Monorepo Root (Aaptor/Racko Pilot)
+scope:
+    - README.md
+    - .github/
+    - deploy/
+    - docs/
+    - document/
+    - scripts/
+    - package.json
+    - package-lock.json
+    - .dockerignore
+    - .gitattributes
+    - .gitignore
+    - livekit.agents
+    - scratch.py
+source_files: []
+depends_on: []
+related_to: []

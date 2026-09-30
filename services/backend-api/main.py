@@ -17,7 +17,18 @@ from logging_config import configure_logging
 load_dotenv()
 configure_logging()
 
-from routers import health, interviews, sessions, tools  # noqa: E402
+from routers import (  # noqa: E402
+    admin_candidates,
+    brain_intelligence,
+    brain_state,
+    health,
+    interview_contexts,
+    interviews,
+    scheduled_interviews,
+    session_events,
+    sessions,
+    tools,
+)
 from db.mongo import get_db  # noqa: E402
 
 logger = logging.getLogger("backend-api")
@@ -39,7 +50,13 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 app.include_router(health.router)
+app.include_router(admin_candidates.router)
+app.include_router(brain_intelligence.router)
+app.include_router(brain_state.router)
+app.include_router(interview_contexts.router)
 app.include_router(interviews.router)
+app.include_router(scheduled_interviews.router)
+app.include_router(session_events.router)
 app.include_router(sessions.router)
 app.include_router(tools.router)
 

@@ -27,8 +27,12 @@ def _require_publishable_setup(
     *,
     job_description: str,
     interview_setup: InterviewSetupConfig,
-) -> tuple[str, list[str]]:
-    """Creator publication gates before compile/publish (incomplete setup blocked)."""
+) -> tuple[str, list[str], list[float] | None]:
+    """Creator publication gates before compile/publish (incomplete setup blocked).
+
+    Returns the cleaned JD, the kept competencies, and — when the caller sent
+    weight sliders — the weights filtered in parallel so they stay aligned.
+    """
     jd = (job_description or "").strip()
     if len(jd) < _MIN_JD_CHARS:
         raise ValueError(
@@ -39,8 +43,9 @@ def _require_publishable_setup(
     if len(title) < 2 or len(role) < 2:
         raise ValueError("interview title and role are required before publishing")
     competencies: list[str] = []
+    kept_indices: list[int] = []
     seen: set[str] = set()
-    for item in interview_setup.competencies:
+    for index, item in enumerate(interview_setup.competencies):
         if not isinstance(item, str):
             continue
         cleaned = normalize_skill_label(item)
@@ -53,12 +58,19 @@ def _require_publishable_setup(
             continue
         seen.add(key)
         competencies.append(cleaned)
+        kept_indices.append(index)
     if not competencies:
         raise ValueError(
             "creator competencies are required; use real skill names "
             "(not duty fragments like Design/develop/test)"
         )
-    return jd, competencies
+    raw_weights = interview_setup.competencyWeights
+    weights = (
+        [float(raw_weights[index]) for index in kept_indices]
+        if raw_weights is not None
+        else None
+    )
+    return jd, competencies, weights
 
 
 async def publish_and_store(
@@ -75,11 +87,14 @@ async def publish_and_store(
             raise ValueError("definition_id not found")
         return stored
 
-    jd, competencies = _require_publishable_setup(
+    jd, competencies, weights = _require_publishable_setup(
         job_description=job_description,
         interview_setup=interview_setup,
     )
-    interview_setup = interview_setup.model_copy(update={"competencies": competencies})
+    update: dict = {"competencies": competencies}
+    if weights is not None:
+        update["competencyWeights"] = weights
+    interview_setup = interview_setup.model_copy(update=update)
 
     level: SeniorityLevel = interview_setup.seniority
     duration: DurationMinutes = interview_setup.durationMinutes
@@ -119,6 +134,9 @@ async def publish_and_store(
         creator_competencies=list(interview_setup.competencies),
         creator_exclusive=True,
         include_scenarios=False,
+        competency_weights=interview_setup.competencyWeights,
+        questioning_mode=interview_setup.questioningMode,
+        rigor=interview_setup.rigor,
     )
     published = publish_definition(draft, published_by=published_by)
     outcome = await definitions.save_definition(published)

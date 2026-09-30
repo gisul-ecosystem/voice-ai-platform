@@ -13,6 +13,34 @@ export function normalizeInterviewDuration(
   return 30;
 }
 
+/** Spec 4.1 rigor dial — coverage strictness for the whole interview. */
+export const RIGOR_OPTIONS = ["screening", "balanced", "bar_raiser"] as const;
+export type RigorLevel = (typeof RIGOR_OPTIONS)[number];
+
+export function normalizeRigor(value: unknown): RigorLevel {
+  return RIGOR_OPTIONS.includes(value as RigorLevel)
+    ? (value as RigorLevel)
+    : "balanced";
+}
+
+/** Spec 4.1 questioning modes — drives the section prompt pack at runtime. */
+export const QUESTIONING_MODE_OPTIONS = [
+  "adaptive",
+  "technical",
+  "behavioral",
+  "case",
+  "scenario",
+  "project_deep_dive",
+  "system_design",
+] as const;
+export type QuestioningMode = (typeof QUESTIONING_MODE_OPTIONS)[number];
+
+export function normalizeQuestioningMode(value: unknown): QuestioningMode {
+  return QUESTIONING_MODE_OPTIONS.includes(value as QuestioningMode)
+    ? (value as QuestioningMode)
+    : "adaptive";
+}
+
 export type PublicSessionRequest = {
   productId: ProductId;
   participantName: string;
@@ -39,6 +67,11 @@ export type PublicSessionRequest = {
     maxProbesPerPhase: number;
     monitoringEnabled: boolean;
     recordingEnabled: boolean;
+    /** Spec 4.1 admin layer. Omitted values keep the legacy compile path. */
+    rigor?: RigorLevel;
+    questioningMode?: QuestioningMode;
+    /** Raw per-competency weights (0-100 each, parallel to competencies). */
+    competencyWeights?: number[];
   };
 };
 
