@@ -428,13 +428,14 @@ def recorded_sessions() -> list[RecordedSession]:
             last_answer="I prefer hiking on weekends when it rains in the hills.",
             asked_intent="establish_ownership",
             competency_id="problem_solving",
-            expected_intent="establish_ownership",
-            expected_action="PROBE_FOR_OWNERSHIP",
+            expected_intent="clarify",
+            expected_action="CLARIFY_CURRENT_ANSWER",
             expected_competency_id="problem_solving",
             interviewer_turns=_DEFAULT_QUESTIONS,
             prior_candidate_turns=_DEFAULT_ANSWERS,
             pre_covered=("establish_context",),
             must_not_cover=("establish_ownership", "applied_understanding"),
+            consecutive_unusable=0,
         ),
         RecordedSession(
             fixture_id="contradiction_04_stay_reliability",
@@ -675,13 +676,14 @@ def _check_hooked(result: ReplayResult, notes: dict[str, str]) -> bool:
     stem = (session.hook_stem or result.hook_fact or "").lower()
     spoken = result.fallback_question.lower()
     stems = hook_stem_tokens(session.hook_stem or result.hook_fact)
-    if stem and stem in spoken:
-        notes["hooked"] = f"fallback contains {stem}"
+    extracted = (result.hook_fact or "").strip().lower()
+    if stem and stem in extracted:
+        notes["hooked"] = f"hook extracted for LLM: {stem}"
         return True
-    if stems and any(token in spoken for token in stems):
-        notes["hooked"] = "fallback contains hook stem"
+    if stems and any(token in extracted for token in stems):
+        notes["hooked"] = "hook stem extracted for LLM"
         return True
-    notes["hooked"] = "named metric/tool missing from next question"
+    notes["hooked"] = "named metric/tool not extracted for the next turn"
     return False
 
 

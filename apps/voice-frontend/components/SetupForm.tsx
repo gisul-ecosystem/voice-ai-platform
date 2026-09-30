@@ -6,7 +6,13 @@ import type { ProductConfig } from "@/lib/products";
 import {
   INTERVIEW_DURATION_OPTIONS,
   normalizeInterviewDuration,
+  normalizeQuestioningMode,
+  normalizeRigor,
+  QUESTIONING_MODE_OPTIONS,
+  RIGOR_OPTIONS,
   type PublicSessionRequest,
+  type QuestioningMode,
+  type RigorLevel,
 } from "@/lib/session-contract";
 
 type SetupFormProps = {
@@ -67,6 +73,32 @@ type PublicationGateInput = {
 
 function listedCompetencies(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+const RIGOR_LABELS: Record<RigorLevel, string> = {
+  screening: "Screening — quick coverage signal",
+  balanced: "Balanced — solid evidence per topic",
+  bar_raiser: "Bar-raiser — exhaustive depth",
+};
+
+const QUESTIONING_MODE_LABELS: Record<QuestioningMode, string> = {
+  adaptive: "Adaptive — mix styles per topic",
+  technical: "Technical — knowledge & problem solving",
+  behavioral: "Behavioral — STAR experience questions",
+  case: "Case — business problem walkthrough",
+  scenario: "Scenario — situational judgment",
+  project_deep_dive: "Project deep-dive — past work forensics",
+  system_design: "System design — architecture & trade-offs",
+};
+
+/** Equal split of 100 across items, drift-corrected on the last. */
+function equalWeights(count: number): number[] {
+  if (count <= 0) return [];
+  const base = Math.round((100 / count) * 10) / 10;
+  const weights = Array.from({ length: count }, () => base);
+  const assigned = Math.round(base * (count - 1) * 10) / 10;
+  weights[count - 1] = Math.round((100 - assigned) * 10) / 10;
+  return weights;
 }
 
 function roleStepError(input: PublicationGateInput): string | null {
@@ -224,6 +256,19 @@ export function SetupForm({
   const [maxProbesPerPhase, setMaxProbesPerPhase] = useState(
     initialSetup?.maxProbesPerPhase ?? 2,
   );
+  const [rigor, setRigor] = useState<RigorLevel>(
+    normalizeRigor(initialSetup?.rigor),
+  );
+  const [questioningMode, setQuestioningMode] = useState<QuestioningMode>(
+    normalizeQuestioningMode(initialSetup?.questioningMode),
+  );
+  // null = untouched: weights are not sent and the legacy compile path runs.
+  const [competencyWeights, setCompetencyWeights] = useState<number[] | null>(
+    Array.isArray(initialSetup?.competencyWeights) &&
+      initialSetup.competencyWeights.length > 0
+      ? initialSetup.competencyWeights.map((weight) => Number(weight) || 0)
+      : null,
+  );
   const [monitoringEnabled, setMonitoringEnabled] = useState(
     initialSetup?.monitoringEnabled ?? true,
   );
@@ -253,6 +298,43 @@ export function SetupForm({
       ? initialValue.candidateProfile
       : undefined,
   );
+
+  const competencyItems = listedCompetencies(competencies);
+  const activeWeights =
+    competencyWeights !== null &&
+    competencyWeights.length === competencyItems.length
+      ? competencyWeights
+      : null;
+  const displayWeights = activeWeights ?? equalWeights(competencyItems.length);
+  const weightTotal =
+    Math.round(
+      displayWeights.reduce((sum, value) => sum + value, 0) * 10,
+    ) / 10;
+
+  // Keep engaged weights aligned when the competency list changes length.
+  useEffect(() => {
+    setCompetencyWeights((current) => {
+      if (current === null) return null;
+      const count = listedCompetencies(competencies).length;
+      if (count === 0) return null;
+      return current.length === count ? current : equalWeights(count);
+    });
+  }, [competencies]);
+
+  function setWeight(index: number, raw: number) {
+    const base = activeWeights ?? equalWeights(competencyItems.length);
+    const others = base.reduce(
+      (sum, value, itemIndex) => (itemIndex === index ? sum : sum + value),
+      0,
+    );
+    const capped = Math.min(
+      Math.max(Math.round(raw * 10) / 10, 0),
+      Math.round((100 - others) * 10) / 10,
+    );
+    setCompetencyWeights(
+      base.map((value, itemIndex) => (itemIndex === index ? capped : value)),
+    );
+  }
 
   useEffect(() => {
     if (initialValue) return;
@@ -291,6 +373,14 @@ export function SetupForm({
           setMaxProbesPerPhase(setup.maxProbesPerPhase);
           setMonitoringEnabled(setup.monitoringEnabled);
           setRecordingEnabled(setup.recordingEnabled);
+          setRigor(normalizeRigor(setup.rigor));
+          setQuestioningMode(normalizeQuestioningMode(setup.questioningMode));
+          setCompetencyWeights(
+            Array.isArray(setup.competencyWeights) &&
+              setup.competencyWeights.length > 0
+              ? setup.competencyWeights.map((weight) => Number(weight) || 0)
+              : null,
+          );
         }
       } catch {
         sessionStorage.removeItem(DRAFT_KEY);
@@ -328,10 +418,14 @@ export function SetupForm({
           maxProbesPerPhase,
           monitoringEnabled,
           recordingEnabled,
+          rigor,
+          questioningMode,
+          competencyWeights: activeWeights ?? undefined,
         },
       } satisfies PublicSessionRequest),
     );
   }, [
+    activeWeights,
     candidateEmail,
     competencies,
     difficulty,
@@ -343,9 +437,11 @@ export function SetupForm({
     monitoringEnabled,
     participantName,
     product.id,
+    questioningMode,
     recordingEnabled,
     resumeText,
     candidateProfile,
+    rigor,
     role,
     seniority,
     startsAt,
@@ -379,6 +475,9 @@ export function SetupForm({
         maxProbesPerPhase,
         monitoringEnabled,
         recordingEnabled,
+        rigor,
+        questioningMode,
+        competencyWeights: activeWeights ?? undefined,
       },
     };
   }
@@ -613,6 +712,36 @@ export function SetupForm({
             </select>
           </div>
           <div className="field">
+            <label htmlFor="rigor">Assessment rigor</label>
+            <p className="field-help">
+              How much evidence the interviewer requires before moving on.
+            </p>
+            <select id="rigor" value={rigor}
+              onChange={(event) => setRigor(normalizeRigor(event.target.value))}>
+              {RIGOR_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {RIGOR_LABELS[option]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="questioning-mode">Questioning style</label>
+            <p className="field-help">
+              The default style for competency questions; adapted per topic.
+            </p>
+            <select id="questioning-mode" value={questioningMode}
+              onChange={(event) =>
+                setQuestioningMode(normalizeQuestioningMode(event.target.value))
+              }>
+              {QUESTIONING_MODE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {QUESTIONING_MODE_LABELS[option]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
             <label htmlFor="duration">Interview length</label>
             <p className="field-help">Choose 15, 30, or 45 minutes.</p>
             <select
@@ -756,6 +885,55 @@ export function SetupForm({
               <option value={3}>3 follow-ups</option>
             </select>
           </div>
+          {competencyItems.length > 0 ? (
+            <fieldset className="field field-wide weight-plan">
+              <legend>Competency weight plan</legend>
+              <p className="field-help">
+                Weight decides how many questions, follow-ups, and how much depth
+                each competency gets. Total is capped at 100%; values are
+                relative and normalized by the engine.
+              </p>
+              {competencyItems.map((name, index) => (
+                <div className="weight-slider-row" key={`${name}-${index}`}>
+                  <span className="weight-slider-name">{name}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={displayWeights[index] ?? 0}
+                    aria-label={`${name} weight`}
+                    onChange={(event) => setWeight(index, Number(event.target.value))}
+                  />
+                  <span className="weight-slider-value">
+                    {Math.round(displayWeights[index] ?? 0)}%
+                  </span>
+                </div>
+              ))}
+              <div className="weight-slider-total" aria-live="polite">
+                <span>Total: {weightTotal}%</span>
+                {activeWeights === null ? (
+                  <span className="weight-slider-hint">Even split by default</span>
+                ) : weightTotal < 99.95 ? (
+                  <span className="weight-slider-hint">
+                    {Math.round((100 - weightTotal) * 10) / 10}% redistributed
+                    proportionally
+                  </span>
+                ) : (
+                  <span className="weight-slider-hint">✓ Full plan allocated</span>
+                )}
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() =>
+                    setCompetencyWeights(equalWeights(competencyItems.length))
+                  }
+                >
+                  Balance equally
+                </button>
+              </div>
+            </fieldset>
+          ) : null}
         </>
       ) : null}
 
@@ -827,7 +1005,11 @@ export function SetupForm({
             <article>
               <span>Format</span>
               <strong>{durationMinutes} minutes · {language}</strong>
-              <p>Up to {maxProbesPerPhase} follow-ups per phase</p>
+              <p>
+                Up to {maxProbesPerPhase} follow-ups per phase ·{" "}
+                {rigor.replace("_", " ")} rigor ·{" "}
+                {questioningMode.replace(/_/g, " ")}
+              </p>
             </article>
             <article>
               <span>Candidate</span>
@@ -844,6 +1026,14 @@ export function SetupForm({
             <div>
               <span>Competencies</span>
               <p>{competencies}</p>
+              {activeWeights ? (
+                <p>
+                  Weights:{" "}
+                  {activeWeights
+                    .map((value) => `${Math.round(value)}%`)
+                    .join(" / ")}
+                </p>
+              ) : null}
             </div>
             <div>
               <span>Document review</span>

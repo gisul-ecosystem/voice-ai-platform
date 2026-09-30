@@ -83,7 +83,7 @@ def normalize_provider(
 
 
 def resolve_api_key(service: str, provider: str, api_key_override: str | None) -> str:
-    if api_key_override is not None:
+    if api_key_override and api_key_override.strip():
         return api_key_override.strip()
     specific = (_ENV_KEY.get(service) or "").strip()
     if specific:
@@ -110,7 +110,7 @@ def require_key_if_needed(service: str, provider: str, api_key: str) -> None:
             service,
             provider,
             f"{service.upper()} provider {provider!r} requires an API key. "
-            f"Set {env_names} in the worker secret environment.",
+            f"Pass {service}_api_key in room metadata or set {env_names}.",
         )
 
 

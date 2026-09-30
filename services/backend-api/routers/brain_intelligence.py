@@ -1,16 +1,20 @@
 """Creator-facing JD/resume intelligence extract and ingest APIs (Milestone 1+2)."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from brain.compiler import compile_blueprint
+from brain.compiler import compile_blueprint, normalize_skill_label
 from brain.documents import DocumentIngestError, extract_document_text
 from brain.llm_extract import (
     extract_candidate_profile_async,
     extract_job_intelligence_async,
+    recommend_competencies_async,
 )
 from brain.publish import publish_definition, validate_for_publication
+from brain.safety import validate_competency_label
 from db import definitions
 from models.brain import (
     CandidateProfile,
@@ -19,11 +23,18 @@ from models.brain import (
     InterviewDefinitionVersion,
     JobIntelligence,
     PublicationValidationResult,
+    QuestioningMode,
+    RigorLevel,
     SeniorityLevel,
     utc_now,
 )
-from security.auth import require_bff_service, require_worker_service
+from security.auth import (
+    require_bff_or_worker_service,
+    require_bff_service,
+)
 from security.rate_limit import require_capacity
+
+logger = logging.getLogger("backend-api.brain.intelligence")
 
 router = APIRouter(
     prefix="/interview-brain",
@@ -31,6 +42,31 @@ router = APIRouter(
 )
 
 _ALLOWED_KINDS = {"jd", "resume"}
+
+
+class WeightCheckRequest(BaseModel):
+    """Guardrail: validate that a proposed weight change keeps the total ≤ 100."""
+    weights: list[float] = Field(
+        description="All current competency weights as a list of floats.",
+        min_length=0,
+        max_length=12,
+    )
+
+
+class WeightCheckResponse(BaseModel):
+    ok: bool
+    total: float
+    remaining: float
+    message: str
+
+
+class CompetencyLabelCheckRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+
+
+class CompetencyLabelCheckResponse(BaseModel):
+    ok: bool
+    message: str
 
 
 class ExtractJobRequest(BaseModel):
@@ -73,6 +109,13 @@ class CompileBlueprintRequest(BaseModel):
     creator_competencies: list[str] = Field(default_factory=list, max_length=8)
     resume_required: bool = False
     include_scenarios: bool = True
+    # Spec 4.1 admin layer (Phase 0). Defaults keep the legacy compile output
+    # byte-identical when clients omit them.
+    rigor: RigorLevel = "balanced"
+    questioning_mode: QuestioningMode = "adaptive"
+    competency_weights: list[float] | None = Field(
+        default=None, min_length=1, max_length=8
+    )
 
 
 class PublishBlueprintRequest(BaseModel):
@@ -86,6 +129,56 @@ class PublishBlueprintRequest(BaseModel):
         max_length=64,
         pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*$",
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: weight-check — real-time total validation for the admin UI
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/blueprint/weight-check",
+    response_model=WeightCheckResponse,
+    dependencies=[Depends(require_bff_service)],
+)
+async def check_competency_weights(req: WeightCheckRequest) -> WeightCheckResponse:
+    """Guardrail: validate that proposed competency weights do not exceed 100.
+
+    Called by the admin UI on every weight change to give instant feedback
+    before publish. Never mutates state.
+    """
+    weights = [float(w) for w in req.weights]
+    total = round(sum(weights), 2)
+    remaining = round(100.0 - total, 2)
+    ok = total <= 100.0 + 0.01
+    if ok:
+        msg = f"Remaining: {remaining}/100" if remaining > 0.01 else "Total is exactly 100."
+    else:
+        msg = f"Limit reached: total weight cannot exceed 100 (currently {total:.1f}%)"
+    logger.info(
+        "guardrail_weight_check",
+        extra={
+            "event": "guardrail_weight_check",
+            "guardrail": "GUARDRAIL_WEIGHT_CAP",
+            "total": total,
+            "ok": ok,
+        },
+    )
+    return WeightCheckResponse(ok=ok, total=total, remaining=remaining, message=msg)
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: competency label validation
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/blueprint/validate-competency",
+    response_model=CompetencyLabelCheckResponse,
+    dependencies=[Depends(require_bff_service)],
+)
+async def validate_competency(req: CompetencyLabelCheckRequest) -> CompetencyLabelCheckResponse:
+    """Guardrail: reject labels that are seniority/education/years rather than skills."""
+    ok, reason = validate_competency_label(req.label)
+    return CompetencyLabelCheckResponse(ok=ok, message=reason)
 
 
 @router.post(
@@ -219,16 +312,79 @@ async def compile_interview_blueprint(
     req: CompileBlueprintRequest,
 ) -> InterviewDefinitionDraft:
     try:
+        guidance = list(req.creator_competencies or [])
+        recommended = await recommend_competencies_async(
+            req.job_intelligence,
+            title=req.title,
+            duration_minutes=int(req.duration_minutes),
+            creator_guidance=guidance,
+        )
+        # Spec §4.3: Rubric Synthesis Engine provides domain-specific competencies,
+        # evaluation lens (e.g. MEDDIC vs BANT vs STAR), required skills, and anchors.
+        rubric_data: dict[str, Any] | None = None
+        if not guidance or not recommended:
+            try:
+                from brain.rubric_synthesis import synthesize_rubric_async
+                rubric_data = await synthesize_rubric_async(
+                    role=req.job_intelligence.role.title,
+                    seniority=req.job_intelligence.role.target_level,
+                    job_description=req.job_intelligence.raw_job_description,
+                    target_duration_minutes=int(req.duration_minutes),
+                    creator_guidance=guidance,
+                )
+            except Exception as synth_err:
+                logger.warning("rubric_synthesis_skipped", extra={"error": str(synth_err)})
+
+        if rubric_data and rubric_data.get("competencies"):
+            synth_comps = rubric_data["competencies"]
+            lens = rubric_data.get("evaluation_lens")
+            if not recommended:
+                recommended = []
+            rec_by_name = {normalize_skill_label(str(r.get("name") or "")).lower(): r for r in recommended}
+            for sc in synth_comps:
+                s_name = str(sc.get("name") or "").strip()
+                s_key = normalize_skill_label(s_name).lower()
+                if s_key not in rec_by_name:
+                    item = {
+                        "name": s_name,
+                        "definition": sc.get("description"),
+                        "evidence_expected": sc.get("required_skills"),
+                        "required": sc.get("importance") == "high",
+                        "allowed_intents": sc.get("allowed_intents"),
+                        "evaluation_lens": lens,
+                        "level_anchors": sc.get("level_anchors"),
+                    }
+                    recommended.append(item)
+                    rec_by_name[s_key] = item
+
+        # Competencies structure the interview. Never silently pad CORE_FALLBACKS
+        # when the creator asked the LLM to invent the plan from the JD alone.
+        if not recommended and not guidance:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not generate interview competencies from the job "
+                    "description. Check LLM connectivity and try again, or add "
+                    "assessment areas as guidance."
+                ),
+            )
         return compile_blueprint(
             job_intelligence=req.job_intelligence,
             title=req.title,
             language=req.language,
             timezone=req.timezone,
             duration_minutes=req.duration_minutes,
-            creator_competencies=req.creator_competencies,
+            creator_competencies=guidance,
+            recommended_competencies=recommended or None,
+            creator_exclusive=bool(recommended) or len(guidance) >= 3,
             resume_required=req.resume_required,
             include_scenarios=req.include_scenarios,
+            competency_weights=req.competency_weights,
+            questioning_mode=req.questioning_mode,
+            rigor=req.rigor,
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -271,10 +427,74 @@ async def publish_interview_blueprint(
     return published
 
 
+class DefinitionSummary(BaseModel):
+    definition_id: str
+    title: str
+    role: str
+    seniority: str
+    duration_minutes: int
+    timezone: str
+    competencies: list[str] = Field(default_factory=list)
+    job_description: str = ""
+    published_at: str | None = None
+    published_by: str | None = None
+
+
+class DefinitionListResponse(BaseModel):
+    items: list[DefinitionSummary] = Field(default_factory=list)
+
+
+def _summary_from_stored(stored: dict) -> DefinitionSummary:
+    role = stored.get("job_intelligence") or {}
+    role_summary = role.get("role") if isinstance(role, dict) else {}
+    if not isinstance(role_summary, dict):
+        role_summary = {}
+    competencies = stored.get("competencies") or []
+    names: list[str] = []
+    if isinstance(competencies, list):
+        for item in competencies:
+            if isinstance(item, dict) and item.get("name"):
+                names.append(str(item["name"]))
+    time_policy = stored.get("time_policy") or {}
+    duration = 30
+    if isinstance(time_policy, dict) and time_policy.get("duration_minutes"):
+        try:
+            duration = int(time_policy["duration_minutes"])
+        except (TypeError, ValueError):
+            duration = 30
+    published_at = stored.get("published_at")
+    return DefinitionSummary(
+        definition_id=str(stored.get("definition_id") or ""),
+        title=str(stored.get("title") or role_summary.get("title") or "Interview"),
+        role=str(role_summary.get("title") or stored.get("title") or "Role"),
+        seniority=str(role_summary.get("target_level") or "mid"),
+        duration_minutes=duration,
+        timezone=str(stored.get("timezone") or "UTC"),
+        competencies=names,
+        job_description=str(
+            role.get("raw_job_description") if isinstance(role, dict) else ""
+        ),
+        published_at=published_at.isoformat()
+        if hasattr(published_at, "isoformat")
+        else (str(published_at) if published_at else None),
+        published_by=str(stored.get("published_by") or "") or None,
+    )
+
+
+@router.get(
+    "/definitions",
+    response_model=DefinitionListResponse,
+    dependencies=[Depends(require_bff_service)],
+)
+async def list_interview_definitions(limit: int = 50) -> DefinitionListResponse:
+    rows = await definitions.list_definitions(limit=limit)
+    return DefinitionListResponse(items=[_summary_from_stored(row) for row in rows])
+
+
 @router.get(
     "/definitions/{definition_id}",
     response_model=InterviewDefinitionVersion,
-    dependencies=[Depends(require_worker_service)],
+    dependencies=[Depends(require_bff_or_worker_service)],
 )
 async def get_interview_definition(definition_id: str) -> InterviewDefinitionVersion:
     stored = await definitions.get_definition_model(definition_id)

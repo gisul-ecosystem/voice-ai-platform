@@ -11,7 +11,7 @@ function publicScheduleError(status: number, detail?: unknown): string {
       const first = detail[0] as { msg?: unknown };
       if (typeof first.msg === "string" && first.msg.trim()) return first.msg.trim();
     }
-    return "Review the interview details and schedule time.";
+    return "Review the interview details and try again.";
   }
   return "The interview could not be scheduled.";
 }
@@ -55,8 +55,8 @@ export async function POST(request: Request) {
         candidate_id: body.candidateId,
         starts_at: body.startsAt,
         timezone: body.timezone,
-        join_early_minutes: body.joinEarlyMinutes ?? 15,
-        late_grace_minutes: body.lateGraceMinutes ?? 15,
+        join_early_minutes: body.joinEarlyMinutes ?? 0,
+        late_grace_minutes: body.lateGraceMinutes ?? 43_200,
         job_description: body.jobDescription,
         resume_text: body.resumeText,
         interview_setup: body.interviewSetup,

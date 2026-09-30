@@ -438,12 +438,6 @@ a {
   line-height: 1.45;
 }
 
-.alert.alert-warning {
-  border-color: #e4c65a;
-  color: #6b5510;
-  background: #fff8e0;
-}
-
 .section-heading {
   max-width: 700px;
   margin-bottom: clamp(10px, 2vh, 18px);
@@ -1356,6 +1350,22 @@ select:focus-visible,
   background: #f4f7ff;
 }
 
+.admin-progress-step.is-done {
+  border-color: #b8c9f0;
+  color: var(--foreground);
+}
+
+.invitation-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.invitation-link-row input {
+  flex: 1;
+  min-width: 0;
+}
+
 .admin-section {
   display: grid;
   gap: 16px;
@@ -1756,6 +1766,71 @@ select:focus-visible,
   border: 0;
 }
 
+.saved-interviewers {
+  margin-top: 28px;
+  padding: 28px 0 8px;
+  border-top: 1px solid var(--border);
+}
+
+.saved-interviewers-head {
+  max-width: 640px;
+  margin-bottom: 18px;
+}
+
+.saved-interviewers-head h2 {
+  margin: 6px 0 8px;
+  font-size: clamp(1.35rem, 2vw, 1.7rem);
+}
+
+.saved-interviewers-head p,
+.saved-interviewers-muted {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.saved-interviewer-list {
+  list-style: none;
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+}
+
+.saved-interviewer-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.saved-interviewer-list li p {
+  margin: 4px 0 6px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.saved-definition-id {
+  display: inline-block;
+  color: var(--muted);
+  font: 500 0.72rem var(--font-geist-mono), monospace;
+}
+
+.invite-schedule-field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.invite-schedule-field .field-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .demo-page {
   width: min(1120px, calc(100% - 40px));
   min-height: 100dvh;
@@ -1972,8 +2047,8 @@ select:focus-visible,
 .interview-room {
   height: 100%;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   background: var(--surface-muted);
 }
 
@@ -2026,9 +2101,8 @@ select:focus-visible,
 
 .interview-workspace {
   min-height: 0;
-  flex: 1;
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
   gap: 16px;
   padding: 16px;
 }
@@ -2095,13 +2169,9 @@ select:focus-visible,
 .interview-workspace .transcript-panel {
   min-height: 0;
   display: grid;
-  /* Heading stays put; only the list scrolls, so the newest line is always
-     visible at the bottom and older lines scroll up out of view. */
   grid-template-rows: auto minmax(0, 1fr);
   margin: 0;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 14px;
   overflow: hidden;
   background: var(--surface);
 }
@@ -2135,10 +2205,9 @@ select:focus-visible,
 }
 
 .interview-workspace .transcript-list {
-  min-height: 0;
   max-height: none;
-  align-content: start;
   padding: 16px;
+  padding-bottom: 112px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2161,6 +2230,11 @@ select:focus-visible,
 }
 
 .interview-control-dock {
+  position: fixed;
+  z-index: 20;
+  right: 16px;
+  bottom: 12px;
+  left: 16px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -2248,6 +2322,11 @@ select:focus-visible,
     border-bottom: 1px solid var(--border);
   }
 
+  .saved-interviewer-list li {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .interview-workspace {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(220px, 0.7fr) minmax(280px, 1fr);
@@ -2317,6 +2396,11 @@ select:focus-visible,
     overflow: hidden;
   }
 
+  .interview-room {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
   .interview-room-header {
     position: relative;
     z-index: 5;
@@ -2335,12 +2419,6 @@ select:focus-visible,
     grid-template-rows: minmax(180px, 0.8fr) minmax(220px, 1fr);
     min-height: 0;
     overflow: hidden;
-  }
-
-  /* The dock is fixed only at this breakpoint (thumb reach / iOS safe area),
-     so the transcript needs the compensating bottom padding only here. */
-  .interview-workspace .transcript-list {
-    padding-bottom: 112px;
   }
 
   .interview-control-dock {
@@ -2756,6 +2834,69 @@ select:focus-visible,
   background: #f8fafc;
 }
 
+/* Spec 4.1 weight plan — per-competency sliders (Phase 0). */
+.weight-plan {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.weight-plan legend {
+  padding: 0 7px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.weight-slider-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 2fr 56px;
+  align-items: center;
+  gap: 12px;
+}
+
+.weight-slider-name {
+  font-size: 0.8rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.weight-slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--foreground);
+}
+
+.weight-slider-value {
+  font: 650 0.78rem var(--font-geist-mono), monospace;
+  text-align: right;
+  color: var(--muted);
+}
+
+.weight-slider-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+}
+
+.weight-slider-total > span:first-child {
+  font-weight: 700;
+}
+
+.weight-slider-hint {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.weight-slider-total .button {
+  min-height: 34px;
+  padding: 4px 12px;
+  font-size: 0.74rem;
+}
+
 .policy-list legend {
   padding: 0 7px;
   font-size: 0.82rem;
@@ -3116,12 +3257,6 @@ select:focus-visible,
   font-size: 0.85rem;
 }
 
-.scorecard-proven {
-  color: var(--success);
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
 .scorecard-anchor {
   padding: 10px 12px;
   border-left: 3px solid var(--accent);
@@ -3156,5 +3291,279 @@ select:focus-visible,
 @media (max-width: 800px) {
   .scorecard-summary {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* —— Template library + hub (product shell) —— */
+
+.template-library-page .landing-nav,
+.template-hub-page .landing-nav {
+  margin-bottom: 8px;
+}
+
+.template-library-header {
+  padding: 28px 0 8px;
+  max-width: 640px;
+}
+
+.template-library-header h1 {
+  margin: 4px 0 10px;
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+
+.template-library-header p {
+  color: var(--muted);
+  font-size: 1.02rem;
+  line-height: 1.55;
+}
+
+.template-library {
+  margin-top: 22px;
+}
+
+.template-library-status {
+  color: var(--muted);
+  font-size: 0.92rem;
+  padding: 18px 0;
+}
+
+.template-empty {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  padding: 36px 32px;
+  border: 1px dashed var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.template-empty h2 {
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.template-empty p {
+  max-width: 480px;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  margin-bottom: 6px;
+}
+
+.template-empty-inline {
+  border-style: solid;
+  padding: 28px 24px;
+}
+
+.template-list {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+}
+
+.template-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+.template-row:hover:not(:disabled) {
+  border-color: #b8c7e8;
+  box-shadow: 0 10px 28px rgb(22 32 51 / 6%);
+  transform: translateY(-1px);
+}
+
+.template-row:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.template-row-static {
+  cursor: default;
+}
+
+.template-row-static:hover {
+  border-color: var(--border);
+  box-shadow: none;
+  transform: none;
+}
+
+.template-row-main {
+  min-width: 0;
+}
+
+.template-row-main strong {
+  display: block;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.template-row-main p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.template-row-action {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.template-hub {
+  padding-top: 12px;
+}
+
+.template-hub-header {
+  display: grid;
+  gap: 22px;
+  padding: 18px 0 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 22px;
+}
+
+.template-hub-header h1 {
+  margin: 4px 0 12px;
+  font-size: clamp(1.75rem, 3.5vw, 2.4rem);
+  letter-spacing: -0.04em;
+  line-height: 1.12;
+}
+
+.template-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.template-meta li {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.template-hub-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: fit-content;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+
+.template-hub-tab {
+  padding: 9px 16px;
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.template-hub-tab:hover {
+  color: var(--foreground);
+}
+
+.template-hub-tab.is-active {
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow: 0 1px 3px rgb(22 32 51 / 8%);
+}
+
+.template-hub-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.template-hub-panel-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.template-hub-panel-intro h2 {
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+}
+
+.template-hub-panel-intro p {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  max-width: 520px;
+}
+
+.template-hub-section {
+  display: grid;
+  gap: 16px;
+}
+
+.template-hub-page .invite-page-card,
+.template-hub-page .demo-card {
+  width: 100%;
+  margin: 0;
+}
+
+.template-results-form {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.template-results-form label {
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .template-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .template-hub-panel-intro {
+    flex-direction: column;
+  }
+
+  .template-hub-tabs {
+    width: 100%;
+  }
+
+  .template-hub-tab {
+    flex: 1;
+    text-align: center;
   }
 }

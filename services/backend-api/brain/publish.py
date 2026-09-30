@@ -118,6 +118,14 @@ def validate_for_publication(
             # Ladders are auto-filled at publish time; absence is not a hard block.
             continue
 
+    issues.extend(
+        _validate_sections(
+            sections=draft.sections,
+            competency_ids=competency_ids,
+            duration_minutes=draft.time_policy.duration_minutes,
+        )
+    )
+
     if draft.time_policy.target_end_minutes != draft.time_policy.duration_minutes:
         issues.append(
             PublicationIssue(
@@ -194,6 +202,98 @@ def validate_for_publication(
         )
 
     return PublicationValidationResult(ok=not issues, issues=issues)
+
+
+def _validate_sections(
+    *,
+    sections: list,
+    competency_ids: list[str],
+    duration_minutes: int,
+) -> list[PublicationIssue]:
+    """Section-plan publication gates (spec 4.4/7).
+
+    Sections are optional (legacy definitions have none). When present they
+    must reference known competencies, cover each exactly once, carry unique
+    ids/orders, and fit inside the interview duration.
+    """
+    issues: list[PublicationIssue] = []
+    if not sections:
+        return issues
+
+    section_ids = [section.id for section in sections]
+    if len(section_ids) != len(set(section_ids)):
+        issues.append(
+            PublicationIssue(
+                code="duplicate_section_ids",
+                message="Section ids must be unique.",
+                field="sections",
+            )
+        )
+    orders = [section.order for section in sections]
+    if len(orders) != len(set(orders)):
+        issues.append(
+            PublicationIssue(
+                code="duplicate_section_orders",
+                message="Section orders must be unique.",
+                field="sections",
+            )
+        )
+
+    known = set(competency_ids)
+    assigned: set[str] = set()
+    for section in sections:
+        for competency_id in section.competency_ids:
+            if competency_id not in known:
+                issues.append(
+                    PublicationIssue(
+                        code="section_unknown_competency",
+                        message=(
+                            f"Section '{section.id}' references unknown competency "
+                            f"'{competency_id}'."
+                        ),
+                        field=f"sections.{section.id}.competency_ids",
+                    )
+                )
+            elif competency_id in assigned:
+                issues.append(
+                    PublicationIssue(
+                        code="section_duplicate_competency",
+                        message=(
+                            f"Competency '{competency_id}' is assigned to more "
+                            "than one section."
+                        ),
+                        field=f"sections.{section.id}.competency_ids",
+                    )
+                )
+            else:
+                assigned.add(competency_id)
+
+    missing = [competency_id for competency_id in competency_ids if competency_id not in assigned]
+    if missing:
+        issues.append(
+            PublicationIssue(
+                code="section_missing_competency",
+                message=(
+                    "Every competency must belong to exactly one section. "
+                    f"Unassigned: {', '.join(missing)}."
+                ),
+                field="sections",
+            )
+        )
+
+    total_minutes = sum(section.max_minutes for section in sections)
+    if total_minutes > duration_minutes:
+        issues.append(
+            PublicationIssue(
+                code="section_time_overrun",
+                message=(
+                    f"Section time budgets total {total_minutes} minutes, which "
+                    f"exceeds the {duration_minutes}-minute interview duration."
+                ),
+                field="sections",
+            )
+        )
+    return issues
 
 
 def publish_definition(

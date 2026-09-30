@@ -1,8 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+
+import { LandingNav } from "@/components/interviewer/LandingNav";
 
 export default function ScorecardLookupPage() {
   const router = useRouter();
@@ -21,23 +23,25 @@ export default function ScorecardLookupPage() {
 
   return (
     <main className="interviewer-home admin-builder-page">
-      <nav className="landing-nav" aria-label="Reviewer navigation">
-        <Link href="/interviewer" className="brand">
-          <span className="brand-mark" aria-hidden="true">AI</span>
-          AI Interviewer
-        </Link>
-        <span className="environment-badge">Review scorecard</span>
-      </nav>
+      <LandingNav
+        ariaLabel="Reviewer navigation"
+        trailing={<Link href="/interviewer">Templates</Link>}
+      />
       <section className="demo-intro">
         <p className="eyebrow">Human review</p>
         <h1>Open a completed scorecard</h1>
         <p>
           Coverage, excerpts, and missing intents stay advisory until a person
-          accepts or overrides the result.
+          accepts or overrides the result. Prefer opening Results from a
+          template when you know which interview it belongs to.
         </p>
       </section>
       <section className="demo-card admin-section">
-        {error ? <div className="alert" role="alert">{error}</div> : null}
+        {error ? (
+          <div className="alert" role="alert">
+            {error}
+          </div>
+        ) : null}
         <label>
           Session id
           <input
@@ -54,8 +58,15 @@ export default function ScorecardLookupPage() {
           />
         </label>
         <div className="admin-page-actions">
-          <span>Do not use scores for hiring until a reviewer has recorded a decision.</span>
-          <button className="button primary" type="button" onClick={openScorecard}>
+          <span>
+            Do not use scores for hiring until a reviewer has recorded a
+            decision.
+          </span>
+          <button
+            className="button primary"
+            type="button"
+            onClick={openScorecard}
+          >
             Open scorecard
           </button>
         </div>

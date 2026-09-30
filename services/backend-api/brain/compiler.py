@@ -9,6 +9,7 @@ import hashlib
 import re
 from typing import Iterable
 
+from brain import blueprint_formula
 from brain.defaults import (
     DEFAULT_ALLOWED_PROBES,
     DEFAULT_ENDING_POLICY,
@@ -26,8 +27,12 @@ from models.brain import (
     ExtractedItem,
     InterviewDefinitionDraft,
     JobIntelligence,
+    LevelAnchors,
+    QuestioningMode,
+    RigorLevel,
     RubricAnchor,
     ScenarioDefinition,
+    SectionDefinition,
     SeniorityLevel,
 )
 
@@ -137,57 +142,88 @@ def _role_rubric(
     ]
 
 
-# JD boilerplate that gets extracted along with the actual skill name.
-_LABEL_PREFIXES = re.compile(
-    r"^(?:required|requirements?|must[- ]have|nice[- ]to[- ]have|preferred|essential|"
-    r"desired|responsibilities|responsibility|skills?|experience(?:\s+(?:in|with))?|"
-    r"strong|proven|solid|deep|hands[- ]on|excellent|good|expert(?:ise)?(?:\s+in)?|"
-    r"knowledge\s+of|familiarity\s+with|proficiency\s+(?:in|with)|ability\s+to)"
-    r"\s*[:\-–]?\s+",
-    re.IGNORECASE,
-)
-
-
 def normalize_skill_label(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", (value or "")).strip(" -•:")
     if not cleaned:
         return cleaned
-    # Strip stacked prefixes: "Required: strong data structures" -> "data structures".
-    for _ in range(3):
-        stripped = _LABEL_PREFIXES.sub("", cleaned, count=1).strip(" -•:")
-        if stripped == cleaned or not stripped:
-            break
-        cleaned = stripped
     alias = _SKILL_ALIASES.get(cleaned.lower())
     if alias:
         return alias
-    # A label that is now a bare fragment is worse than the original.
-    if len(cleaned) < 2:
-        return re.sub(r"\s+", " ", (value or "")).strip(" -•:")
-    return cleaned[:1].upper() + cleaned[1:]
+    return cleaned
+
+
+# Bare verbs / duty fragments from comma-splitting JD responsibility lines.
+# These are not interviewable competency titles.
+_BARE_DUTY_TOKENS = frozenset(
+    {
+        "design",
+        "designs",
+        "designing",
+        "develop",
+        "develops",
+        "developing",
+        "test",
+        "tests",
+        "testing",
+        "build",
+        "builds",
+        "building",
+        "maintain",
+        "maintains",
+        "maintaining",
+        "create",
+        "implement",
+        "manage",
+        "support",
+        "analyze",
+        "optimize",
+        "deploy",
+        "write",
+        "code",
+    }
+)
+
+
+def is_interviewable_competency_label(value: str) -> bool:
+    """Reject JD duty fragments that should never become interview phases.
+
+    Blocks bare verbs (Design/develop/test), leading ``and …`` scraps, and
+    long comma-heavy responsibility sentences pasted as competency names.
+    Real skill titles like ``Python``, ``Negotiation``, ``Role expertise`` pass.
+    """
+    cleaned = normalize_skill_label(value)
+    if len(cleaned) < 3:
+        return False
+    words = [w for w in re.split(r"\s+", cleaned) if w]
+    if not words:
+        return False
+    first = words[0].lower().strip(".,;:")
+    if first in {"and", "or", "the", "a", "an", "to", "of", "for", "with"}:
+        return False
+    if len(words) == 1 and first in _BARE_DUTY_TOKENS:
+        return False
+    # Comma-split duty residue: "and maintain applications using Python."
+    if cleaned.lower().startswith("and "):
+        return False
+    # Full responsibility sentence used as a label (too long + clause-like).
+    if len(cleaned) > 72 and ("," in cleaned or cleaned.count(" ") >= 8):
+        return False
+    return True
 
 
 def _evidence_for(name: str, jd_hints: list[str]) -> list[str]:
-    """Technical evidence dimensions, not a STAR story template.
-
-    These are what the answer must contain for the competency to count as proven.
-    The interviewer writes its own wording; these only set the bar.
-    """
-    topic = (name or "this area").strip().lower()
     base = [
-        f"what they personally decided or built in {topic}",
-        f"the specific method, algorithm, pattern or tool used for {topic}, named",
-        "how that approach works internally, step by step",
-        "its cost characteristics: time/space complexity, latency, throughput or spend",
-        "why that option over a named alternative, and what it cost them",
-        "where the approach breaks: edge cases, failure modes, behaviour at scale",
-        "how they would optimise it further, and the trade-off that would introduce",
-        "a measured outcome stated as from-value to to-value",
+        "context of the work",
+        "personal contribution",
+        "approach or method",
+        "result or impact",
     ]
     for hint in jd_hints[:2]:
         clipped = hint.strip()
         if clipped and clipped.lower() not in {item.lower() for item in base}:
-            base.append(f"concrete evidence of {clipped[:100]}")
+            base.append(clipped[:120])
+    if name.lower() not in " ".join(base).lower():
+        base.append(f"example demonstrating {name.lower()}")
     return base[:12]
 
 
@@ -211,14 +247,16 @@ def _texts(items: Iterable[ExtractedItem]) -> list[str]:
 def _candidate_competency_seeds(
     job: JobIntelligence,
     creator_competencies: list[str] | None,
-) -> list[tuple[str, str, list[str], bool, str]]:
-    """Return (id_base, display_name, jd_hint_texts, required, source)."""
-    seeds: list[tuple[str, str, list[str], bool, str]] = []
+    *,
+    creator_exclusive: bool = False,
+) -> list[tuple[str, str, list[str], bool]]:
+    """Return (id_base, display_name, jd_hint_texts, required)."""
+    seeds: list[tuple[str, str, list[str], bool]] = []
     seen_names: set[str] = set()
 
-    def add(name: str, hints: list[str], *, required: bool, source: str = "jd") -> None:
+    def add(name: str, hints: list[str], *, required: bool) -> None:
         cleaned = normalize_skill_label(name)
-        if len(cleaned) < 2:
+        if not is_interviewable_competency_label(cleaned):
             return
         if contains_prohibited_content(cleaned) or contains_prompt_injection(cleaned):
             return
@@ -227,41 +265,43 @@ def _candidate_competency_seeds(
             return
         seen_names.add(key)
         seeds.append(
-            (
-                _slugify(cleaned, fallback="competency"),
-                cleaned[:120],
-                hints,
-                required,
-                source,
-            )
+            (_slugify(cleaned, fallback="competency"), cleaned[:120], hints, required)
         )
 
     for name in creator_competencies or []:
-        add(name, [], required=True, source="creator")
+        add(name, [], required=True)
 
-    def _usable(item: ExtractedItem, *, max_len: int = 60) -> bool:
+    # Creator-provided chips own the plan. Never invent phases from JD duty lines.
+    skip_jd_pad = creator_exclusive or len(seeds) >= _MIN_COMPETENCIES
+
+    def _usable(item: ExtractedItem, *, max_len: int = 96) -> bool:
         text = item.text.strip()
-        if "," in text or len(text) > max_len:
+        # Do not take the first comma segment of a duty line ("Design, develop…").
+        # Only accept compact skill labels without clause punctuation.
+        if "," in text or ";" in text:
+            return False
+        if len(text) < 3 or len(text) > max_len:
+            return False
+        if not is_interviewable_competency_label(text):
             return False
         if item.provenance.confidence < _MIN_SEED_CONFIDENCE:
             return False
         return True
 
-    for item in job.skills + job.mandatory_requirements:
-        if _usable(item):
-            add(item.text, [item.text], required=True)
+    if not skip_jd_pad:
+        for item in job.skills + job.mandatory_requirements:
+            if _usable(item):
+                add(item.text.strip(), [item.text], required=True)
 
-    for item in job.responsibilities[:4]:
-        text = item.text.strip()
-        if 8 <= len(text) <= 48 and item.provenance.confidence >= _MIN_SEED_CONFIDENCE:
-            add(text, [text], required=True)
+        # Responsibilities are duties, not competency titles — never seed phases
+        # from them (that produced Design/develop/test fragments).
 
-    preferred_pool = (
-        list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
-    )
-    for item in preferred_pool:
-        if _usable(item, max_len=48):
-            add(item.text, [item.text], required=False)
+        preferred_pool = (
+            list(job.preferred_requirements) + list(job.tools) + list(job.knowledge)
+        )
+        for item in preferred_pool:
+            if _usable(item, max_len=72):
+                add(item.text.strip(), [item.text], required=False)
 
     required_seeds = [seed for seed in seeds if seed[3]]
     preferred_seeds = [seed for seed in seeds if not seed[3]]
@@ -270,7 +310,7 @@ def _candidate_competency_seeds(
     if len(combined) < _MIN_COMPETENCIES:
         for competency_id, name, _definition in _CORE_FALLBACKS:
             if name.lower() not in seen_names:
-                combined.append((competency_id, name, [], True, "fallback"))
+                combined.append((competency_id, name, [], True))
                 seen_names.add(name.lower())
             if len(combined) >= _MIN_COMPETENCIES:
                 break
@@ -287,8 +327,14 @@ def _build_competency(
     weight: float,
     required: bool = True,
     definition: str | None = None,
-    source: str = "jd",
+    evidence_expected: list[str] | None = None,
+    allowed_intents: list[str] | None = None,
+    evaluation_lens: str | None = None,
+    level_anchors: LevelAnchors | None = None,
 ) -> CompetencyDefinition:
+    evidence = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
+    if not evidence:
+        evidence = _evidence_for(name, hints)
     return CompetencyDefinition(
         id=competency_id,
         name=name,
@@ -301,13 +347,44 @@ def _build_competency(
         )[:1000],
         importance="high" if required else "medium",
         required_level=_LEVEL_TO_REQUIRED.get(level, 3),
-        evidence_expected=_evidence_for(name, hints),
+        evidence_expected=evidence[:12],
         min_assessment_intents=_intents_for_level(level),
         max_depth=min(5, max(3, _LEVEL_TO_REQUIRED.get(level, 3) + 1)),
         max_probes=3 if level in {"intern", "junior"} else 4,
         rubric=_role_rubric(name, level, hints),
         weight=round(weight, 2),
-        source=source,  # type: ignore[arg-type]
+        allowed_intents=[item.strip() for item in (allowed_intents or []) if item.strip()] or None,
+        evaluation_lens=(evaluation_lens or "").strip()[:200] or None,
+        level_anchors=level_anchors,
+    )
+
+
+def _anchors_from_rubric(rubric: list[RubricAnchor]) -> LevelAnchors:
+    """Derive weak/strong anchors from the 1/5 rubric anchors (spec 4.4)."""
+    by_rating = {anchor.rating: anchor.description for anchor in rubric}
+    weak = by_rating.get(1) or next(iter(rubric)).description
+    strong = by_rating.get(5) or rubric[-1].description
+    return LevelAnchors(weak=weak[:500], strong=strong[:500])
+
+
+def _apply_weight_formula(
+    competency: CompetencyDefinition,
+    *,
+    weight: float,
+) -> CompetencyDefinition:
+    """Populate formula-driven behaviour fields (spec 4.1).
+
+    Admins only move the weight slider; the deterministic conversion lives
+    in brain/blueprint_formula.py.
+    """
+    return competency.model_copy(
+        update={
+            "required_questions": blueprint_formula.required_questions(weight),
+            "max_probes": blueprint_formula.max_probes(weight),
+            "depth_target": blueprint_formula.depth_target(weight),
+            "level_anchors": competency.level_anchors
+            or _anchors_from_rubric(competency.rubric),
+        }
     )
 
 
@@ -397,6 +474,50 @@ def _scenario_bank(
     ]
 
 
+def _resolve_sections(
+    *,
+    sections: list[SectionDefinition] | None,
+    competencies: list[CompetencyDefinition],
+    questioning_mode: QuestioningMode,
+    duration_minutes: DurationMinutes,
+    formula_mode: bool,
+) -> list[SectionDefinition]:
+    """Choose the section plan for the draft (spec 4.4).
+
+    Caller-provided sections win only when they reference compiled competency
+    ids exactly; otherwise legacy drafts get no sections and formula-mode
+    drafts get one auto-grouped section covering every competency.
+    """
+    if not competencies:
+        return []
+    known_ids = {item.id for item in competencies}
+    if sections:
+        referenced: set[str] = set()
+        usable = True
+        for section in sections:
+            for competency_id in section.competency_ids:
+                if competency_id not in known_ids or competency_id in referenced:
+                    usable = False
+                    break
+                referenced.add(competency_id)
+            if not usable:
+                break
+        if usable and referenced == known_ids:
+            return sorted(sections, key=lambda section: section.order)
+    if not formula_mode:
+        return []
+    return [
+        SectionDefinition(
+            id="competency_assessment",
+            order=1,
+            type=questioning_mode,
+            max_minutes=int(duration_minutes),
+            competency_ids=[item.id for item in competencies],
+            is_warmup=False,
+        )
+    ]
+
+
 def compile_blueprint(
     *,
     job_intelligence: JobIntelligence,
@@ -405,34 +526,120 @@ def compile_blueprint(
     timezone: str = "UTC",
     duration_minutes: DurationMinutes = 30,
     creator_competencies: list[str] | None = None,
+    recommended_competencies: list[dict] | None = None,
+    creator_exclusive: bool = False,
     resume_required: bool = False,
     include_scenarios: bool = True,
+    competency_weights: list[float] | None = None,
+    questioning_mode: QuestioningMode = "adaptive",
+    sections: list[SectionDefinition] | None = None,
+    rigor: RigorLevel = "balanced",
 ) -> InterviewDefinitionDraft:
-    """Build a reviewable InterviewDefinitionDraft from JD intelligence."""
+    """Build a reviewable InterviewDefinitionDraft from JD intelligence.
+
+    Competencies are the interview structure. Prefer LLM recommendations when
+    provided; otherwise seed from creator guidance + JD heuristics.
+
+    Weight-formula mode (spec 4.1/4.4): when ``competency_weights`` is
+    provided (or the caller explicitly opts in via non-default
+    ``questioning_mode``/``rigor``), raw slider weights are normalized to a
+    mass of 100 and converted into required_questions / max_probes /
+    depth_target, and the draft gains explicit sections. With no weight input
+    the legacy level-based behaviour is emitted unchanged.
+    """
     if not job_intelligence.raw_job_description.strip():
         raise ValueError("job_intelligence.raw_job_description is required")
 
     level = job_intelligence.role.target_level
-    seeds = _candidate_competency_seeds(job_intelligence, creator_competencies)
-    weights = _importance_weights([seed[3] for seed in seeds])
+    enrichment: dict[str, dict] = {}
+    seed_names = list(creator_competencies or [])
+    exclusive = creator_exclusive
+
+    if recommended_competencies:
+        seed_names = []
+        for item in recommended_competencies:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if len(name) < 2:
+                continue
+            seed_names.append(name)
+            # Key by normalized label so lookup survives aliasing (js→javascript).
+            enrichment[normalize_skill_label(name).lower()] = item
+            enrichment[name.lower()] = item
+        exclusive = True
+
+    seeds = _candidate_competency_seeds(
+        job_intelligence,
+        seed_names,
+        creator_exclusive=exclusive,
+    )
+    # Weight-formula mode (spec 4.1): explicit slider weights win when they
+    # line up with the seeded competencies; otherwise legacy mass-splitting.
+    formula_mode = (
+        competency_weights is not None
+        or questioning_mode != "adaptive"
+        or rigor != "balanced"
+        or bool(sections)
+    )
+    if (
+        formula_mode
+        and competency_weights is not None
+        and len(competency_weights) == len(seeds)
+    ):
+        weights = blueprint_formula.normalize_weights(competency_weights)
+    else:
+        weights = _importance_weights([seed[3] for seed in seeds])
     used_ids: set[str] = set()
     competencies: list[CompetencyDefinition] = []
 
     core_defs = {item[0]: item[2] for item in _CORE_FALLBACKS}
-    for (id_base, name, hints, required, source), weight in zip(seeds, weights, strict=True):
+    for (id_base, name, hints, required), weight in zip(seeds, weights, strict=True):
         competency_id = _unique_id(id_base, used_ids)
-        competencies.append(
-            _build_competency(
-                competency_id=competency_id,
-                name=name,
-                hints=hints,
-                level=level,
-                weight=weight,
-                required=required,
-                definition=core_defs.get(id_base),
-                source=source,
-            )
+        enriched = (
+            enrichment.get(name.lower())
+            or enrichment.get(normalize_skill_label(name).lower())
+            or {}
         )
+        llm_definition = str(enriched.get("definition") or "").strip() or None
+        llm_evidence = enriched.get("evidence_expected")
+        evidence_list = (
+            [str(x).strip() for x in llm_evidence if str(x).strip()]
+            if isinstance(llm_evidence, list)
+            else None
+        )
+        llm_intents = enriched.get("allowed_intents")
+        intents_list = (
+            [str(x).strip() for x in llm_intents if str(x).strip()]
+            if isinstance(llm_intents, list)
+            else None
+        )
+        llm_lens = str(enriched.get("evaluation_lens") or "").strip() or None
+        anchors_raw = enriched.get("level_anchors")
+        level_anchors = None
+        if isinstance(anchors_raw, dict):
+            weak = str(anchors_raw.get("weak") or "").strip()
+            strong = str(anchors_raw.get("strong") or "").strip()
+            if len(weak) >= 4 and len(strong) >= 4:
+                level_anchors = LevelAnchors(weak=weak[:500], strong=strong[:500])
+        if enriched and "required" in enriched:
+            required = bool(enriched.get("required"))
+        competency = _build_competency(
+            competency_id=competency_id,
+            name=name,
+            hints=hints,
+            level=level,
+            weight=weight,
+            required=required,
+            definition=llm_definition or core_defs.get(id_base),
+            evidence_expected=evidence_list,
+            allowed_intents=intents_list,
+            evaluation_lens=llm_lens,
+            level_anchors=level_anchors,
+        )
+        if formula_mode:
+            competency = _apply_weight_formula(competency, weight=weight)
+        competencies.append(competency)
 
     ladders = [
         default_question_ladder(item.id, item.name)
@@ -440,6 +647,14 @@ def compile_blueprint(
     ]
     role_title = job_intelligence.role.title.strip() or "Interview"
     draft_title = (title or f"{role_title} interview").strip()[:160]
+
+    final_sections = _resolve_sections(
+        sections=sections,
+        competencies=competencies,
+        questioning_mode=questioning_mode,
+        duration_minutes=duration_minutes,
+        formula_mode=formula_mode,
+    )
 
     return InterviewDefinitionDraft(
         title=draft_title if len(draft_title) >= 2 else "Structured interview",
@@ -459,4 +674,6 @@ def compile_blueprint(
         scoring_policy=DEFAULT_SCORING_POLICY,
         prompt_version=DEFAULT_PROMPT_VERSION,
         resume_required=resume_required,
+        sections=final_sections,
+        rigor=rigor,
     )

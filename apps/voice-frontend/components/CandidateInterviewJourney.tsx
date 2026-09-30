@@ -5,7 +5,6 @@ import {
   type ComponentType,
   type ErrorInfo,
   type ReactNode,
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -129,33 +128,12 @@ function parsePreview(data: Record<string, unknown>): Preview | undefined {
   };
 }
 
-function formatDateTime(value: string, timezone: string): string {
-  const zone = timezone === "Asia/Calcutta" ? "Asia/Kolkata" : timezone;
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone: zone,
-      timeZoneName: "short",
-    }).format(new Date(value));
-  } catch {
-    try {
-      return new Date(value).toLocaleString();
-    } catch {
-      return value;
-    }
-  }
-}
-
 function invitationStatusMessage(preview: Preview): string | undefined {
   if (preview.status === "upcoming") {
-    return `This interview opens ${formatDateTime(preview.join_not_before, preview.timezone)}.`;
+    return "This invitation is not open yet. Try again in a moment.";
   }
   if (preview.status === "expired") {
-    return "The joining window has closed. Contact the inviting organization for assistance.";
+    return "This invitation has expired. Ask for a new invite link.";
   }
   if (preview.status === "completed") {
     return "This interview has already been completed.";
@@ -231,6 +209,7 @@ function CandidateInterviewJourneyInner({
   const [error, setError] = useState<string>();
   const joinKey = useRef<string | undefined>(undefined);
   const intentionalDisconnect = useRef(false);
+  const becameLive = useRef(false);
   const [consents, setConsents] = useState({
     ai_interview: false,
     transcription: false,
@@ -238,29 +217,39 @@ function CandidateInterviewJourneyInner({
     recording: false,
   });
 
-  // Stable identities keep LiveKitRoom from tearing down and re-arming its
-  // room listeners on every parent re-render while audio is flowing.
-  const handleConnected = useCallback(() => {
-    intentionalDisconnect.current = false;
-    setStage("live");
-  }, []);
-  const handleDisconnected = useCallback(() => {
+  async function resolveDisconnectOutcome() {
     if (intentionalDisconnect.current) {
       setStage("completed");
       return;
     }
+    const sessionId = credentials?.sessionId;
+    if (sessionId) {
+      try {
+        const response = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/status`,
+          { cache: "no-store" },
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          status?: string;
+        };
+        if (
+          response.ok &&
+          (data.status === "completed" || data.status === "completing")
+        ) {
+          setStage("completed");
+          return;
+        }
+      } catch {
+        // Fall through to failed messaging when status is unavailable.
+      }
+    }
     setError(
-      "The room disconnected before the interview was ended. Contact the inviting organization before retrying.",
+      becameLive.current
+        ? "The interview room closed before a normal ending. Keep this tab open next time and contact the inviting organization if it happens again."
+        : "The room disconnected before the interview was ended. Contact the inviting organization before retrying.",
     );
     setStage("failed");
-  }, []);
-  const handleRoomError = useCallback((reason: Error) => {
-    setError(reason.message);
-    setStage("failed");
-  }, []);
-  const handleEndRequested = useCallback(() => {
-    intentionalDisconnect.current = true;
-  }, []);
+  }
 
   useEffect(() => {
     try {
@@ -420,7 +409,7 @@ function CandidateInterviewJourneyInner({
           {statusMessage ? (
             <div className="invitation-status" role="status">
               <strong>
-                {preview.status === "upcoming" ? "Scheduled" : "Unavailable"}
+                {preview.status === "upcoming" ? "Not ready" : "Unavailable"}
               </strong>
               <p>{statusMessage}</p>
             </div>
@@ -438,18 +427,6 @@ function CandidateInterviewJourneyInner({
               <div>
                 <dt>Duration</dt>
                 <dd>{preview.duration_minutes} minutes</dd>
-              </div>
-              <div>
-                <dt>Scheduled</dt>
-                <dd>{formatDateTime(preview.starts_at, preview.timezone)}</dd>
-              </div>
-              <div>
-                <dt>Join window</dt>
-                <dd>
-                  {formatDateTime(preview.join_not_before, preview.timezone)}
-                  {" – "}
-                  {formatDateTime(preview.join_closes_at, preview.timezone)}
-                </dd>
               </div>
             </dl>
             <div>
@@ -565,10 +542,21 @@ function CandidateInterviewJourneyInner({
         title={preview.title}
         candidateName={preview.candidate_name}
         cameraAllowed={product.cameraAllowed}
-        onConnected={handleConnected}
-        onDisconnected={handleDisconnected}
-        onError={handleRoomError}
-        onEndRequested={handleEndRequested}
+        onConnected={() => {
+          intentionalDisconnect.current = false;
+          becameLive.current = true;
+          setStage("live");
+        }}
+        onDisconnected={() => {
+          void resolveDisconnectOutcome();
+        }}
+        onError={(reason) => {
+          setError(reason.message);
+          setStage("failed");
+        }}
+        onEndRequested={() => {
+          intentionalDisconnect.current = true;
+        }}
       />
     );
   }

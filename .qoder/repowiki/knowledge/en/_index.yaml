@@ -1,0 +1,28 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: en-US
+branch: tts
+nodes_managed: true
+exported_at: "2026-09-29T07:27:20Z"
+modules:
+    "":
+        dir_name: Voice AI Platform Monorepo Root (Aaptor_Racko Pilot)
+        title: Voice AI Platform Monorepo Root (Aaptor/Racko Pilot)
+        scope:
+            - README.md
+            - .github/
+            - deploy/
+            - docs/
+            - document/
+            - scripts/
+            - package.json
+            - package-lock.json
+            - .dockerignore
+            - .gitattributes
+            - .gitignore
+            - livekit.agents
+            - scratch.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

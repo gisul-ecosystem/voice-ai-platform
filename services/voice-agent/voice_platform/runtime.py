@@ -14,7 +14,6 @@ from clients.inference import (
     inference_overrides_from_metadata,
     parse_room_metadata,
 )
-from clients.tts.voice_policy import ResolvedVoicePolicy
 from livekit_adapters import LaptopLLM, LaptopSTT, LaptopTTS
 
 
@@ -25,27 +24,13 @@ class InferenceClients:
     tts: Any
 
 
-def load_inference_clients(
-    ctx: Any,
-    logger: logging.Logger,
-    *,
-    voice_policy: ResolvedVoicePolicy | dict[str, Any] | None = None,
-) -> InferenceClients:
+def load_inference_clients(ctx: Any, logger: logging.Logger) -> InferenceClients:
     """Resolve room-level provider choices before the first conversation turn."""
-    job = getattr(ctx, "job", None)
-    raw_metadata = (
-        getattr(job, "metadata", None)
-        or getattr(ctx.room, "metadata", None)
-        or ""
-    )
     overrides = inference_overrides_from_metadata(
-        parse_room_metadata(raw_metadata)
+        parse_room_metadata(getattr(ctx.room, "metadata", None) or "")
     )
     try:
-        llm_client, stt_client, tts_client = clients_from_overrides(
-            overrides,
-            voice_policy=voice_policy,
-        )
+        llm_client, stt_client, tts_client = clients_from_overrides(overrides)
     except ProviderConfigError:
         logger.exception(
             "inference_config_invalid",
@@ -58,25 +43,10 @@ def load_inference_clients(
 def build_agent_session(clients: InferenceClients) -> AgentSession:
     """Construct the shared STT → LLM → TTS LiveKit pipeline."""
     return AgentSession(
-        # Allow natural breathing pauses during technical answers before concluding the turn.
-        vad=silero.VAD.load(min_speech_duration=0.35, min_silence_duration=1.2),
+        vad=silero.VAD.load(min_speech_duration=0.4),
         stt=LaptopSTT(client=clients.stt),
         llm=LaptopLLM(client=clients.llm),
         tts=LaptopTTS(client=clients.tts),
-        # Publish agent speech text so the live transcript can show interviewer lines.
-        use_tts_aligned_transcript=True,
-        # Allow natural barge-in if candidate starts speaking or correcting.
-        allow_interruptions=True,
-        min_interruption_duration=1.2,
-        min_interruption_words=3,
-        min_endpointing_delay=1.0,
-        max_endpointing_delay=2.5,
-        resume_false_interruption=True,
-        false_interruption_timeout=2.0,
-        # Preemptive drafting made the agent commit to replying on partial/paused
-        # speech before the candidate finished their sentence — disabled so the
-        # full final utterance reaches the LLM before a reply is generated.
-        preemptive_generation=False,
     )
 
 

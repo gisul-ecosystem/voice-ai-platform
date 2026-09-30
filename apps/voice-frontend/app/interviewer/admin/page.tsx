@@ -8,6 +8,7 @@ function defaultStartTime(): string {
   return new Date(Date.now() + 10 * 60_000).toISOString().slice(0, 16);
 }
 
+/** Admin entry goes to the template library. */
 export default function AdminInterviewPage() {
   const router = useRouter();
   useEffect(() => {

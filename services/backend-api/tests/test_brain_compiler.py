@@ -178,3 +178,100 @@ def test_compiler_drops_prohibited_and_injection_seeds() -> None:
     assert "religion" not in blob
     assert "discovery" in blob
 
+
+def test_compiler_applies_llm_enrichment_after_alias_normalize() -> None:
+    draft = compile_blueprint(
+        job_intelligence=_approved_job(),
+        recommended_competencies=[
+            {
+                "name": "JS",
+                "definition": "Assesses JavaScript delivery for product features",
+                "evidence_expected": ["owned a feature", "frontend runtime choice"],
+                "required": True,
+            },
+            {
+                "name": "k8s",
+                "definition": "Assesses Kubernetes operations judgment",
+                "evidence_expected": ["incident response", "rollout strategy"],
+                "required": True,
+            },
+            {
+                "name": "Negotiation",
+                "definition": "Assesses deal negotiation with mid-market accounts",
+                "evidence_expected": ["discovery call", "closed outcome"],
+                "required": True,
+            },
+        ],
+        creator_exclusive=True,
+        include_scenarios=False,
+    )
+    by_name = {item.name.lower(): item for item in draft.competencies}
+    assert "javascript" in by_name
+    assert "kubernetes" in by_name
+    assert "Assesses JavaScript delivery" in by_name["javascript"].definition
+    assert "owned a feature" in by_name["javascript"].evidence_expected
+    # Exclusive LLM set should not pad with CORE soft-skill fallbacks.
+    names = {item.name.lower() for item in draft.competencies}
+    assert "problem solving" not in names
+    assert "ownership" not in names
+
+
+def test_compiler_creator_exclusive_skips_jd_pad() -> None:
+    draft = compile_blueprint(
+        job_intelligence=_approved_job(),
+        creator_competencies=["Discovery quality", "Pipeline discipline", "Stakeholder trust"],
+        creator_exclusive=True,
+        include_scenarios=False,
+    )
+    names = [item.name.lower() for item in draft.competencies]
+    assert names == ["discovery quality", "pipeline discipline", "stakeholder trust"]
+
+
+def test_compiler_rejects_jd_duty_fragments_as_competencies() -> None:
+    from brain.compiler import is_interviewable_competency_label
+
+    assert not is_interviewable_competency_label("Design")
+    assert not is_interviewable_competency_label("develop")
+    assert not is_interviewable_competency_label("test")
+    assert not is_interviewable_competency_label(
+        "and maintain applications using Python."
+    )
+    assert is_interviewable_competency_label("Python backend")
+    assert is_interviewable_competency_label("Negotiation")
+
+    draft = compile_blueprint(
+        job_intelligence=_approved_job(),
+        creator_competencies=[
+            "Design",
+            "develop",
+            "test",
+            "and maintain applications using Python.",
+            "Python backend",
+            "FastAPI",
+            "Debugging production issues",
+        ],
+        creator_exclusive=True,
+        include_scenarios=False,
+    )
+    names = [item.name.lower() for item in draft.competencies]
+    assert "design" not in names
+    assert "develop" not in names
+    assert "test" not in names
+    assert not any(name.startswith("and maintain") for name in names)
+    assert "python backend" in names
+    assert "fastapi" in names
+    assert "debugging production issues" in names
+
+
+def test_compiler_does_not_seed_phases_from_responsibility_sentences() -> None:
+    draft = compile_blueprint(
+        job_intelligence=_approved_job(),
+        creator_competencies=None,
+        creator_exclusive=False,
+        include_scenarios=False,
+    )
+    names = [item.name.lower() for item in draft.competencies]
+    # Responsibility-like duty lines must not become phase titles.
+    assert not any("discovery calls and demos" in name for name in names)
+    assert not any(name in {"design", "develop", "test", "build"} for name in names)
+

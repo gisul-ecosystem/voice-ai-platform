@@ -11,15 +11,28 @@ _WS = re.compile(r"\s+")
 INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "establish_context": (
         "situation",
-        "when",
-        "team",
-        "project",
-        "role",
+        "when i",
+        "when we",
+        "time when",
+        "my team",
+        "the project",
+        "my role",
         "context",
         "working on",
         "assigned",
         "customer",
         "client",
+        # Phase 2: Sales/Ops/HR context markers
+        "the deal",
+        "the account",
+        "the prospect",
+        "the buyer",
+        "my territory",
+        "the quarter",
+        "the initiative",
+        "the campaign",
+        "the process",
+        "the candidate",
     ),
     "establish_ownership": (
         "i handled",
@@ -32,6 +45,20 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "i ran",
         "i managed",
         "personally",
+        # Phase 2: Sales/Ops ownership markers
+        "i closed",
+        "i negotiated",
+        "i qualified",
+        "i discovered",
+        "i pitched",
+        "i presented",
+        "i drove",
+        "i coordinated",
+        "i hired",
+        "i onboarded",
+        "i trained",
+        "i analyzed",
+        "i forecasted",
     ),
     "applied_understanding": (
         "how i",
@@ -43,6 +70,14 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "i used",
         "designed",
         "because",
+        # Phase 2: Sales/Ops method markers
+        "my framework",
+        "my strategy",
+        "my process",
+        "the way i",
+        "i structured",
+        "i organized",
+        "i prioritized",
     ),
     "problem_or_complexity": (
         "difficult",
@@ -54,6 +89,18 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "blocked",
         "incident",
         "problem",
+        # Phase 2: Sales/Ops/HR problem markers
+        "objection",
+        "pushback",
+        "blocker",
+        "stalled",
+        "lost",
+        "delayed",
+        "resistance",
+        "conflict",
+        "competitive",
+        "missed",
+        "shortfall",
     ),
     "tradeoff_or_transfer": (
         "tradeoff",
@@ -64,6 +111,13 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "next time",
         "learned",
         "chose",
+        # Phase 2: Reflection markers
+        "looking back",
+        "in hindsight",
+        "if i could",
+        "differently",
+        "mistake",
+        "lesson",
     ),
     "candidate_map": (
         "background",
@@ -91,8 +145,10 @@ EVIDENCE_STATES = frozenset({"missing", "claimed", "demonstrated", "confirmed"})
 _NUMBER = re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|%|k|m|b)?\b", re.IGNORECASE)
 _QUOTED = re.compile(r"\"([^\"]+)\"|'([^']+)'")
 _FIRST_PERSON = re.compile(
-    r"\bi\s+(handled|led|built|owned|implemented|designed|wrote|ran|"
-    r"managed|reduced|set|rewrote|chose|moved)\s+([^.,;]+)",
+    r"\b(?:i|we)\s+(handled|led|built|owned|implemented|designed|wrote|ran|"
+    r"managed|reduced|set|rewrote|chose|moved|used|added|configured|"
+    r"introduced|measured|rate[- ]?limited|migrated|shipped|launched|scaled|"
+    r"rewrote|refactored)\s+([^.,;]+)",
     re.IGNORECASE,
 )
 _OWNERSHIP_CUES = (
@@ -109,15 +165,390 @@ _OWNERSHIP_CUES = (
     "i set",
     "i rewrote",
 )
-_CONTEXT_CUES = (" when ", " at ", " for the ", " for a ", " with the ", " on the ")
-_METHOD_CUES = (" by ", " using ", " steps", " mechanism", " implemented", " designed")
-_PROBLEM_CUES = ("failed", "broke", "timeout", "incident", "blocked", "constraint")
+# Thin first-person actions ("I set TTL…") can proxy for a context ask, but must
+# not also seal ownership — that still needs a dedicated ownership probe.
+_STRONG_OWNERSHIP_CUES = (
+    "i handled",
+    "i led",
+    "i built",
+    "i owned",
+    "i implemented",
+    "i designed",
+    "i wrote",
+    "i ran",
+    "i managed",
+    "i was responsible",
+    "my responsibility",
+    "personally",
+)
+# Avoid bare " when " / " at " — those match hobby answers ("when it rains").
+_CONTEXT_CUES = (
+    " when i ",
+    " when we ",
+    " at the ",
+    " at my ",
+    " for the ",
+    " for a ",
+    " with the ",
+    " on the ",
+    " my team ",
+    " the project ",
+    " the service ",
+)
+# Match "I used X", "we used X", "using X", not only " using " with padding quirks.
+_METHOD_CUES = (
+    " by ",
+    " using ",
+    "i used",
+    "we used",
+    " steps",
+    " mechanism",
+    " implemented",
+    " designed",
+    "configured",
+    "backoff",
+    "idempotency",
+    "with redis",
+    "with postgres",
+)
+_PROBLEM_CUES = (
+    "failed",
+    "broke",
+    "timeout",
+    "incident",
+    "blocked",
+    "constraint",
+    "failure mode",
+    "failure",
+    "storm",
+    "outage",
+    "dead-letter",
+    "dead letter",
+    "rate-limit",
+    "rate limited",
+    "webhook",
+)
 _TRADEOFF_CUES = ("instead", "rather than", "trade-off", "tradeoff", "would change")
+# Workplace / role vocabulary that keeps an answer on-topic even without
+# evidence_expected token overlap (ownership dodges still count as work talk).
+# Phase 2: expanded to include Sales, Ops, HR, Marketing, Finance vocabulary.
+_WORKPLACE_CUES = (
+    " team ",
+    " manager ",
+    " service ",
+    " services ",
+    " api ",
+    " apis ",
+    " redis ",
+    " postgres ",
+    " rollout ",
+    " production ",
+    " billing ",
+    " payments ",
+    " payment ",
+    " project ",
+    " plan ",
+    " owned ",
+    " decided ",
+    " executed ",
+    " practices ",
+    " responsibility ",
+    " delivered ",
+    " implemented ",
+    " incident ",
+    " customer ",
+    " client ",
+    " stakeholder ",
+    " buyer ",
+    " prospect ",
+    " account ",
+    " revenue ",
+    " budget ",
+    " quota ",
+    " metric ",
+    " kpi ",
+    " conversion ",
+    " contract ",
+    " deal ",
+    " negotiation ",
+    " procurement ",
+    " pipeline ",
+    " objection ",
+    " partnership ",
+    " operations ",
+    " vendor ",
+    " process ",
+    " workflow ",
+    " monolith ",
+    " microservice ",
+    " migrated ",
+    " migration ",
+    " fastapi ",
+    " deploy ",
+    " deployed ",
+    # Phase 2: Sales/BD vocabulary
+    " discovery ",
+    " qualification ",
+    " closing ",
+    " proposal ",
+    " outreach ",
+    " cold call ",
+    " warm lead ",
+    " lead ",
+    " leads ",
+    " territory ",
+    " forecast ",
+    " crm ",
+    " salesforce ",
+    " hubspot ",
+    " enterprise ",
+    " smb ",
+    " champion ",
+    " decision maker ",
+    " authority ",
+    " timeline ",
+    " urgency ",
+    " pain point ",
+    " value prop ",
+    " roi ",
+    " churn ",
+    " retention ",
+    " expansion ",
+    " upsell ",
+    " cross-sell ",
+    " renewal ",
+    " pricing ",
+    " discount ",
+    " terms ",
+    # Phase 2: Ops/PM/General work vocabulary
+    " initiative ",
+    " roadmap ",
+    " backlog ",
+    " sprint ",
+    " agile ",
+    " scrum ",
+    " milestone ",
+    " dependency ",
+    " risk ",
+    " mitigation ",
+    " escalation ",
+    " bottleneck ",
+    " throughput ",
+    " capacity ",
+    " resource ",
+    " allocation ",
+    " timeline ",
+    " deadline ",
+    " deliverable ",
+    " stakeholders ",
+    " alignment ",
+    " coordination ",
+    " handoff ",
+    " onboarding ",
+    " training ",
+    " documentation ",
+    " sop ",
+    " playbook ",
+    # Phase 2: HR/Recruiting/People vocabulary
+    " candidate ",
+    " candidates ",
+    " hiring ",
+    " interview ",
+    " offer ",
+    " compensation ",
+    " headcount ",
+    " requisition ",
+    " pipeline ",
+    " sourcing ",
+    " screening ",
+    " onboard ",
+    " performance ",
+    " feedback ",
+    " 1-on-1 ",
+    " one-on-one ",
+    " retention ",
+    " attrition ",
+    " engagement ",
+    " culture ",
+    # Phase 2: Finance/Accounting vocabulary
+    " forecast ",
+    " variance ",
+    " accrual ",
+    " reconciliation ",
+    " ledger ",
+    " journal ",
+    " accounts payable ",
+    " accounts receivable ",
+    " cash flow ",
+    " burn rate ",
+    " runway ",
+    " ebitda ",
+    " margin ",
+    " cost center ",
+    " profit ",
+    " loss ",
+)
+# Stem hits catch plurals / tense variants (services, migrated, payments, negotiations).
+# Phase 2: expanded to include Sales, Ops, HR, Marketing stems for domain-neutral coverage.
+_TECH_STEMS = (
+    "servic",
+    "migrat",
+    "payment",
+    "billing",
+    "monolith",
+    "microservice",
+    "fastapi",
+    "django",
+    "flask",
+    "postgres",
+    "redis",
+    "kafka",
+    "kubernetes",
+    "deploy",
+    "produc",
+    "incident",
+    "latency",
+    "timeout",
+    "backend",
+    "frontend",
+    "database",
+    "pipeline",
+    "webhook",
+    "retries",
+    "retry",
+    # Phase 2: Sales/BD stems
+    "negotiat",
+    "qualif",
+    "prospect",
+    "stakehold",
+    "discover",
+    "object",  # objection
+    "pipelin",
+    "procure",
+    "converte",  # converted
+    "convert",
+    "deliver",
+    "forecast",
+    "territori",  # territory
+    "enterpris",  # enterprise
+    "upsell",
+    "cross-sell",
+    "renew",  # renewal
+    "churn",
+    "retain",  # retention
+    "expan",  # expansion
+    "closin",  # closing
+    "propos",  # proposal
+    "outreach",
+    "champion",
+    "author",  # authority (but also catches "author" — acceptable tradeoff)
+    "urgenc",  # urgency
+    "pain",  # pain point
+    "metric",
+    # Phase 2: Ops/PM/General stems
+    "operat",
+    "execut",
+    "improv",
+    "optimiz",
+    "initiat",  # initiative
+    "roadmap",
+    "backlog",
+    "sprint",
+    "agile",
+    "scrum",
+    "mileston",  # milestone
+    "depend",  # dependency
+    "mitigat",  # mitigation
+    "escalat",  # escalation
+    "bottleneck",
+    "throughput",
+    "capac",  # capacity
+    "resourc",  # resource
+    "allocat",  # allocation
+    "deadlin",  # deadline
+    "deliverab",  # deliverable
+    "align",  # alignment
+    "coordinat",  # coordination
+    "handoff",
+    "onboard",  # onboarding
+    "train",  # training
+    "document",  # documentation
+    "playbook",
+    # Phase 2: HR/Recruiting stems
+    "candidat",  # candidate
+    "hirin",  # hiring
+    "interv",  # interview (catches interviewer, interviewed, etc.)
+    "compens",  # compensation
+    "headcount",
+    "requisit",  # requisition
+    "sourc",  # sourcing
+    "screen",  # screening
+    "perform",  # performance
+    "feedback",
+    "attrition",
+    "engag",  # engagement
+    "cultur",  # culture
+    # Phase 2: Finance/Accounting stems
+    "varianc",  # variance
+    "accrual",
+    "reconcil",  # reconciliation
+    "ledger",
+    "journal",
+    "payabl",  # payable
+    "receivabl",  # receivable
+    "cash flow",
+    "burn",  # burn rate
+    "runway",
+    "ebitda",
+    "margin",
+    "profit",
+)
 _WEAK_OBJECTS = frozenset({"it", "that", "this", "them", "things", "stuff"})
+_STOP_TOKENS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "about",
+        "than",
+        "then",
+        "when",
+        "where",
+        "what",
+        "which",
+        "while",
+        "your",
+        "their",
+        "ours",
+        "have",
+        "been",
+        "were",
+        "was",
+        "are",
+        "is",
+        "was",
+        "a",
+        "an",
+        "of",
+        "or",
+        "to",
+        "in",
+        "on",
+        "at",
+    }
+)
 
 
 def _tokens(text: str) -> set[str]:
-    return {part for part in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(part) > 2}
+    return {
+        part
+        for part in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(part) > 2 and part not in _STOP_TOKENS
+    }
 
 
 def competency_by_id(definition: dict[str, Any] | None, competency_id: str | None) -> dict[str, Any]:
@@ -191,12 +622,20 @@ def init_coverage(definition: dict[str, Any] | None) -> dict[str, dict[str, Any]
 
 
 def _intent_matched(text: str, intent: str) -> bool:
-    lowered = (text or "").lower()
+    lowered = f" {(text or '').lower()} "
     for marker in INTENT_KEYWORDS.get(intent, ()):
-        if marker in lowered:
+        needle = marker.lower().strip()
+        if not needle:
+            continue
+        # Phrase markers need boundaries so "when i" does not match "when it".
+        if " " in needle:
+            if f" {needle} " in lowered:
+                return True
+            continue
+        if re.search(rf"\b{re.escape(needle)}\b", lowered):
             return True
     slug = intent.replace("_", " ")
-    return slug in lowered
+    return f" {slug} " in lowered
 
 
 def classify_live_answer(
@@ -222,6 +661,9 @@ def classify_live_answer(
     if usability != "usable":
         return usability, "unusable", []
 
+    if _looks_like_jailbreak(cleaned):
+        return "off_topic", "off_topic", []
+
     hinted = [intent for intent in required_intents if _intent_matched(cleaned, intent)]
     expected = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
     expected_hits = 0
@@ -231,8 +673,11 @@ def classify_live_answer(
         if item.lower() in cleaned.lower() or (needles and needles & blob_tokens):
             expected_hits += 1
 
-    if not hinted and expected and expected_hits == 0 and len(cleaned.split()) >= 8:
-        return "off_topic", "off_topic", []
+    if expected and expected_hits == 0 and len(cleaned.split()) >= 8:
+        # Keyword hints alone (e.g. bare "when") must not keep hobby answers usable.
+        # Require evidence overlap or a concrete work signal before staying on-topic.
+        if not _has_work_signal(cleaned):
+            return "off_topic", "off_topic", []
     if len(hinted) >= max(1, (len(required_intents) + 1) // 2) and expected_hits >= 1:
         quality = "sufficient"
     elif hinted or expected_hits:
@@ -241,6 +686,51 @@ def classify_live_answer(
         quality = "unclear"
     # Keyword hits are a debug hint only — they never complete coverage.
     return "usable", quality, hinted
+
+
+def _has_work_signal(text: str) -> bool:
+    """True when the answer shows job-related substance, not just common words."""
+    cleaned = _WS.sub(" ", (text or "").strip())
+    if not cleaned:
+        return False
+    facts = extract_evidence_facts(cleaned)
+    if facts:
+        return True
+    lowered = f" {cleaned.lower()} "
+    for cue in (
+        *_OWNERSHIP_CUES,
+        *_STRONG_OWNERSHIP_CUES,
+        *_METHOD_CUES,
+        *_PROBLEM_CUES,
+        *_CONTEXT_CUES,
+        *_TRADEOFF_CUES,
+        *_WORKPLACE_CUES,
+    ):
+        if cue in lowered:
+            return True
+    for tok in _tokens(cleaned):
+        if any(tok.startswith(stem) for stem in _TECH_STEMS):
+            return True
+    return False
+
+
+_JAILBREAK_MARKERS = (
+    "system prompt",
+    "ignore previous",
+    "ignore all instructions",
+    "api key",
+    "api keys",
+    "reveal your",
+    "your instructions",
+    "developer mode",
+    "jailbreak",
+    "bypass safety",
+)
+
+
+def _looks_like_jailbreak(text: str) -> bool:
+    lowered = f" {(text or '').lower()} "
+    return any(marker in lowered for marker in _JAILBREAK_MARKERS)
 
 
 def extract_evidence_facts(text: str) -> list[str]:
@@ -285,20 +775,22 @@ def _fact_maps_to_evidence(fact: str, evidence_expected: list[str]) -> bool:
 
 
 def _intent_has_concrete_evidence(intent: str, text: str, facts: list[str]) -> bool:
-    if not facts:
-        return False
     lowered = f" {(text or '').lower()} "
     if intent == "establish_ownership":
-        return any(cue in lowered for cue in _OWNERSHIP_CUES)
-    if intent == "establish_context":
-        return any(cue in lowered for cue in _CONTEXT_CUES)
-    if intent == "applied_understanding":
-        return any(cue in lowered for cue in _METHOD_CUES)
-    if intent == "problem_or_complexity":
-        return any(cue in lowered for cue in _PROBLEM_CUES)
-    if intent == "tradeoff_or_transfer":
-        return any(cue in lowered for cue in _TRADEOFF_CUES)
-    return False
+        cues = _OWNERSHIP_CUES
+    elif intent == "establish_context":
+        cues = _CONTEXT_CUES
+    elif intent == "applied_understanding":
+        cues = _METHOD_CUES
+    elif intent == "problem_or_complexity":
+        cues = _PROBLEM_CUES
+    elif intent == "tradeoff_or_transfer":
+        cues = _TRADEOFF_CUES
+    else:
+        return False
+    # Strong cue match is enough even when first-person fact extraction is empty
+    # (e.g. "We rate-limited…" / "failure mode was webhook storms").
+    return any(cue in lowered for cue in cues)
 
 
 def evidenced_intents(
@@ -309,22 +801,35 @@ def evidenced_intents(
     asked_intent: str | None = None,
     answer_text: str | None = None,
 ) -> list[str]:
-    """Intents covered by evidenced facts or a prior evaluation — never keywords alone."""
+    """Intents covered by evidenced facts or a prior evaluation — never keywords alone.
+
+    Deterministic fact/cue path is authoritative. An LLM ``surface`` verdict must not
+    erase concrete extracted facts (same transcript must score the same way).
+    """
     required = [item for item in required_intents if item]
     if not required:
         return []
     if answer_eval is not None and getattr(answer_eval, "factually_correct", True) is False:
         return []
     substance = str(getattr(answer_eval, "technical_substance", "") or "").strip()
-    if substance in {"surface", "incorrect", "not_applicable"}:
+    extracted = extract_evidence_facts(answer_text or "")
+    # Incorrect / N/A never cover. Surface only blocks when there are no facts/cues.
+    if substance in {"incorrect", "not_applicable"}:
         return []
+    if substance == "surface" and not extracted:
+        # No concrete facts — honor the judge and leave uncovered.
+        has_any_cue = any(
+            _intent_has_concrete_evidence(intent, answer_text or "", extracted)
+            for intent in required
+        )
+        if not has_any_cue:
+            return []
 
     eval_facts = [
         str(item).strip()
         for item in (getattr(answer_eval, "key_facts_stated", None) or [])
         if str(item).strip()
     ] if answer_eval is not None else []
-    extracted = extract_evidence_facts(answer_text or "")
     facts = list(dict.fromkeys([*eval_facts, *extracted]))
     expected = [item.strip() for item in (evidence_expected or []) if item and item.strip()]
     eval_ok = bool(
@@ -337,18 +842,56 @@ def evidenced_intents(
         )
     )
     if not facts and not eval_ok:
-        return []
+        # Still allow pure cue hits (failure mode / webhook storms, etc.).
+        cue_only = [
+            intent
+            for intent in required
+            if _intent_has_concrete_evidence(intent, answer_text or "", facts)
+        ]
+        if not cue_only:
+            return []
+        return cue_only
 
+    covered: list[str] = []
     target = asked_intent if asked_intent in required else None
     if target:
-        if eval_ok or _intent_has_concrete_evidence(target, answer_text or "", facts):
-            return [target]
-        return []
-    return [
-        intent
-        for intent in required
-        if _intent_has_concrete_evidence(intent, answer_text or "", facts)
-    ]
+        context_ok = _intent_has_concrete_evidence(target, answer_text or "", facts)
+        # Ownership/method detail about real work also satisfies a context ask.
+        if (
+            not context_ok
+            and target == "establish_context"
+            and (
+                _intent_has_concrete_evidence(
+                    "establish_ownership", answer_text or "", facts
+                )
+                or _intent_has_concrete_evidence(
+                    "applied_understanding", answer_text or "", facts
+                )
+                or _intent_has_concrete_evidence(
+                    "problem_or_complexity", answer_text or "", facts
+                )
+            )
+        ):
+            context_ok = True
+        if eval_ok or context_ok:
+            covered.append(target)
+    # Credit every outstanding intent the answer actually evidences (cross-intent).
+    lowered = f" {(answer_text or '').lower()} "
+    for intent in required:
+        if intent in covered:
+            continue
+        if not _intent_has_concrete_evidence(intent, answer_text or "", facts):
+            continue
+        # While answering context, weak "I set / I reduced" cues must not seal
+        # ownership — keep the ownership probe for metric-named thin answers.
+        if (
+            target == "establish_context"
+            and intent == "establish_ownership"
+            and not any(cue in lowered for cue in _STRONG_OWNERSHIP_CUES)
+        ):
+            continue
+        covered.append(intent)
+    return covered
 
 
 def quality_from_evaluation(answer_eval: Any) -> str | None:
@@ -386,9 +929,14 @@ def apply_coverage(
     entry = dict(coverage[competency_id])
     required = list(entry.get("required_intents") or [])
     already = list(entry.get("covered_intents") or [])
+    intent_status = dict(entry.get("intent_status") or {})
+    for intent in required:
+        intent_status.setdefault(intent, "absent")
     for intent in covered_intents:
         if intent in required and intent not in already:
             already.append(intent)
+        if intent in required:
+            intent_status[intent] = "covered"
     missing = [intent for intent in required if intent not in already]
     evidence_ids = list(entry.get("evidence_ids") or [])
     evidence_states = {
@@ -425,6 +973,43 @@ def apply_coverage(
         "evidence_states": evidence_states,
     }
     return coverage
+
+
+def mark_intent_asked(
+    coverage: dict[str, dict[str, Any]],
+    *,
+    competency_id: str | None,
+    intent: str | None,
+) -> None:
+    """Record that an assessment intent was asked (distinct from covered)."""
+    if not competency_id or not intent or competency_id not in coverage:
+        return
+    entry = coverage[competency_id]
+    required = list(entry.get("required_intents") or [])
+    if intent not in required:
+        return
+    status_map = dict(entry.get("intent_status") or {})
+    if status_map.get(intent) not in {"covered", "assessed_insufficient"}:
+        status_map[intent] = "asked"
+    entry["intent_status"] = status_map
+
+
+def mark_missing_intents_insufficient(
+    coverage: dict[str, dict[str, Any]],
+    *,
+    competency_id: str | None,
+) -> None:
+    """When leaving a competency with gaps, distinguish asked-but-weak from never asked."""
+    if not competency_id or competency_id not in coverage:
+        return
+    entry = coverage[competency_id]
+    status_map = dict(entry.get("intent_status") or {})
+    for intent in list(entry.get("missing_intents") or []):
+        if status_map.get(intent) == "asked":
+            status_map[intent] = "assessed_insufficient"
+        else:
+            status_map.setdefault(intent, "absent")
+    entry["intent_status"] = status_map
 
 
 def first_incomplete_competency(

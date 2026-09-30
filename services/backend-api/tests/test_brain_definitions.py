@@ -66,7 +66,26 @@ async def test_publish_and_store_blocks_incomplete_setup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_context_stores_definition_id() -> None:
+async def test_list_definitions_returns_newest_first() -> None:
+    first = await publish_and_store(
+        job_description="Build APIs with Python and own production incidents.",
+        interview_setup=_setup(),
+        timezone="Asia/Kolkata",
+        published_by="test@example.com",
+    )
+    second_setup = _setup().model_copy(update={"title": "Second interview"})
+    second = await publish_and_store(
+        job_description="Ship reliable backend services with strong ownership.",
+        interview_setup=second_setup,
+        timezone="Asia/Kolkata",
+        published_by="test@example.com",
+    )
+    listed = await definitions.list_definitions(limit=10)
+    ids = [row["definition_id"] for row in listed]
+    assert second.definition_id in ids
+    assert first.definition_id in ids
+    assert ids.index(second.definition_id) < ids.index(first.definition_id)
+
     created = await interviews.create_context(
         "Build APIs",
         "Python experience",

@@ -12,12 +12,28 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 SeniorityLevel = Literal["intern", "junior", "mid", "senior", "lead"]
 DurationMinutes = Literal[15, 30, 45]
+# Spec 4.1 questioning modes. "adaptive" is the domain-neutral default used
+# when no explicit mode is chosen: the generator is driven purely by
+# blueprint data (anchors, lens, intents) with no domain assumption.
+QuestioningMode = Literal[
+    "adaptive",
+    "technical",
+    "behavioral",
+    "case",
+    "scenario",
+    "project_deep_dive",
+    "system_design",
+]
+# Spec 4.1 rigor dial. Sets coverage thresholds and probing appetite;
+# constants live in brain/blueprint_formula.py.
+RigorLevel = Literal["screening", "balanced", "bar_raiser"]
 ClaimSource = Literal["resume", "jd", "candidate_statement", "creator"]
 ClaimType = Literal[
     "education",
     "employment",
     "internship",
     "project",
+    "topic",
     "skill",
     "certification",
     "achievement",
@@ -115,6 +131,36 @@ class RubricAnchor(BaseModel):
     description: str = Field(min_length=4, max_length=500)
 
 
+class LevelAnchors(BaseModel):
+    """Plain-language weak/strong answer anchors (spec 4.4).
+
+    Derived from the 1/5 rubric anchors when the admin or the synthesis
+    engine does not supply explicit ones.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    weak: str = Field(min_length=4, max_length=500)
+    strong: str = Field(min_length=4, max_length=500)
+
+
+class SectionDefinition(BaseModel):
+    """Ordered interview section grouping competencies (spec 4.4).
+
+    Legacy definitions have no sections; the runtime then treats every
+    competency as one auto-grouped adaptive section.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=2, max_length=64, pattern=r"^[a-z][a-z0-9_]{1,62}$")
+    order: int = Field(ge=1, le=20)
+    type: QuestioningMode = "adaptive"
+    max_minutes: int = Field(ge=1, le=90)
+    competency_ids: list[str] = Field(min_length=1, max_length=8)
+    is_warmup: bool = False
+
+
 class CompetencyDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -132,6 +178,18 @@ class CompetencyDefinition(BaseModel):
     # "jd" when derived from the job description, "fallback" when the JD yielded
     # too few competencies and a generic one was substituted.
     source: Literal["jd", "creator", "fallback"] = "jd"
+    # Weight->behaviour formula outputs (spec 4.1; brain/blueprint_formula.py).
+    # None = legacy definition; the runtime falls back to level-based defaults.
+    required_questions: int | None = Field(default=None, ge=1, le=4)
+    depth_target: float | None = Field(default=None, ge=0.55, le=0.9)
+    # Intent allow-list for the live generator (spec 4.6). None = legacy:
+    # derive from min_assessment_intents.
+    allowed_intents: list[str] | None = Field(default=None, max_length=12)
+    # Context-specific evaluation lens implied by the JD (spec 4.3), e.g. a
+    # qualification methodology. Optional; set by the synthesis engine.
+    evaluation_lens: str | None = Field(default=None, max_length=200)
+    # Plain-language weak/strong anchors (spec 4.4). None = derive from rubric.
+    level_anchors: LevelAnchors | None = None
 
     @field_validator("evidence_expected", "min_assessment_intents")
     @classmethod
@@ -139,6 +197,16 @@ class CompetencyDefinition(BaseModel):
         cleaned = [item.strip() for item in values if item and item.strip()]
         if not cleaned:
             raise ValueError("at least one non-empty item is required")
+        return cleaned
+
+    @field_validator("allowed_intents")
+    @classmethod
+    def _trim_allowed_intents(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return values
+        cleaned = [item.strip() for item in values if item and item.strip()]
+        if not cleaned:
+            raise ValueError("allowed_intents, when set, needs at least one item")
         return cleaned
 
     @model_validator(mode="after")
@@ -173,7 +241,7 @@ class ScenarioDefinition(BaseModel):
     id: str = Field(min_length=2, max_length=64)
     competency_id: str = Field(min_length=2, max_length=64)
     level: SeniorityLevel
-    scenario: str = Field(min_length=8, max_length=2_000)
+    scenario: str = Field(min_length=2, max_length=2_000)
     expected_evidence: list[str] = Field(min_length=1, max_length=12)
     source: Literal["creator", "ai_generated", "question_bank"] = "creator"
     approved: bool = False
@@ -239,9 +307,9 @@ class EndingPolicy(BaseModel):
 class VoicePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = Field(default="elevenlabs", min_length=2, max_length=64)
-    voice_id: str = Field(default="", max_length=128)
-    model_id: str = Field(default="", max_length=128)
+    provider: str = Field(default="deepgram", min_length=2, max_length=64)
+    voice_id: str = Field(default="aura-asteria-en", max_length=128)
+    model_id: str = Field(default="aura-asteria-en", max_length=128)
     stability: float | None = Field(default=None, ge=0, le=1)
     speed: float | None = Field(default=None, ge=0.5, le=1.5)
     fallback_policy: Literal[
@@ -290,8 +358,13 @@ class JobIntelligence(BaseModel):
     tools: list[ExtractedItem] = Field(default_factory=list, max_length=40)
     work_scenarios: list[ExtractedItem] = Field(default_factory=list, max_length=20)
     expected_outcomes: list[ExtractedItem] = Field(default_factory=list, max_length=20)
+    core_competencies: list[str] = Field(default_factory=list, max_length=20)
     raw_job_description: str = Field(min_length=1, max_length=100_000)
     extraction_version: str = Field(default="jd-extractor-v1", max_length=64)
+    # Guardrail: sha256 of raw_job_description (first 16 hex chars stored).
+    # When a new JD is uploaded, this changes and signals that all derived
+    # state (competencies, Redis hot copies) must be invalidated.
+    jd_hash: str | None = Field(default=None, max_length=64)
     approved: bool = False
     approved_at: datetime | None = None
 
@@ -324,6 +397,7 @@ class CandidateProfile(BaseModel):
     )
     internships: list[ExtractedItem] = Field(default_factory=list, max_length=20)
     projects: list[ExtractedItem] = Field(default_factory=list, max_length=40)
+    topics_studied: list[ExtractedItem] = Field(default_factory=list, max_length=40)
     skills_claimed: list[ExtractedItem] = Field(default_factory=list, max_length=80)
     certifications: list[ExtractedItem] = Field(default_factory=list, max_length=40)
     achievements: list[ExtractedItem] = Field(default_factory=list, max_length=40)
@@ -356,6 +430,11 @@ class InterviewDefinitionDraft(BaseModel):
     scoring_policy: ScoringPolicy = Field(default_factory=ScoringPolicy)
     prompt_version: str = Field(default="interviewer-system-v2", max_length=64)
     resume_required: bool = False
+    # Ordered sections (spec 4.4). Empty on legacy definitions; the runtime
+    # then treats all competencies as one auto-grouped adaptive section.
+    sections: list[SectionDefinition] = Field(default_factory=list, max_length=12)
+    # Rigor dial (spec 4.1). "balanced" keeps legacy defaults.
+    rigor: RigorLevel = "balanced"
 
 
 class InterviewDefinitionVersion(InterviewDefinitionDraft):
@@ -452,9 +531,14 @@ class CompetencyCoverage(BaseModel):
     evidence_states: dict[str, Literal["missing", "claimed", "demonstrated", "confirmed"]] = Field(
         default_factory=dict
     )
+    intent_status: dict[str, Literal["asked", "covered", "assessed_insufficient", "absent"]] = Field(
+        default_factory=dict
+    )
 
 
 class InterviewBrainState(BaseModel):
+    """Phase 3 (spec 4.4): Brain state now includes evidence_ledger for reconnect persistence."""
+
     model_config = ConfigDict(extra="forbid")
 
     session_id: str = Field(min_length=8, max_length=64)
@@ -468,6 +552,9 @@ class InterviewBrainState(BaseModel):
     asked_question_ids: list[str] = Field(default_factory=list, max_length=200)
     candidate_claim_ids: list[str] = Field(default_factory=list, max_length=200)
     coverage: dict[str, CompetencyCoverage] = Field(default_factory=dict)
+    # Phase 3: Evidence ledger persistence — what technical depth has been demonstrated.
+    # Dict of competency_id -> CompetencyLedger serialized as dict.
+    evidence_ledger: dict[str, dict[str, Any]] = Field(default_factory=dict)
     consecutive_unusable_answers: int = Field(ge=0, le=20, default=0)
     elapsed_seconds: int = Field(ge=0, default=0)
     last_processed_turn_id: str | None = Field(default=None, max_length=128)

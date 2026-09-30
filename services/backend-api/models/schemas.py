@@ -1,10 +1,12 @@
 """Pydantic models shared across the backend API."""
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from models.brain import AnswerEvaluation
+from models.brain import AnswerEvaluation, QuestioningMode, RigorLevel
 
 
 InterviewIntent = Literal["intro", "resume_project", "jd_requirement", "role_fit"]
@@ -54,6 +56,27 @@ class InterviewSetupConfig(BaseModel):
     maxProbesPerPhase: int = Field(ge=0, le=3)
     monitoringEnabled: bool = True
     recordingEnabled: bool = False
+    # --- Spec 4.1 admin layer (Phase 0). Defaults keep the legacy path ---
+    # byte-identical when clients omit them.
+    # Rigor dial: screening-friendly vs bar-raiser coverage thresholds.
+    rigor: RigorLevel = "balanced"
+    # Questioning mode for the auto-grouped section when no explicit section
+    # plan is supplied.
+    questioningMode: QuestioningMode = "adaptive"
+    # Raw per-competency weight sliders (0-100 each, parallel to
+    # competencies). Normalized to a mass of 100 by the compiler and
+    # converted into interview behaviour via brain/blueprint_formula.py.
+    competencyWeights: list[float] | None = Field(default=None, max_length=12)
+
+    @model_validator(mode="after")
+    def _weights_match_competencies(self) -> InterviewSetupConfig:
+        if self.competencyWeights is not None and len(self.competencyWeights) != len(
+            self.competencies
+        ):
+            raise ValueError(
+                "competencyWeights, when provided, must parallel competencies"
+            )
+        return self
 
 
 class InterviewPlanRequest(BaseModel):
@@ -118,8 +141,9 @@ class CreateScheduledInterviewRequest(BaseModel):
     candidate_id: str | None = Field(default=None, min_length=3, max_length=128)
     starts_at: datetime
     timezone: str = Field(min_length=1, max_length=64)
-    join_early_minutes: int = Field(default=15, ge=0, le=120)
-    late_grace_minutes: int = Field(default=15, ge=0, le=120)
+    join_early_minutes: int = Field(default=0, ge=0, le=120)
+    # Open invite links for up to 30 days after creation (anytime join).
+    late_grace_minutes: int = Field(default=43_200, ge=0, le=43_200)
     job_description: str = Field(min_length=1, max_length=100_000)
     resume_text: str | None = Field(default=None, max_length=100_000)
     interview_setup: InterviewSetupConfig
@@ -133,6 +157,22 @@ class CreateScheduledInterviewResponse(BaseModel):
     status: Literal["scheduled"]
     starts_at: datetime
     definition_id: str | None = None
+
+
+class ScheduledInterviewListItem(BaseModel):
+    interview_id: str
+    definition_id: str | None = None
+    candidate_name: str
+    candidate_email: str
+    status: str
+    starts_at: datetime
+    invitation_token: str | None = None
+    candidate_path: str | None = None
+    created_at: datetime | None = None
+
+
+class ScheduledInterviewListResponse(BaseModel):
+    items: list[ScheduledInterviewListItem]
 
 
 class InvitationPreviewRequest(BaseModel):

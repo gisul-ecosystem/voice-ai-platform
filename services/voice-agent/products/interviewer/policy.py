@@ -14,7 +14,6 @@ NextAction = str
 OPEN_INTERVIEW = "OPEN_INTERVIEW"
 MAP_CANDIDATE_BACKGROUND = "MAP_CANDIDATE_BACKGROUND"
 ASK_BASELINE = "ASK_BASELINE"
-WALK_RESUME_PROJECT = "WALK_RESUME_PROJECT"
 CLARIFY_CURRENT_ANSWER = "CLARIFY_CURRENT_ANSWER"
 PROBE_FOR_CONTEXT = "PROBE_FOR_CONTEXT"
 PROBE_FOR_OWNERSHIP = "PROBE_FOR_OWNERSHIP"
@@ -22,8 +21,10 @@ PROBE_FOR_METHOD = "PROBE_FOR_METHOD"
 PROBE_FOR_REASONING = "PROBE_FOR_REASONING"
 PROBE_FOR_RESULT = "PROBE_FOR_RESULT"
 PROBE_FOR_REFLECTION    = "PROBE_FOR_REFLECTION"
-PROBE_FOR_CONSISTENCY = "PROBE_FOR_CONSISTENCY"
 MOVE_TO_NEXT_COMPETENCY = "MOVE_TO_NEXT_COMPETENCY"
+MOVE_TO_NEXT_SECTION = "MOVE_TO_NEXT_SECTION"
+WALK_RESUME_PROJECT = "WALK_RESUME_PROJECT"
+PROBE_FOR_CONSISTENCY = "PROBE_FOR_CONSISTENCY"
 CHECK_REMAINING_GAP = "CHECK_REMAINING_GAP"
 OFFER_FINAL_ADDITION = "OFFER_FINAL_ADDITION"
 CLOSE_INTERVIEW = "CLOSE_INTERVIEW"
@@ -70,10 +71,19 @@ SLOT_ACTIONS: dict[str, str] = {
 
 _DEPTH_ACTIONS = {
     1: PROBE_FOR_CONTEXT,
-    2: PROBE_FOR_METHOD,
+    2: PROBE_FOR_OWNERSHIP,
     3: PROBE_FOR_METHOD,
     4: PROBE_FOR_REASONING,
     5: PROBE_FOR_REFLECTION,
+}
+
+# Assessment intents (validator / coverage) — never put action names in PolicyDecision.intent.
+_DEPTH_INTENTS = {
+    1: "establish_context",
+    2: "establish_ownership",
+    3: "applied_understanding",
+    4: "problem_or_complexity",
+    5: "tradeoff_or_transfer",
 }
 
 _INTENT_ACTIONS = {
@@ -84,15 +94,15 @@ _INTENT_ACTIONS = {
     "tradeoff_or_transfer": PROBE_FOR_REFLECTION,
 }
 
-# PolicyDecision.intent must always be a ladder intent, never an action name:
-# downstream ladder/coverage lookups are keyed on these.
-_DEPTH_INTENTS = {
-    1: "establish_context",
-    2: "establish_ownership",
-    3: "applied_understanding",
-    4: "problem_or_complexity",
-    5: "tradeoff_or_transfer",
-}
+
+def _assessment_intent(action: str, missing: list[str], *, depth: int) -> str:
+    """Map policy action → ladder intent; prefer uncovered intents when present."""
+    if missing:
+        return missing[0]
+    for intent, mapped in _INTENT_ACTIONS.items():
+        if mapped == action:
+            return intent
+    return _DEPTH_INTENTS.get(depth, "establish_context")
 
 
 @dataclass
@@ -116,6 +126,8 @@ class PolicyState:
     probe_count: int = 0
     elapsed_seconds: int = 0
     consecutive_unusable: int = 0
+    # Phase 0 fix: was always 0 because flow.py sets probes_without_gain
+    # but _policy_state() was never populating this field. Renamed to match.
     consecutive_no_gain_probes: int = 0
     completed: bool = False
     phase_name: str = ""
@@ -142,10 +154,24 @@ class PolicyState:
     project_name: str | None = None
     # Set once the closing "anything to add?" has already been asked.
     final_addition_offered: bool = False
+    consecutive_dry_probes: int = 0
+    dry_probe_limit: int = 2
+    intent_repair_available: bool = False
     clarify_after: int = 1
     rephrase_after: int = 2
     change_topic_after: int = 5
     close_after: int = 7
+    # Phase 0 (spec 4.1): formula-driven behaviour outputs from blueprint_formula.py.
+    # required_questions: the minimum questions to ask before coverage_complete can
+    #   fire an advance. Formula: round(1 + weight/100 * 3), range 1-4.
+    # depth_target: the fraction of the evidence ladder that should be reached.
+    #   Formula: 0.55 + weight/100 * 0.35, range 0.55-0.90.
+    required_questions: int = 1
+    depth_target: float = 0.55
+    # Phase 4: Belief Judge fields for credibility-based follow-up decisions
+    last_answer_credibility: str = "believable"  # "believable" | "questionable" | "likely_fabricated"
+    last_credibility_signals: list[str] = field(default_factory=list)
+    previous_facts: list[str] = field(default_factory=list)  # For contradiction checking
 
 
 def outline_from_definition(
@@ -174,7 +200,10 @@ def outline_from_definition(
             "source": "generic",
         },
     ]
-    valid = [item for item in competencies if isinstance(item, dict)]
+    valid = [
+        item for item in competencies
+        if isinstance(item, dict) and _is_interviewable_phase_name(str(item.get("name") or item.get("id") or ""))
+    ]
     # Keep intro+projects short so admin competencies start within ~3 minutes.
     # Opening 1 + closing 1; at most one brief project question before JD skills.
     generic_minutes = 2
@@ -274,6 +303,44 @@ def outline_from_definition(
     return {"phases": phases, "policy_mode": True}
 
 
+_BARE_DUTY_PHASE_TOKENS = frozenset(
+    {
+        "design",
+        "develop",
+        "test",
+        "build",
+        "maintain",
+        "create",
+        "implement",
+        "manage",
+        "support",
+        "analyze",
+        "optimize",
+        "deploy",
+        "write",
+        "code",
+    }
+)
+
+
+def _is_interviewable_phase_name(name: str) -> bool:
+    """Skip JD duty fragments that leaked into published competency names."""
+    cleaned = (name or "").strip()
+    if len(cleaned) < 3:
+        return False
+    words = cleaned.split()
+    first = words[0].lower().strip(".,;:")
+    if first in {"and", "or", "the", "a", "an", "to", "of", "for", "with"}:
+        return False
+    if len(words) == 1 and first in _BARE_DUTY_PHASE_TOKENS:
+        return False
+    if cleaned.lower().startswith("and "):
+        return False
+    if len(cleaned) > 72 and ("," in cleaned or cleaned.count(" ") >= 8):
+        return False
+    return True
+
+
 def non_answer_bounds_from_definition(definition: dict[str, Any] | None) -> dict[str, int]:
     defaults = {
         "clarify_after": 1,
@@ -339,8 +406,6 @@ def time_bounds_from_definition(definition: dict[str, Any] | None) -> dict[str, 
 
 def _section_for_phase(name: str) -> str:
     lowered = (name or "").lower()
-    if lowered.startswith("resume project"):
-        return "resume_project"
     if any(token in lowered for token in ("open", "intro", "warm")):
         return "opening"
     if any(token in lowered for token in ("map", "background", "candidate")):
@@ -480,26 +545,6 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
         )
 
     section = _section_for_phase(state.phase_name)
-
-    # A contradiction is the highest-value thing to resolve and can fire from any
-    # rung, but never before the interview has actually started.
-    if (
-        state.contradiction_pending
-        and state.competency_id
-        and section == "competency_assessment"
-    ):
-        return PolicyDecision(
-            action=PROBE_FOR_CONSISTENCY,
-            forced_flow_decision="probe",
-            allow_llm_decision=False,
-            current_depth=max(1, min(state.probe_count + 1, state.max_depth)),
-            max_depth=state.max_depth,
-            competency_id=state.competency_id,
-            intent="consistency_check",
-            reason="answer conflicts with an earlier statement",
-            section="competency_assessment",
-        )
-
     if state.interviewer_turn_count == 0:
         return PolicyDecision(
             action=OPEN_INTERVIEW,
@@ -555,45 +600,31 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="opening",
         )
 
-    if section == "candidate_map" and state.candidate_turn_count >= 1:
+    if section == "candidate_map" and state.candidate_turn_count <= 1:
+        # Skip a second "tell me your background" turn after the opening intro.
         return PolicyDecision(
             action=ASK_BASELINE,
             forced_flow_decision="advance",
             allow_llm_decision=False,
             current_depth=1,
             max_depth=2,
-            competency_id=state.competency_id,
-            intent="baseline",
-            reason="candidate map complete — move into the resume walkthrough",
+            competency_id=state.competency_id or state.gap_competency_id,
+            intent="establish_context",
+            reason="intro complete — begin first competency question",
             section="baseline",
         )
 
-    if section == "resume_project":
-        depth = max(1, min(state.probe_count + 1, state.max_depth))
-        if state.probe_count >= state.max_probes:
-            return PolicyDecision(
-                action=MOVE_TO_NEXT_COMPETENCY,
-                forced_flow_decision="advance",
-                allow_llm_decision=False,
-                current_depth=depth,
-                max_depth=state.max_depth,
-                competency_id=None,
-                intent="coverage",
-                reason="resume project covered — move to the next section",
-                section="resume_project",
-            )
+    if section in {"opening", "candidate_map"}:
         return PolicyDecision(
-            action=WALK_RESUME_PROJECT,
-            forced_flow_decision="probe",
+            action=ASK_BASELINE,
+            forced_flow_decision="advance",
             allow_llm_decision=False,
-            current_depth=depth,
-            max_depth=state.max_depth,
-            competency_id=None,
-            intent="resume_project"
-            if state.probe_count == 0
-            else "applied_understanding",
-            reason=f"walking the candidate's own project: {state.project_name or 'resume project'}",
-            section="resume_project",
+            current_depth=1,
+            max_depth=2,
+            competency_id=state.competency_id or state.gap_competency_id,
+            intent="establish_context",
+            reason="candidate map complete — move into technical competency baseline",
+            section="baseline",
         )
 
     if section == "closing" or (
@@ -609,19 +640,6 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
                 competency_id=state.competency_id,
                 intent="closing",
                 reason="target end reached",
-                section="closing",
-            )
-        if state.final_addition_offered:
-            # Asking "anything else?" repeatedly is the closing-loop failure mode.
-            return PolicyDecision(
-                action=CLOSE_INTERVIEW,
-                forced_flow_decision="close",
-                allow_llm_decision=False,
-                current_depth=1,
-                max_depth=state.max_depth,
-                competency_id=state.competency_id,
-                intent="closing",
-                reason="final addition already offered",
                 section="closing",
             )
         return PolicyDecision(
@@ -660,9 +678,15 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
     depth = max(1, min(state.probe_count + 1, state.max_depth))
     probes_exhausted = state.probe_count >= state.max_probes or depth >= state.max_depth
 
-    # Hard gate: if we haven't asked a single real question on this competency yet,
-    # never advance — force a baseline question regardless of other policy signals.
-    if state.probe_count == 0 and state.competency_id and section == "competency_assessment":
+    # Hard gate: if we haven't asked enough questions on this competency yet
+    # (per the weight→behaviour formula), force a baseline question.
+    # required_questions defaults to 1, so the old "must ask at least one" behaviour
+    # is preserved for legacy definitions without the formula output.
+    if (
+        state.probe_count < state.required_questions
+        and state.competency_id
+        and section == "competency_assessment"
+    ):
         return PolicyDecision(
             action=ASK_BASELINE,
             forced_flow_decision="probe",
@@ -671,36 +695,89 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=state.max_depth,
             competency_id=state.competency_id,
             intent="establish_context",
-            reason="no question asked on this competency yet — must ask at least one",
+            reason=(
+                f"required_questions={state.required_questions} not yet met "
+                f"(asked {state.probe_count}) — formula gate"
+            ),
+            section="competency_assessment",
+        )
+
+    # Phase 0 bug fix: dispatch PROBE_FOR_CONSISTENCY when the LLM flagged a
+    # contradiction in the last answer. Fires only when we have probes remaining,
+    # so it can never extend an already-exhausted competency indefinitely.
+    depth = max(1, min(state.probe_count + 1, state.max_depth))
+    _probes_remaining = state.probe_count < state.max_probes and depth < state.max_depth
+    if (
+        state.contradiction_pending
+        and state.competency_id
+        and section == "competency_assessment"
+        and _probes_remaining
+    ):
+        return PolicyDecision(
+            action=PROBE_FOR_CONSISTENCY,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=max(1, min(depth, state.max_depth)),
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="consistency_check",
+            reason="candidate answer contradicts an earlier statement — ask once to reconcile",
             section="competency_assessment",
         )
 
     # Diminishing returns: stop drilling a seam that has stopped producing evidence.
     if (
-        state.probes_without_gain >= state.no_gain_stop_after
-        and state.competency_id
-        and not probes_exhausted
+        state.elapsed_seconds >= state.soft_end_seconds
+        and not state.at_last_competency
+        and state.has_uncovered_competencies
     ):
         return PolicyDecision(
-            action=MOVE_TO_NEXT_COMPETENCY
-            if state.has_uncovered_competencies
-            else OFFER_FINAL_ADDITION,
-            forced_flow_decision="advance"
-            if state.has_uncovered_competencies
-            else "close",
+            action=MOVE_TO_NEXT_COMPETENCY,
+            forced_flow_decision="advance",
             allow_llm_decision=False,
-            current_depth=depth,
-            max_depth=state.max_depth,
+            current_depth=1,
+            max_depth=min(2, state.max_depth),
             competency_id=state.competency_id,
-            intent="coverage" if state.has_uncovered_competencies else "final_addition",
-            reason="probes stopped yielding new evidence",
+            intent="coverage",
+            reason="soft end — advance remaining competencies without deeper probes",
             section="competency_assessment",
         )
 
-    if state.missing_intents and not probes_exhausted:
+    depth = max(1, min(state.probe_count + 1, state.max_depth))
+    dry_exhausted = state.consecutive_dry_probes >= max(1, state.dry_probe_limit)
+    probes_exhausted = (
+        state.probe_count >= state.max_probes
+        or depth >= state.max_depth
+        or dry_exhausted
+    )
+    if state.missing_intents and probes_exhausted and state.intent_repair_available:
         next_intent = state.missing_intents[0]
-        intent_depth = min(state.max_depth, max(depth, len(state.missing_intents)))
+        action = _INTENT_ACTIONS.get(next_intent, PROBE_FOR_METHOD)
+        return PolicyDecision(
+            action=action,
+            forced_flow_decision="probe",
+            allow_llm_decision=False,
+            current_depth=max(1, min(depth, state.max_depth)),
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent=next_intent,
+            reason=(
+                "one reframed repair before leaving intent — "
+                "acknowledge what was said and narrow the gap"
+            ),
+            section="competency_assessment",
+        )
+    if state.missing_intents and not probes_exhausted:
+        # Always chase the first (weakest / earliest) unmet assessment intent.
+        next_intent = state.missing_intents[0]
+        intent_depth = min(state.max_depth, max(depth, 1))
         action = _INTENT_ACTIONS.get(next_intent, _DEPTH_ACTIONS.get(depth, PROBE_FOR_CONTEXT))
+        reason = "required assessment intent still missing"
+        if state.consecutive_dry_probes:
+            reason = (
+                f"required assessment intent still missing "
+                f"(dry probes {state.consecutive_dry_probes}/{state.dry_probe_limit})"
+            )
         return PolicyDecision(
             action=action,
             forced_flow_decision="probe",
@@ -709,27 +786,15 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             max_depth=state.max_depth,
             competency_id=state.competency_id,
             intent=next_intent,
-            reason="required assessment intent still missing",
-            section="competency_assessment",
-        )
-
-    # Intents are covered but the evidence ledger still has an unproven slot:
-    # keep probing that slot instead of counting the competency as done.
-    if state.target_slot and not probes_exhausted:
-        return PolicyDecision(
-            action=SLOT_ACTIONS.get(state.target_slot, PROBE_FOR_METHOD),
-            forced_flow_decision="probe",
-            allow_llm_decision=False,
-            current_depth=depth,
-            max_depth=state.max_depth,
-            competency_id=state.competency_id,
-            intent=SLOT_INTENTS.get(state.target_slot, "applied_understanding"),
-            reason=f"evidence slot '{state.target_slot}' not yet demonstrated",
+            reason=reason,
             section="competency_assessment",
         )
 
     if state.coverage_complete or probes_exhausted:
         if state.has_uncovered_competencies:
+            reason = "competency complete or probe budget exhausted"
+            if dry_exhausted and not state.coverage_complete:
+                reason = "two follow-ups without new information — advance"
             return PolicyDecision(
                 action=MOVE_TO_NEXT_COMPETENCY,
                 forced_flow_decision="advance",
@@ -738,7 +803,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
                 max_depth=state.max_depth,
                 competency_id=state.competency_id,
                 intent="coverage",
-                reason="competency complete or probe budget exhausted",
+                reason=reason,
                 section="competency_assessment",
             )
         if state.has_coverage_gaps or state.elapsed_seconds >= state.soft_end_seconds:
@@ -767,7 +832,7 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
 
     # Early competency turns: never allow multi-level jumps; LLM may only probe.
     if depth <= 2:
-        action = ASK_BASELINE if depth == 1 else PROBE_FOR_METHOD
+        action = ASK_BASELINE if depth == 1 else _DEPTH_ACTIONS.get(depth, PROBE_FOR_METHOD)
         intent = state.missing_intents[0] if state.missing_intents else _DEPTH_INTENTS.get(
             depth, "establish_context"
         )
@@ -783,14 +848,38 @@ def decide_next_action(state: PolicyState) -> PolicyDecision:
             section="competency_assessment",
         )
 
+    # Phase 4: Belief Judge integration - determine if credibility warrants probing
+    from products.interviewer.belief_judge import should_probe_deeper
+    belief_probe_needed = should_probe_deeper(
+        credibility_assessment=state.last_answer_credibility,
+        credibility_signals=state.last_credibility_signals,
+        technical_substance="partial"  # Default assumption for this context
+    )
+    
+    # If credibility is questionable/fabricated, force a probe to verify claims
+    if belief_probe_needed and depth < state.max_depth and state.probe_count < state.max_probes:
+        probe_action = PROBE_FOR_CONSISTENCY if "contradicts_fact" in str(state.last_credibility_signals) else PROBE_FOR_METHOD
+        return PolicyDecision(
+            action=probe_action,
+            forced_flow_decision="probe", 
+            allow_llm_decision=False,
+            current_depth=depth,
+            max_depth=state.max_depth,
+            competency_id=state.competency_id,
+            intent="verify_claims",
+            reason=f"credibility assessment '{state.last_answer_credibility}' warrants verification probe",
+            section="competency_assessment",
+        )
+
+    action = _DEPTH_ACTIONS.get(depth, PROBE_FOR_METHOD)
     return PolicyDecision(
-        action=_DEPTH_ACTIONS.get(depth, PROBE_FOR_METHOD),
+        action=action,
         forced_flow_decision="probe",
         allow_llm_decision=True,
         current_depth=depth,
         max_depth=state.max_depth,
         competency_id=state.competency_id,
-        intent=_DEPTH_INTENTS.get(depth, "applied_understanding"),
+        intent=_assessment_intent(action, state.missing_intents, depth=depth),
         reason="controlled progressive depth",
         section="competency_assessment",
     )

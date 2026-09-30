@@ -8,16 +8,15 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
-from logging_config import configure_logging  # noqa: E402
+from logging_config import configure_logging
 
 load_dotenv()
 configure_logging()
 
 from products.interviewer.agent import AaptorAgent  # noqa: E402
 from products.interviewer.flow import (  # noqa: E402
-    CLOSING_MESSAGE,
     FALLBACK_OPENING,
     MAX_PROBES_PER_PHASE,
     OPENING_SYSTEM,
@@ -45,7 +44,6 @@ _build_outline = build_outline
 
 __all__ = [
     "AaptorAgent",
-    "CLOSING_MESSAGE",
     "FALLBACK_OPENING",
     "GENERIC_OUTLINE",
     "InterviewFlow",

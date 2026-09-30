@@ -1,0 +1,5 @@
+- Inter-service HTTP calls go through retry-wrapped clients under `services/voice-agent/clients/` rather than raw `httpx` calls.
+- Secrets are loaded exclusively from `.env` files, with every new service shipping an `.env.example` containing no real values.
+- Logging uses structured JSON lines only; plain `print` statements are not used.
+- LLM backends are treated as OpenAI-compatible endpoints so swapping Ollama ↔ vLLM requires only `.env` URL/model changes, never client code changes.
+- LiveKit agent code targets the unified `AgentSession` API of livekit-agents 1.x instead of the deprecated `VoicePipelineAgent`.

@@ -84,6 +84,45 @@ def test_transcript_document_orders_all_spoken_turns() -> None:
     assert [item["turn_id"] for item in doc["turns"]] == ["t1", "t2", "t3"]
 
 
+def test_transcript_document_strips_mongo_object_ids() -> None:
+    """Regression: raw Mongo Q/A docs with ObjectId `_id` must not reach JSON."""
+
+    class FakeObjectId:
+        def __str__(self) -> str:
+            return "507f1f77bcf86cd799439011"
+
+    doc = build_transcript_document(
+        session_id="ses_transcript_oid",
+        turns=[
+            {
+                "_id": FakeObjectId(),
+                "turn_id": "t1",
+                "speaker": "agent",
+                "text": "Hello.",
+                "sequence_number": 1,
+            }
+        ],
+        questions=[
+            {
+                "_id": FakeObjectId(),
+                "question_id": "q1",
+                "text": "Tell me about a project.",
+            }
+        ],
+        answers=[
+            {
+                "_id": FakeObjectId(),
+                "question_id": "q1",
+                "final_transcript": "I built an API.",
+            }
+        ],
+    )
+    assert "_id" not in doc["questions"][0]
+    assert "_id" not in doc["answers"][0]
+    assert doc["questions"][0]["question_id"] == "q1"
+    assert doc["answers"][0]["final_transcript"] == "I built an API."
+
+
 def test_scorecard_requires_evidence_citations() -> None:
     definition = {
         "definition_id": "idef_score_test_01",

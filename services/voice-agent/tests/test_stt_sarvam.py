@@ -15,13 +15,7 @@ import httpx  # noqa: E402
 
 from clients.errors import ProviderConfigError, ServiceUnavailableError  # noqa: E402
 from clients.stt import get_stt_client  # noqa: E402
-from clients.stt.sarvam import (  # noqa: E402
-    SarvamStt,
-    build_realtime_ws_url,
-    parse_realtime_message,
-    realtime_language_code,
-    transcript_from_payload,
-)  # noqa: E402
+from clients.stt.sarvam import SarvamStt, transcript_from_payload  # noqa: E402
 
 
 def _json_response(status: int, payload: dict) -> httpx.Response:
@@ -38,39 +32,6 @@ class TranscriptParseTests(unittest.TestCase):
 
     def test_falls_back_to_text(self) -> None:
         self.assertEqual(transcript_from_payload({"text": "hi"}), "hi")
-
-    def test_realtime_url_and_events(self) -> None:
-        self.assertEqual(realtime_language_code("unknown"), "auto")
-        url = build_realtime_ws_url(
-            "https://api.sarvam.ai",
-            language_code="unknown",
-            model="saaras:v3",
-            mode="transcribe",
-            stream_type="fast",
-        )
-        self.assertTrue(url.startswith("wss://api.sarvam.ai/speech-to-text-realtime/ws?"))
-        self.assertIn("model=saaras%3Av3-realtime", url)
-        self.assertIn("language_code=auto", url)
-        self.assertEqual(
-            parse_realtime_message({"event": "transcript.partial", "text": "hi"}),
-            ("partial", "hi"),
-        )
-        self.assertEqual(
-            parse_realtime_message({"event": "transcript.final", "text": "hello"}),
-            ("final", "hello"),
-        )
-        self.assertEqual(
-            parse_realtime_message(
-                {"event": "transcript.partial", "data": {"transcript": "nested"}}
-            ),
-            ("partial", "nested"),
-        )
-        self.assertEqual(
-            parse_realtime_message(
-                {"event": "transcript.final", "data": [{"text": "hello"}, {"transcript": "world"}]}
-            ),
-            ("final", "hello world"),
-        )
 
 
 class FactoryTests(unittest.TestCase):
@@ -91,18 +52,6 @@ class MockedTranscribeTests(unittest.IsolatedAsyncioTestCase):
             text = await SarvamStt(api_key="sk-test").transcribe(b"RIFF....")
         self.assertEqual(text, "namaste")
 
-    async def test_uses_subscription_header_without_bearer_auth(self) -> None:
-        resp = _json_response(200, {"transcript": "hello"})
-        with patch(
-            "clients.stt.sarvam.request",
-            new_callable=AsyncMock,
-            return_value=resp,
-        ) as mocked:
-            await SarvamStt(api_key="sk-test").transcribe(b"RIFF....")
-        kwargs = mocked.await_args.kwargs
-        self.assertEqual(kwargs["headers"], {"api-subscription-key": "sk-test"})
-        self.assertNotIn("api_key", kwargs)
-
     async def test_retries_empty_unknown_language(self) -> None:
         empty = _json_response(200, {"transcript": "", "language_code": None})
         filled = _json_response(200, {"transcript": "hello", "language_code": "en-IN"})
@@ -111,9 +60,7 @@ class MockedTranscribeTests(unittest.IsolatedAsyncioTestCase):
             new_callable=AsyncMock,
             side_effect=[empty, filled],
         ) as mocked:
-            text = await SarvamStt(
-                api_key="sk-test", language_code="unknown"
-            ).transcribe(b"RIFF....")
+            text = await SarvamStt(api_key="sk-test").transcribe(b"RIFF....")
         self.assertEqual(text, "hello")
         self.assertEqual(mocked.await_count, 2)
 

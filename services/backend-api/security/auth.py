@@ -42,3 +42,21 @@ async def require_worker_service(
     authorization: str | None = Header(default=None),
 ) -> None:
     verify_service_token(authorization, "worker")
+
+
+async def require_bff_or_worker_service(
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Accept either BFF or worker service token."""
+    try:
+        verify_service_token(authorization, "bff")
+        return
+    except HTTPException as bff_error:
+        if bff_error.status_code == 503:
+            raise
+    try:
+        verify_service_token(authorization, "worker")
+    except HTTPException as worker_error:
+        if worker_error.status_code == 503:
+            raise
+        raise HTTPException(status_code=401, detail="Invalid service credentials") from worker_error
